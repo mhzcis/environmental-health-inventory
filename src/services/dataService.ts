@@ -1,3 +1,4 @@
+import { composeSupabaseAppSettings } from './supabaseSettings';
 import { Material, InventoryTransaction, AuditLog, AppSettings, SystemUser, GeneratorLogEntry, GeneratorLogSimulationResult, type AuditEventContext } from '../types';
 import { db, auth } from './firebase';
 import {
@@ -2199,15 +2200,7 @@ export const dataService = {
       if (user.permissions.includes('settings_view')) {
         const remoteSettings = await supabaseDb.getDoc<Record<string, unknown>>('settings', 'app_config');
         if (remoteSettings) {
-          const stripped = stripSyncMetadata(remoteSettings) as Record<string, unknown>;
-          settings = withSettingsAttachmentManifest(
-            canonicalizeWarehouseSettings({
-              ...DEFAULT_SETTINGS,
-              ...(stripped as unknown as AppSettings),
-              cloudSyncEnabled: true,
-              firebaseInitialized: true,
-            }),
-          ) as AppSettings;
+          settings = composeSupabaseAppSettings(remoteSettings, DEFAULT_SETTINGS);
         } else {
           // Brand-new empty Supabase database: initialize default settings and seed to cloud
           settings = withSettingsAttachmentManifest(
@@ -3774,15 +3767,7 @@ export async function initCloudSync() {
       if (table === 'settings' && dataService.hasPermission('settings_view')) {
         const remoteSettings = await supabaseDb.getDoc<Record<string, unknown>>('settings', 'app_config');
         if (remoteSettings && cloudSyncGeneration === sessionGeneration) {
-          const stripped = stripSyncMetadata(remoteSettings) as Record<string, unknown>;
-          const canonical = withSettingsAttachmentManifest(
-            canonicalizeWarehouseSettings({
-              ...DEFAULT_SETTINGS,
-              ...(stripped as unknown as AppSettings),
-              cloudSyncEnabled: true,
-              firebaseInitialized: true,
-            }),
-          ) as AppSettings;
+          const canonical = composeSupabaseAppSettings(remoteSettings, DEFAULT_SETTINGS);
           localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(canonical));
           setMonitoringError('settings', null);
           monitoringReadyCollections.add('settings');

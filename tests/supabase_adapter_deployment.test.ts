@@ -97,3 +97,43 @@ describe('Supabase deployment adapter', () => {
     stop();
   });
 });
+
+// A real app_config row carries transport identity and the historical composed-root marker.
+// Neither belongs to the local settings schema validated during authenticated bootstrap.
+describe('Supabase app_config projection', () => {
+  it('loads a composed row without leaking cloud metadata and preserves warehouse identity', async () => {
+    const { composeSupabaseAppSettings } = await import('../src/services/supabaseSettings');
+    const defaults = {
+      organizationName: 'Default', departmentName: 'Default department', expiryWarningThresholdDays: 30,
+      categories: [{ name: 'General', prefix: 'GEN', startRange: 1, endRange: 99 }],
+      units: ['pcs'], storehouses: ['Default warehouse'],
+    };
+    const remote = {
+      ...defaults, id: 'app_config', settingsSchemaVersion: 3,
+      organizationName: 'Cloud organization', storehouses: ['Remote warehouse'],
+      storehouseEntities: [{ id: 'wh-remote', name: 'Remote warehouse', active: true }],
+      storehouseIds: ['wh-remote'], warehouseSchemaVersion: 2,
+      transactionCounters: { inbound: 4, outbound: 2, consumed: 1 },
+      partners: [], openingStockAttachments: {}, openingStockAttachmentKeys: [],
+    };
+    const result = composeSupabaseAppSettings(remote, defaults);
+    expect(result.organizationName).toBe('Cloud organization');
+    expect(result.storehouseIds).toEqual(['wh-remote']);
+    expect(result.transactionCounters).toEqual(remote.transactionCounters);
+    expect(result.categories).toEqual(remote.categories);
+    expect(result).not.toHaveProperty('id');
+    expect(result).not.toHaveProperty('settingsSchemaVersion');
+    expect(result.cloudSyncEnabled).toBe(true);
+    expect(remote).toHaveProperty('id', 'app_config');
+  });
+  it('still rejects unknown versions and unrelated unexpected fields', async () => {
+    const { composeSupabaseAppSettings } = await import('../src/services/supabaseSettings');
+    const defaults = {
+      organizationName: 'Org', departmentName: 'Dept', expiryWarningThresholdDays: 30,
+      categories: [{ name: 'General', prefix: 'GEN', startRange: 1, endRange: 99 }],
+      units: ['pcs'], storehouses: ['Warehouse'],
+    };
+    expect(() => composeSupabaseAppSettings({ ...defaults, settingsSchemaVersion: 99 }, defaults)).toThrow();
+    expect(() => composeSupabaseAppSettings({ ...defaults, injected: true }, defaults)).toThrow();
+  });
+});
