@@ -1,0 +1,12 @@
+{
+  "name": "نظام إدارة المواد والمبيدات",
+  "short_name": "إدارة المخزون",
+  "description": "إدارة المخزون والحركات مع دعم العمل دون اتصال",
+  "lang": "ar",
+  "dir": "rtl",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#007ab7"
+}

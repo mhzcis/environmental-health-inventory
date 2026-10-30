@@ -1,0 +1,58 @@
+node_modules/
+build/
+dist/
+.p3-gate-dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Generated artifacts (do not commit)
+/phase2_real_integration_output/
+/PDF_FINAL_AUDIT_PACKAGE.zip
+/PDF_PHASE_2_VERIFICATION_PACKAGE.zip
+/PDF_PHASE_2_VERIFICATION_PACKAGE_V2.zip
+/PHASE_2_FINAL_INTEGRATION_PACKAGE.zip
+/public/PDF_FINAL_AUDIT_PACKAGE.zip
+/public/PDF_PHASE_2_VERIFICATION_PACKAGE.zip
+/public/PDF_PHASE_2_VERIFICATION_PACKAGE_V2.zip
+/public/PHASE_2_FINAL_INTEGRATION_PACKAGE.zip
+# Common binary outputs
+*.pdf
+*.jpg
+*.jpeg
+*.zip
+
+# P13: obsolete backup/temp artifact classes removed from HEAD (do not re-add)
+*.bak
+*.bak_*
+*.bak[0-9]*
+*.bak.*
+*.bck
+/backup_source/
+/audit_temp/
+/phase2_pack_temp/
+**/backup_source/
+**/audit_temp/
+**/phase2_pack_temp/
+
+# PREPROD-G1: data backups at the repository root are never committed (synthetic fixtures live in tests/fixtures/)
+/backup*.json
+/backup*.csv
+/backup*.xls
+/backup*.xlsx
+
+# PREPROD rework #2: extra lockfiles / editor leftovers are never committed (the contract also rejects them if force-added)
+npm-shrinkwrap.json
+yarn.lock
+pnpm-lock.yaml
+bun.lock
+bun.lockb
+*.orig
+*.rej
+*.bak-*
+*.bak~
+
+# P13 PDF browser gate build output
+/.p13-pdf-gate-dist/
