@@ -1,13 +1,15 @@
 import { dryRunAuditLogSync, executeAuditLogSync } from '../services/backupService';
 import { AuditLogSyncDryRun, AuditLogSyncResult } from '../types';
 import { useState, useEffect } from 'react';
-import { Box, Typography, Paper, Divider, Button, TextField, CircularProgress, Alert, Dialog, DialogTitle, DialogContent, DialogActions, FormControl, InputLabel, Select, MenuItem, List, ListItem, ListItemText, IconButton, Card, CardContent, Avatar, Chip, Checkbox, DialogContentText, Tabs, Tab, FormControlLabel } from '@mui/material';
+import { Box, Typography, Paper, Divider, Button, TextField, CircularProgress, Alert, Dialog, DialogTitle, DialogContent, DialogActions, FormControl, InputLabel, Select, MenuItem, List, ListItem, ListItemText, IconButton, InputAdornment, Card, CardContent, Avatar, Chip, Checkbox, DialogContentText, Tabs, Tab, FormControlLabel } from '@mui/material';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Grid from '@mui/system/Grid';
 import SaveIcon from '@mui/icons-material/Save';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import BlockIcon from '@mui/icons-material/Block';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import PeopleIcon from '@mui/icons-material/People';
 import BusinessIcon from '@mui/icons-material/Business';
 import TuneIcon from '@mui/icons-material/Tune';
@@ -87,6 +89,9 @@ export default function Settings() {
   const [userRole, setUserRole] = useState('');
   const [userAuthUid, setUserAuthUid] = useState('');
   const [userInitialPassword, setUserInitialPassword] = useState('');
+  const [userPasswordConfirmation, setUserPasswordConfirmation] = useState('');
+  const [showUserPassword, setShowUserPassword] = useState(false);
+  const [showUserPasswordConfirmation, setShowUserPasswordConfirmation] = useState(false);
   const [isUserActionLoading, setIsUserActionLoading] = useState(false);
   
   const [userPermissions, setUserPermissions] = useState<string[]>([]);
@@ -578,6 +583,9 @@ export default function Settings() {
     setUserRole('');
     setUserAuthUid('');
     setUserInitialPassword('');
+    setUserPasswordConfirmation('');
+    setShowUserPassword(false);
+    setShowUserPasswordConfirmation(false);
     setUserPermissions([]);
   };
 
@@ -605,7 +613,11 @@ export default function Settings() {
       return;
     }
     if (!editingUser && userInitialPassword.length < 8) {
-      setErrorMsg('عند إنشاء حساب جديد يجب إدخال كلمة مرور مؤقتة من 8 أحرف على الأقل. لا يتم حفظها في بيانات التطبيق.');
+      setErrorMsg('يجب ألا تقل كلمة المرور عن 8 أحرف.');
+      return;
+    }
+    if (!editingUser && userInitialPassword !== userPasswordConfirmation) {
+      setErrorMsg('كلمتا المرور غير متطابقتين.');
       return;
     }
 
@@ -688,6 +700,9 @@ export default function Settings() {
     setUserRole(isSystemAdminRole(u.role) ? 'مدير نظام' : u.role);
     setUserAuthUid(u.authUid || '');
     setUserInitialPassword('');
+    setUserPasswordConfirmation('');
+    setShowUserPassword(false);
+    setShowUserPasswordConfirmation(false);
     setUserPermissions(u.permissions);
   };
 
@@ -2485,7 +2500,6 @@ export default function Settings() {
                       label="الاسم الكامل للموظف"
                       name="newEmployeeFullName"
                       autoComplete="off"
-                      placeholder="أدخل اسم الموظف بالكامل"
                       value={userFullName}
                       onChange={(e) => setUserFullName(e.target.value)}
                       required
@@ -2505,7 +2519,7 @@ export default function Settings() {
                       required
                       type="email"
                       disabled={!!editingUser}
-                      helperText={editingUser ? 'البريد الإلكتروني ثابت لهذا الحساب.' : 'أدخل بريد الموظف الجديد، وليس بريد حسابك الحالي.'}
+                      helperText={editingUser ? 'لا يمكن تغيير البريد الإلكتروني للحساب الحالي.' : 'يُستخدم لتسجيل الدخول إلى النظام.'}
                       slotProps={{ inputLabel: { shrink: true, style: { fontFamily: '"Cairo", sans-serif' } }, formHelperText: { sx: { textAlign: 'start' } } }}
                     />
                   </Grid>
@@ -2530,18 +2544,63 @@ export default function Settings() {
                           id="new-employee-password"
                           name="newEmployeePassword"
                           autoComplete="new-password"
-                          type="password"
+                          type={showUserPassword ? 'text' : 'password'}
                           value={userInitialPassword}
                           onChange={(e) => setUserInitialPassword(e.target.value)}
-                          helperText="8 أحرف على الأقل. اختر كلمة مرور خاصة بهذا الموظف."
+                          helperText="الحد الأدنى: 8 أحرف."
                           required
-                          slotProps={{ htmlInput: { minLength: 8 }, inputLabel: { shrink: true, style: { fontFamily: '"Cairo", sans-serif' } }, formHelperText: { style: { fontFamily: '"Cairo", sans-serif', textAlign: 'start' } } }}
+                          slotProps={{
+                            htmlInput: { minLength: 8 },
+                            inputLabel: { shrink: true, style: { fontFamily: '"Cairo", sans-serif' } },
+                            formHelperText: { style: { fontFamily: '"Cairo", sans-serif', textAlign: 'start' } },
+                            input: { endAdornment: (
+                              <InputAdornment position="end">
+                                <IconButton
+                                  type="button"
+                                  aria-label={showUserPassword ? 'إخفاء كلمة مرور الحساب الجديد' : 'إظهار كلمة مرور الحساب الجديد'}
+                                  onClick={() => setShowUserPassword(value => !value)}
+                                  onMouseDown={event => event.preventDefault()}
+                                  edge="end"
+                                >
+                                  {showUserPassword ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                                </IconButton>
+                              </InputAdornment>
+                            ) },
+                          }}
                         />
                       </Grid>
-                      <Grid size={{ xs: 12 }}>
-                        <Alert severity="info" sx={{ fontFamily: '"Cairo", sans-serif', borderRadius: '8px' }}>
-                          سيُنشأ حساب مستقل للموظف بالصلاحيات التي تحددها، مع بقاء حسابك الحالي مسجّل الدخول. لن تظهر كلمة المرور بعد حفظ الحساب.
-                        </Alert>
+                      <Grid size={{ xs: 12, sm: 6 }}>
+                        <TextField
+                          fullWidth
+                          label="تأكيد كلمة المرور"
+                          id="new-employee-password-confirmation"
+                          name="newEmployeePasswordConfirmation"
+                          autoComplete="new-password"
+                          type={showUserPasswordConfirmation ? 'text' : 'password'}
+                          value={userPasswordConfirmation}
+                          onChange={event => setUserPasswordConfirmation(event.target.value)}
+                          error={userPasswordConfirmation.length > 0 && userInitialPassword !== userPasswordConfirmation}
+                          helperText={userPasswordConfirmation.length > 0 && userInitialPassword !== userPasswordConfirmation ? 'كلمتا المرور غير متطابقتين.' : 'أعد إدخال كلمة المرور للتحقق من تطابقها.'}
+                          required
+                          slotProps={{
+                            htmlInput: { minLength: 8 },
+                            inputLabel: { shrink: true, style: { fontFamily: '"Cairo", sans-serif' } },
+                            formHelperText: { style: { fontFamily: '"Cairo", sans-serif', textAlign: 'start' } },
+                            input: { endAdornment: (
+                              <InputAdornment position="end">
+                                <IconButton
+                                  type="button"
+                                  aria-label={showUserPasswordConfirmation ? 'إخفاء تأكيد كلمة المرور' : 'إظهار تأكيد كلمة المرور'}
+                                  onClick={() => setShowUserPasswordConfirmation(value => !value)}
+                                  onMouseDown={event => event.preventDefault()}
+                                  edge="end"
+                                >
+                                  {showUserPasswordConfirmation ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                                </IconButton>
+                              </InputAdornment>
+                            ) },
+                          }}
+                        />
                       </Grid>
                     </>
                   )}

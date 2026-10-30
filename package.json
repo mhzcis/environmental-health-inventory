@@ -11,7 +11,7 @@
     "lint": "tsc --noEmit",
     "test:unit": "vitest run",
     "typecheck:app": "tsc -p tsconfig.app.json --noEmit",
-    "test:deployment": "vitest run tests/supabase_adapter_deployment.test.ts src/utils/inventoryLogic.test.ts tests/p6_inventory_integrity.test.ts tests/p5_warehouse_centrality.test.ts"
+    "test:deployment": "vitest run tests/supabase_adapter_deployment.test.ts src/utils/inventoryLogic.test.ts tests/p6_inventory_integrity.test.ts tests/p5_warehouse_centrality.test.ts tests/employee_account_form.test.tsx"
   },
   "dependencies": {
     "@emotion/cache": "^11.14.0",
