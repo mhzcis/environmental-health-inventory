@@ -7,6 +7,7 @@ import Grid from '@mui/system/Grid';
 import SaveIcon from '@mui/icons-material/Save';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
+import BlockIcon from '@mui/icons-material/Block';
 import PeopleIcon from '@mui/icons-material/People';
 import BusinessIcon from '@mui/icons-material/Business';
 import TuneIcon from '@mui/icons-material/Tune';
@@ -27,8 +28,6 @@ import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
 import { dataService } from '../services/dataService';
 import { presentResultMessage, safeErrorDetail, safeUserMessage } from '../services/safeUserMessage';
-import { inspectManagedRecoveryReviews, resolveManagedRecoveryReview } from '../services/managedUserService';
-import { managedRecoveryReviewDisposition, type DurableManagedUserMutation } from '../utils/managedUserRecovery';
 import { createBackup, validateBackup, migrateValidatedBackupToFirestore, testFirestoreRbacReads, compareLocalAndCloudData, P7_CLOUD_MIGRATION_EXECUTION_ENABLED, isSystemAdminRole } from '../services/backupService';
 import NotificationToast from '../components/NotificationToast';
 
@@ -42,24 +41,24 @@ import { addOrReactivateWarehouse, canonicalizeWarehouseSettings } from '../util
 
 
 const APP_PERMISSIONS = [
-  { id: 'dashboard_view', name: 'لوحة التحكم - عرض وتحليل', desc: 'صلاحية واجهة فقط (UX): استعراض لوحة التحكم محلياً. لا تمنح قراءة سحابية؛ القراءة السحابية تتطلب صلاحيات *_view الأساسية للمجموعات.' },
+  { id: 'dashboard_view', name: 'لوحة التحكم - عرض وتحليل', desc: 'عرض ملخصات لوحة التحكم للبيانات المسموح للحساب بقراءتها.' },
   { id: 'materials_view', name: 'الأصناف - عرض كرت الصنف', desc: 'تصفح وجرد الأصناف والمواد الكيميائية بالمستودعات' },
   { id: 'materials_create', name: 'الأصناف - إضافة صنف جديد', desc: 'إنشاء بطاقة صنف جديدة بترميز رقمي تلقائي مرمز' },
   { id: 'materials_edit', name: 'الأصناف - تعديل صنف', desc: 'تغيير بيانات بطاقة الصنف وحد الأمان والمخزن' },
   { id: 'materials_delete', name: 'الأصناف - حذف صنف', desc: 'حذف الأصناف والمواد من السجل (تتطلب عدم وجود معاملات)' },
-  { id: 'materials_stocktake', name: 'الأصناف - تسوية الجرد السنوي الفعلي', desc: 'صلاحية واجهة فقط (UX): إظهار واجهة الجرد. التأثيرات السحابية تتطلب transactions_create وفق قواعد Firestore — ليست سلطة سحابية مستقلة.' },
+  { id: 'materials_stocktake', name: 'الأصناف - تسوية الجرد السنوي الفعلي', desc: 'فتح تسوية الجرد الفعلي. حفظ التسوية يتطلب أيضًا صلاحية تسجيل الحركات.' },
   { id: 'transactions_view', name: 'الحركات - عرض الحركات', desc: 'استعراض الحركات المخزنية المسجلة من معاملات التوريد والصرف' },
   { id: 'transactions_create', name: 'الحركات - تسجيل معاملة', desc: 'تسجيل توريد مواد أو صرف أذونات إمداد للمراكز والبلديات' },
   { id: 'transactions_delete', name: 'الحركات - حذف / إلغاء حركة مخزنية', desc: 'حذف حركات التوريد والصرف وإعادة رصد أرصدة المخازن' },
-  { id: 'reports_view', name: 'التقارير - عرض وإنتاج', desc: 'صلاحية واجهة فقط (UX): فتح صفحة التقارير. لا توسّع القراءة السحابية؛ البيانات المعروضة مقيّدة بصلاحيات القراءة الأساسية (*_view).' },
-  { id: 'reports_export', name: 'التقارير - تصدير Excel', desc: 'صلاحية واجهة فقط (UX): تصدير ما هو مقروء أصلاً محلياً. لا تمنح ولا توسّع قراءة سحابية إضافية.' },
-  { id: 'reports_print', name: 'التقارير - طباعة ورقية', desc: 'صلاحية واجهة فقط (UX): طباعة ما هو مقروء أصلاً محلياً. لا تمنح ولا توسّع قراءة سحابية إضافية.' },
-  { id: 'audit_view', name: 'سجل النظام - عرض التدقيق', desc: 'متابعة وفحص سجل التدقيق التاريخي لكافة الحركات بالثانية والملقم' },
+  { id: 'reports_view', name: 'التقارير - عرض وإنتاج', desc: 'عرض تقارير البيانات التي يملك الحساب صلاحية قراءتها.' },
+  { id: 'reports_export', name: 'التقارير - تصدير Excel', desc: 'تصدير البيانات المتاحة للحساب إلى ملف Excel.' },
+  { id: 'reports_print', name: 'التقارير - طباعة ورقية', desc: 'طباعة التقارير المتاحة للحساب.' },
+  { id: 'audit_view', name: 'سجل النظام - عرض التدقيق', desc: 'عرض سجل العمليات وأوقاتها والحسابات التي نفذتها.' },
   { id: 'generator_log', name: 'سجل تشغيل المولد - عرض وإدارة', desc: 'الوصول لصفحة سجل تشغيل المولد وتسجيل وقراءة عداد الساعات والإحصائيات' },
   { id: 'settings_view', name: 'الإعدادات - عرض التهيئة', desc: 'الوصول لخصائص التهيئة العامة للمنظمة والترويسات' },
   { id: 'settings_edit', name: 'الإعدادات - تعديل الهوية', desc: 'تعديل أسماء الأقسام وهوية المؤسسة وتحديث التصنيفات والمخازن' },
-  { id: 'users_manage', name: 'الإعدادات - إدارة المستخدمين', desc: 'إنشاء وتعديل وحذف مستخدمي وموظفي النظام وتعيين كافة مصفوفات الصلاحيات' },
-  { id: 'system_reset', name: 'الإعدادات - إعادة الضبط الشامل', desc: 'إعادة ضبط بيانات هذا الجهاز محلياً فقط (لا تحذف بيانات Firestore السحابية للمستأجر). تتطلب تفويضاً وتدقيقاً مركزياً وخلو الأعمال المعلّقة.' },
+  { id: 'users_manage', name: 'الإعدادات - إدارة المستخدمين', desc: 'إنشاء حسابات الموظفين وتعديل صلاحياتها وتعطيلها وإعادة تفعيلها.' },
+  { id: 'system_reset', name: 'الإعدادات - إعادة ضبط بيانات هذا الجهاز', desc: 'إعادة ضبط البيانات المحلية على هذا الجهاز دون حذف البيانات السحابية. يتطلب التحقق من الحساب وعدم وجود أعمال معلّقة.' },
 ];
 
 export default function Settings() {
@@ -78,10 +77,6 @@ export default function Settings() {
 
   // Users State
   const [users, setUsers] = useState<SystemUser[]>([]);
-  const [recoveryReviews, setRecoveryReviews] = useState<DurableManagedUserMutation[]>([]);
-  const [recoveryReviewLoading, setRecoveryReviewLoading] = useState(false);
-  const [recoveryReviewTarget, setRecoveryReviewTarget] = useState<DurableManagedUserMutation | null>(null);
-  const [recoveryReviewEvidence, setRecoveryReviewEvidence] = useState('');
   const [editingUser, setEditingUser] = useState<SystemUser | null>(null);
   const [deleteUserDialogOpen, setDeleteUserDialogOpen] = useState(false);
   const [userToDelete, setUserToDelete] = useState<SystemUser | null>(null);
@@ -189,34 +184,6 @@ export default function Settings() {
     refresh();
     return () => { cancelled = true; };
   }, [activeTab]);
-
-  const refreshRecoveryReviews = async () => {
-    const actor = auth?.currentUser;
-    setRecoveryReviewLoading(true);
-    try {
-      const records = await inspectManagedRecoveryReviews();
-      if (auth?.currentUser === actor) setRecoveryReviews(records);
-    } catch (error) {
-      if (auth?.currentUser === actor) setErrorMsg(safeUserMessage(error, 'user-management', { allowAppText: true }));
-    } finally { setRecoveryReviewLoading(false); }
-  };
-
-  const closeRecoveryReview = async () => {
-    if (!recoveryReviewTarget) return;
-    const actor = auth?.currentUser;
-    setRecoveryReviewLoading(true);
-    try {
-      const result = await resolveManagedRecoveryReview({ mutationId: recoveryReviewTarget.id,
-        targetUid: recoveryReviewTarget.targetUid, evidenceReference: recoveryReviewEvidence });
-      if (auth?.currentUser !== actor) return;
-      setRecoveryReviewTarget(null);
-      if (result.localRecoveryFailed) setErrorMsg('حُفظ مرجع المراجعة بالخادم وتعذر تحديث النسخة المحلية. أعد تحميل سجلات المراجعة.');
-      await refreshRecoveryReviews();
-    } catch (error) {
-      if (auth?.currentUser === actor) setErrorMsg(safeUserMessage(error, 'user-management', { allowAppText: true }));
-    }
-    finally { setRecoveryReviewLoading(false); }
-  };
 
   const handleSaveGeneral = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -718,7 +685,7 @@ export default function Settings() {
     setEditingUser(u);
     setUserFullName(u.fullName);
     setUserUsername(u.username);
-    setUserRole(u.role);
+    setUserRole(isSystemAdminRole(u.role) ? 'مدير نظام' : u.role);
     setUserAuthUid(u.authUid || '');
     setUserInitialPassword('');
     setUserPermissions(u.permissions);
@@ -1609,7 +1576,7 @@ export default function Settings() {
 
     try {
       if (!isFirebaseAvailable || !auth) {
-        throw new Error('خدمة Firebase غير متوفرة حالياً لمزامنة البيانات.');
+        throw new Error('خدمة المزامنة السحابية غير متوفرة حالياً.');
       }
 
       const uploadRes = await dataService.uploadAllLocalDataToCloud();
@@ -1683,7 +1650,7 @@ export default function Settings() {
       const currentUser = dataService.getCurrentUser();
       if (!firebaseUser?.email || !currentUser) {
         setIsFactoryResetting(false);
-        setErrorMsg('تعذر التحقق من جلسة Firebase الحالية. أعد تسجيل الدخول ثم حاول مرة أخرى.');
+        setErrorMsg('تعذر التحقق من جلسة الدخول الحالية. أعد تسجيل الدخول ثم حاول مرة أخرى.');
         return;
       }
 
@@ -1691,7 +1658,7 @@ export default function Settings() {
       const localEmail = currentUser.username.trim().toLowerCase();
       if (firebaseEmail !== localEmail || !currentUser.authUid || currentUser.authUid !== firebaseUser.uid) {
         setIsFactoryResetting(false);
-        setErrorMsg('جلسة المستخدم المحلية لا تطابق حساب Firebase المصادق عليه. تم إيقاف إعادة الضبط.');
+        setErrorMsg('بيانات الجلسة المحلية لا تطابق الحساب المسجّل في السحابة. تم إيقاف إعادة الضبط.');
         return;
       }
 
@@ -1735,7 +1702,7 @@ export default function Settings() {
       {/* Header */}
       <Box sx={{ mb: 4, textAlign: 'start' }}>
         <Typography variant="h5" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
-          بوابة التهيئة الفنية وإدارة الفاقد والصلاحيات
+          إعدادات النظام وإدارة الصلاحيات
         </Typography>
         <Typography variant="body2" sx={{ color: '#64748b', mt: 0.5, fontFamily: '"Cairo", sans-serif' }}>
           تخصيص هوية المؤسسة لترويسات الفواتير والتقارير، وإدارة مستودعات التوزيع، وتحرير مصفوفات الأمان والمستخدمين والتبديل بينهم
@@ -2370,47 +2337,20 @@ export default function Settings() {
               إدارة شؤون الموظفين ومصفوفة التفويضات محمية بالكامل
             </Typography>
             <Typography variant="body2" sx={{ color: '#64748b', mt: 1.5, fontFamily: '"Cairo", sans-serif', maxWidth: '500px', mx: 'auto', lineHeight: 1.6 }}>
-              عذراً، يتطلب الوصول لقاعدة الموظفين وتعديل مصفوفات الصلاحيات الحصول على رخصة تفويض <strong>إدارة المستخدمين (users_manage)</strong> المتاحة لمدير النظام الفني فقط.
+              يتطلب عرض حسابات الموظفين وتعديل صلاحياتها الحصول على صلاحية <strong>إدارة المستخدمين</strong>. تواصل مع مدير النظام لمنحك الوصول المناسب.
             </Typography>
           </Paper>
         ) : (
           <Grid container spacing={3}>
-          <Grid size={{ xs: 12 }}>
-            <Paper sx={{ p: 2 }}>
-              <Typography variant="h6">مراجعة عمليات الحسابات غير المؤكدة</Typography>
-              <Typography variant="body2" sx={{ my: 1 }}>افحص حساب المستخدم وسجل العملية خارج التطبيق، ثم وثّق مرجع المصالحة. تحفظ المراجعة الأدلة وتغلق إعادة المحاولة التلقائية لهذه العملية.</Typography>
-              <Button disabled={recoveryReviewLoading} onClick={refreshRecoveryReviews}>تحميل سجلات المراجعة</Button>
-              {recoveryReviews.map(record => (
-                <Box key={record.id} sx={{ display: 'flex', gap: 2, alignItems: 'center', my: 1 }}>
-                  <Box>
-                    <Typography>{record.targetEmail} — {record.action === 'password_reset' ? 'إعادة تعيين كلمة المرور' : 'إنشاء الحساب'} — {managedRecoveryReviewDisposition(record) === 'resolved' ? 'مصالحة موثقة' : 'تتطلب مراجعة'}</Typography>
-                    <Typography variant="body2">مرجع العملية: {record.id} — هوية الحساب: {record.targetUid || 'لم تُثبت بالسجل'}</Typography>
-                  </Box>
-                  {managedRecoveryReviewDisposition(record) === 'required' && <Button disabled={recoveryReviewLoading} onClick={() => { setRecoveryReviewTarget(record); setRecoveryReviewEvidence(''); }}>توثيق المصالحة</Button>}
-                </Box>
-              ))}
-              <Dialog open={!!recoveryReviewTarget} onClose={() => !recoveryReviewLoading && setRecoveryReviewTarget(null)}>
-                <DialogTitle>توثيق المراجعة الخارجية</DialogTitle>
-                <DialogContent>
-                  <Typography sx={{ mb: 2 }}>أدخل مرجع الفحص الذي حسم التعامل مع حساب {recoveryReviewTarget?.targetEmail}. لا يعيد هذا الإجراء عملية الحساب ولا يحذف سجلها.</Typography>
-                  <TextField fullWidth label="مرجع المصالحة الخارجية" value={recoveryReviewEvidence} onChange={event => setRecoveryReviewEvidence(event.target.value)} />
-                </DialogContent>
-                <DialogActions>
-                  <Button disabled={recoveryReviewLoading} onClick={() => setRecoveryReviewTarget(null)}>إلغاء</Button>
-                  <Button disabled={recoveryReviewLoading || !recoveryReviewEvidence.trim()} onClick={closeRecoveryReview}>حفظ مرجع المصالحة</Button>
-                </DialogActions>
-              </Dialog>
-            </Paper>
-          </Grid>
           {/* List of current users */}
           <Grid size={{ xs: 12, md: 5 }}>
             <Paper sx={{ p: 3, display: 'flex', flexDirection: 'column', gap: 2 }}>
               <Box>
                 <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
-                  الحسابات النشطة بالخادم ({users.length})
+                  حسابات المستخدمين ({users.length})
                 </Typography>
                 <Typography variant="body2" sx={{ color: '#64748b', mt: 0.5, fontFamily: '"Cairo", sans-serif' }}>
-                  انقر فوق أي بطاقة مستخدم لتهيئة بياناتها، تعديل تفويضاتها بالكامل، أو سحب حسابه الفعلي.
+                  {users.filter(user => user.active !== false).length} نشط — {users.filter(user => user.active === false).length} معطّل. اختر حسابًا لتعديل بياناته وصلاحياته.
                 </Typography>
               </Box>
               <Divider />
@@ -2503,7 +2443,7 @@ export default function Settings() {
                           <Button 
                             size="small" 
                             color={u.active === false ? 'success' : 'error'}
-                            startIcon={u.active === false ? <AutorenewIcon sx={{ ml: 0.5, mr: -0.5 }} /> : <DeleteIcon sx={{ ml: 0.5, mr: -0.5 }} />}
+                            startIcon={u.active === false ? <AutorenewIcon sx={{ ml: 0.5, mr: -0.5 }} /> : <BlockIcon sx={{ ml: 0.5, mr: -0.5 }} />}
                             disabled={isSelf || isUserActionLoading}
                             onClick={(e) => {
                               e.stopPropagation();
@@ -2533,16 +2473,18 @@ export default function Settings() {
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 3 }}>
                 <KeyIcon sx={{ color: '#007ab7' }} />
                 <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
-                  {editingUser ? `تحديث صلاحيات الحساب وتعديله: ${editingUser.fullName}` : 'صياغة بطاقة حساب جديدة للموظف'}
+                  {editingUser ? `تعديل حساب: ${editingUser.fullName}` : 'إنشاء حساب موظف'}
                 </Typography>
               </Box>
               
-              <form onSubmit={handleSaveUser}>
+              <form onSubmit={handleSaveUser} autoComplete="off">
                 <Grid container spacing={3}>
                   <Grid size={{ xs: 12, sm: 6 }}>
                     <TextField
                       fullWidth
-                      label="الاسم الرباعي للموظف"
+                      label="الاسم الكامل للموظف"
+                      name="newEmployeeFullName"
+                      autoComplete="off"
                       placeholder="أدخل اسم الموظف بالكامل"
                       value={userFullName}
                       onChange={(e) => setUserFullName(e.target.value)}
@@ -2554,22 +2496,27 @@ export default function Settings() {
                     <TextField
                       fullWidth
                       label="البريد الإلكتروني (لتسجيل الدخول)"
+                      id="new-employee-email"
+                      name="newEmployeeEmail"
+                      autoComplete="off"
                       placeholder="مثال: name@domain.com"
                       value={userUsername}
                       onChange={(e) => setUserUsername(e.target.value)}
                       required
                       type="email"
                       disabled={!!editingUser}
-                      slotProps={{ inputLabel: { style: { fontFamily: '"Cairo", sans-serif' } } }}
+                      helperText={editingUser ? 'البريد الإلكتروني ثابت لهذا الحساب.' : 'أدخل بريد الموظف الجديد، وليس بريد حسابك الحالي.'}
+                      slotProps={{ inputLabel: { shrink: true, style: { fontFamily: '"Cairo", sans-serif' } }, formHelperText: { sx: { textAlign: 'start' } } }}
                     />
                   </Grid>
                   {editingUser && (
                     <Grid size={{ xs: 12, sm: 6 }}>
                       <TextField
                         fullWidth
-                        label="Firebase UID (تلقائي وغير قابل للتحرير)"
+                        label="معرّف الحساب"
+                        helperText="يتحدد تلقائيًا ولا يمكن تغييره."
                         value={userAuthUid}
-                        slotProps={{ input: { readOnly: true }, inputLabel: { style: { fontFamily: '"Cairo", sans-serif' } } }}
+                        slotProps={{ input: { readOnly: true, sx: { bgcolor: '#f1f5f9', direction: 'ltr' } }, inputLabel: { shrink: true, style: { fontFamily: '"Cairo", sans-serif' } } }}
                       />
                     </Grid>
                   )}
@@ -2579,18 +2526,21 @@ export default function Settings() {
                       <Grid size={{ xs: 12, sm: 6 }}>
                         <TextField
                           fullWidth
-                          label="كلمة مرور مؤقتة للحساب الجديد"
+                          label="كلمة مرور الحساب الجديد"
+                          id="new-employee-password"
+                          name="newEmployeePassword"
+                          autoComplete="new-password"
                           type="password"
                           value={userInitialPassword}
                           onChange={(e) => setUserInitialPassword(e.target.value)}
-                          helperText="8 أحرف على الأقل. تُستخدم لإنشاء Firebase Authentication ولا تُحفظ في بيانات التطبيق."
+                          helperText="8 أحرف على الأقل. اختر كلمة مرور خاصة بهذا الموظف."
                           required
-                          slotProps={{ inputLabel: { style: { fontFamily: '"Cairo", sans-serif' } }, formHelperText: { style: { fontFamily: '"Cairo", sans-serif', textAlign: 'start' } } }}
+                          slotProps={{ htmlInput: { minLength: 8 }, inputLabel: { shrink: true, style: { fontFamily: '"Cairo", sans-serif' } }, formHelperText: { style: { fontFamily: '"Cairo", sans-serif', textAlign: 'start' } } }}
                         />
                       </Grid>
                       <Grid size={{ xs: 12 }}>
                         <Alert severity="info" sx={{ fontFamily: '"Cairo", sans-serif', borderRadius: '8px' }}>
-                          سيتم إنشاء هوية Firebase عبر جلسة ثانوية مع بقاء جلسة المدير الحالية دون تغيير، ثم إنشاء ملف الصلاحيات عند users/UID. لا يتم حفظ كلمة المرور في Firestore أو LocalStorage.
+                          سيُنشأ حساب مستقل للموظف بالصلاحيات التي تحددها، مع بقاء حسابك الحالي مسجّل الدخول. لن تظهر كلمة المرور بعد حفظ الحساب.
                         </Alert>
                       </Grid>
                     </>
@@ -2612,10 +2562,10 @@ export default function Settings() {
                   )}
                   <Grid size={{ xs: 12, sm: 6 }}>
                     <FormControl fullWidth required>
-                      <InputLabel sx={{ fontFamily: '"Cairo", sans-serif' }}>الدور والمسمى الوظيفي المعتمد</InputLabel>
+                      <InputLabel sx={{ fontFamily: '"Cairo", sans-serif' }}>الدور الوظيفي</InputLabel>
                       <Select
                         value={userRole}
-                        label="الدور والمسمى الوظيفي المعتمد"
+                        label="الدور الوظيفي"
                         onChange={(e) => {
                           const val = e.target.value;
                           setUserRole(val);
@@ -2630,7 +2580,6 @@ export default function Settings() {
                         sx={{ fontFamily: '"Cairo", sans-serif', fontWeight: 'bold' }}
                       >
                         <MenuItem value="مدير نظام">{renderOption("مدير نظام")}</MenuItem>
-                        <MenuItem value="مدير النظام">{renderOption("مدير النظام")}</MenuItem>
                         <MenuItem value="أمين مستودع">{renderOption("أمين مستودع")}</MenuItem>
                         <MenuItem value="مراجع/مُشاهد">{renderOption("مراجع/مُشاهد")}</MenuItem>
                       </Select>
@@ -2642,7 +2591,7 @@ export default function Settings() {
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, flexWrap: 'wrap', gap: 2 }}>
                       <Box sx={{ textAlign: 'start' }}>
                         <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
-                          مصفوفة تفويض الصلاحيات الفنية 🗝️
+                          صلاحيات الحساب
                         </Typography>
                         <Typography variant="caption" sx={{ color: '#64748b', fontFamily: '"Cairo", sans-serif' }}>
                           اختر الصلاحيات المحددة التي يُسمح لهذا الحساب بالقيام بها على النظام.
@@ -2650,16 +2599,16 @@ export default function Settings() {
                       </Box>
                       <Box sx={{ display: 'flex', gap: 1 }}>
                         <Button size="small" variant="outlined" onClick={handleSelectAllPermissions} sx={{ borderRadius: '6px', fontSize: '11px', fontFamily: '"Cairo", sans-serif' }}>
-                          منح الكل 🎖️
+                          تحديد الكل
                         </Button>
                         <Button size="small" variant="outlined" color="error" onClick={handleClearAllPermissions} sx={{ borderRadius: '6px', fontSize: '11px', fontFamily: '"Cairo", sans-serif' }}>
-                          سحب الكل ❌
+                          إلغاء تحديد الكل
                         </Button>
                       </Box>
                     </Box>
 
                     {/* Permissions Checklist Layout */}
-                    <Grid container spacing={2} sx={{ maxHeight: '350px', overflowY: 'auto', p: 2, borderRadius: '12px', bgcolor: '#fdfdfd' }}>
+                    <Grid container spacing={2} sx={{ p: 2, borderRadius: '12px', bgcolor: '#fdfdfd' }}>
                       {APP_PERMISSIONS.map((p, idx) => {
                         const isChecked = userPermissions.includes(p.id);
                         return (
@@ -2682,14 +2631,16 @@ export default function Settings() {
                             >
                               <Checkbox 
                                 checked={isChecked}
-                                onChange={() => {}} // parent Paper handled
+                                onClick={event => event.stopPropagation()}
+                                onChange={() => handleTogglePermission(p.id)}
+                                slotProps={{ input: { 'aria-label': p.name } }}
                                 sx={{ p: 0.2 }}
                               />
                               <Box sx={{ textAlign: 'start' }}>
                                 <Typography variant="body2" sx={{ fontWeight: 'bold', color: '#1e293b', fontSize: '0.8rem', fontFamily: '"Cairo", sans-serif' }}>
                                   {p.name}
                                 </Typography>
-                                <Typography variant="caption" sx={{ color: '#64748b', fontSize: '10px', display: 'block', mt: 0.2, fontFamily: '"Cairo", sans-serif' }}>
+                                <Typography variant="caption" sx={{ color: '#64748b', fontSize: '0.75rem', lineHeight: 1.7, display: 'block', mt: 0.2, fontFamily: '"Cairo", sans-serif' }}>
                                   {p.desc}
                                 </Typography>
                               </Box>
@@ -2719,7 +2670,7 @@ export default function Settings() {
                       startIcon={isUserActionLoading ? <CircularProgress size={18} color="inherit" /> : <SaveIcon sx={{ ml: 1, mr: -0.5 }} />}
                       sx={{ bgcolor: '#007ab7', fontWeight: 'bold', fontFamily: '"Cairo", sans-serif', borderRadius: '10px', px: 3, py: 1.1, '&:hover': { bgcolor: '#006293' } }}
                     >
-                      {editingUser ? 'حفظ الصلاحيات المُعدّلة' : 'إنشاء حساب Firebase وربطه بالصلاحيات'}
+                      {editingUser ? 'حفظ تعديلات الحساب' : 'إنشاء حساب الموظف'}
                     </Button>
                   </Grid>
                 </Grid>
@@ -2865,7 +2816,7 @@ export default function Settings() {
                 </Box>
                 <Box sx={{ textAlign: 'start' }}>
                   <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
-                    فحص جاهزية الترحيل إلى Firebase
+                    فحص جاهزية النسخة الاحتياطية للترحيل السحابي
                   </Typography>
                   <Typography variant="caption" sx={{ color: '#64748b', fontFamily: '"Cairo", sans-serif' }}>
                     تحقق من توافق النسخة الاحتياطية قبل الترحيل (Dry Run)
@@ -2877,7 +2828,7 @@ export default function Settings() {
 
               <Box sx={{ textAlign: 'start' }}>
                 <Typography variant="body2" sx={{ color: '#d97706', fontWeight: 'bold', mb: 2, fontFamily: '"Cairo", sans-serif' }}>
-                  تنبيه: هذا فحص فقط، لم يتم رفع أو تعديل أي بيانات في Firebase.
+                  هذا فحص فقط؛ لا يرفع البيانات إلى السحابة ولا يعدّلها.
                 </Typography>
                 
                 <Button
@@ -2943,7 +2894,7 @@ export default function Settings() {
                           startIcon={isExecutingMigration ? <CircularProgress size={20} color="inherit" /> : <CloudUploadIcon sx={{ ml: 1, mr: -0.5 }} />}
                           sx={{ bgcolor: '#dc2626', '&:hover': { bgcolor: '#b91c1c' }, fontWeight: 'bold', fontFamily: '"Cairo", sans-serif', borderRadius: '12px', px: 3, py: 1.5 }}
                         >
-                          تنفيذ الترحيل الفعلي إلى Firebase
+                          تنفيذ الترحيل إلى السحابة
                         </Button>
                       </Box>
                     )}
@@ -3002,7 +2953,7 @@ export default function Settings() {
                 </Box>
                 <Box sx={{ textAlign: 'start' }}>
                   <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
-                    اختبار صلاحيات Firestore
+                    فحص صلاحيات الوصول السحابي
                   </Typography>
                   <Typography variant="caption" sx={{ color: '#64748b', fontFamily: '"Cairo", sans-serif' }}>
                     أداة فحص RBAC للقراءة فقط
@@ -3061,7 +3012,7 @@ export default function Settings() {
                     مقارنة البيانات المحلية والسحابية
                   </Typography>
                   <Typography variant="caption" sx={{ color: '#64748b', fontFamily: '"Cairo", sans-serif' }}>
-                    أداة فحص للتأكد من تطابق LocalStorage مع Firestore للقراءة فقط
+                    مقارنة بيانات هذا الجهاز بالبيانات السحابية دون تعديلها.
                   </Typography>
                 </Box>
               </Box>
@@ -3070,7 +3021,7 @@ export default function Settings() {
                 <Box sx={{ mb: 4, p: 3, border: '1px solid #cbd5e1', borderRadius: '12px', bgcolor: '#f8fafc' }}>
                   <Typography variant="h6" sx={{ mb: 2, fontFamily: '"Cairo", sans-serif', fontWeight: 'bold' }}>تسوية العرض المحلي لسجلات التدقيق</Typography>
                   <Alert severity="info" sx={{ mb: 2, fontFamily: '"Cairo", sans-serif' }}>
-                    تستورد التسوية السجلات الموثوقة الموجودة في Firestore إلى هذا الجهاز فقط. السجلات التاريخية المحلية غير الموجودة سحابياً لا تُرفع بأثر رجعي، لأن سجل التدقيق المركزي يقبل الحدث وقت وقوعه فقط مع هوية وتوقيت وإثبات معاملة موثّق.
+                    تُحدّث التسوية بيانات هذا الجهاز من السجلات السحابية الموثوقة. لا ترفع السجلات التاريخية المحلية غير الموجودة في السحابة بأثر رجعي.
                   </Alert>
                   <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
                     <Button variant="outlined" disabled={isAuditDryRunning || isAuditSyncing} onClick={handleDryRunAudit} sx={{ fontFamily: '"Cairo", sans-serif' }}>
@@ -3338,7 +3289,7 @@ export default function Settings() {
                     مسح البيانات المحلية على هذا الجهاز (دون كتابة سحابية)
                   </Typography>
                   <Typography variant="body2" sx={{ color: '#7c2d12', mt: 0.5, fontFamily: '"Cairo", sans-serif' }}>
-                    يمسح هذا الخيار جميع السجلات المحلية وطابور المزامنة والملفات المؤقتة على هذا الجهاز فقط ويعيد التوجيه لشاشة تسجيل الدخول، دون إرسال أو حذف أي بيانات في السحابة (Firestore).
+                    يمسح هذا الخيار جميع السجلات المحلية وطابور المزامنة والملفات المؤقتة على هذا الجهاز فقط ويعيد التوجيه لشاشة تسجيل الدخول، دون إرسال أو حذف أي بيانات في السحابة.
                   </Typography>
                 </Box>
               </Box>
@@ -3393,7 +3344,7 @@ export default function Settings() {
                       منطقة العمليات الخطرة: إعادة ضبط هذا الجهاز محلياً فقط
                     </Typography>
                     <Typography variant="body2" sx={{ color: '#7f1d1d', mt: 0.5, fontFamily: '"Cairo", sans-serif' }}>
-                      يعيد هذا الخيار ضبط بيانات التطبيق على هذا الجهاز فقط (محو الإسقاط المحلي). لا يحذف بيانات المستأجر في Firestore/السحابة. يتطلّب تخويلاً وتدقيقاً مركزياً وخلو الأعمال المعلّقة.</Typography>
+                      يعيد هذا الخيار ضبط بيانات التطبيق على هذا الجهاز فقط (محو الإسقاط المحلي). لا يحذف بيانات المؤسسة في السحابة. يتطلّب تخويلاً وتدقيقاً مركزياً وخلو الأعمال المعلّقة.</Typography>
                   </Box>
                 </Box>
 
@@ -3545,7 +3496,7 @@ export default function Settings() {
         </DialogTitle>
         <DialogContent sx={{ textAlign: 'start' }}>
           <DialogContentText sx={{ fontFamily: '"Cairo", sans-serif', color: '#475569', fontSize: '0.9rem', mb: 2, mt: 1, lineHeight: 1.7 }}>
-            سيؤدي هذا الإجراء إلى حذف جميع البيانات المخزنة محلياً على هذا الجهاز فقط (السجلات المحلية، طابور المزامنة، والملفات المؤقتة) وإعادة التوجيه لشاشة تسجيل الدخول دون إرسال أو حذف أي بيانات في السحابة (Firestore).
+            سيؤدي هذا الإجراء إلى حذف جميع البيانات المخزنة محلياً على هذا الجهاز فقط (السجلات المحلية، طابور المزامنة، والملفات المؤقتة) وإعادة التوجيه لشاشة تسجيل الدخول دون إرسال أو حذف أي بيانات في السحابة.
           </DialogContentText>
           <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 1, color: '#334155', fontFamily: '"Cairo", sans-serif' }}>
             الرجاء كتابة كلمة "مسح" في الحقل أدناه لتأكيد العملية:
@@ -3607,7 +3558,7 @@ export default function Settings() {
         </DialogTitle>
         <DialogContent sx={{ textAlign: 'start' }}>
           <DialogContentText sx={{ fontFamily: '"Cairo", sans-serif', color: '#475569', fontSize: '0.9rem', mb: 3, mt: 1, lineHeight: 1.7 }}>
-            أنت على وشك تنفيذ عملية <strong>محلية على هذا الجهاز</strong> ولا يمكن التراجع عنها محلياً. هذه العملية <strong>لا تمسح بيانات السحابة/Firestore</strong> الخاصة بالمستأجر.
+            أنت على وشك تنفيذ عملية <strong>محلية على هذا الجهاز</strong> ولا يمكن التراجع عنها محلياً. هذه العملية <strong>لا تمسح البيانات السحابية</strong> الخاصة بالمستأجر.
             <br />
             1. مسح الإسقاط المحلي للأصناف والكميات على هذا الجهاز فقط.
             <br />
@@ -3695,7 +3646,7 @@ export default function Settings() {
           <DialogContentText sx={{ fontFamily: '"Cairo", sans-serif', color: '#475569', fontSize: '0.95rem', mt: 1, lineHeight: 1.7 }}>
             هل أنت متأكد من رغبتك في تعطيل وصول الموظف <strong>"{userToDelete?.fullName}"</strong> إلى النظام؟ سيبقى ملفه محفوظاً ويمكن إعادة تفعيله لاحقاً.
             <br />
-            <span style={{ color: '#ef4444', fontWeight: 'bold' }}>تنبيه:</span> هذا الإجراء يغيّر active إلى false ويمنع الوصول عبر قواعد RBAC. لا يدّعي التطبيق حذف هوية Firebase Authentication الخاصة بالمستخدم (الحساب: <code>{userToDelete?.username}</code>).
+            <span style={{ color: '#ef4444', fontWeight: 'bold' }}>تنبيه:</span> سيُمنع هذا الحساب من الوصول إلى بيانات التطبيق. تبقى بياناته محفوظة ويمكن إعادة تفعيله لاحقًا (الحساب: <code>{userToDelete?.username}</code>).
           </DialogContentText>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 3, gap: 1.5, direction: 'rtl' }}>
@@ -3844,7 +3795,7 @@ export default function Settings() {
         </DialogTitle>
         <DialogContent>
           <Typography variant="body2" sx={{ mb: 2, fontFamily: '"Cairo", sans-serif', color: '#475569', lineHeight: 1.8 }}>
-            أنت على وشك البدء بترحيل البيانات الفعلية إلى قاعدة بيانات Firebase. لا يمكن التراجع عن هذه الخطوة.
+            أنت على وشك ترحيل البيانات إلى قاعدة البيانات السحابية. لا يمكن التراجع عن هذه الخطوة.
           </Typography>
           <Typography variant="body2" sx={{ mb: 3, fontFamily: '"Cairo", sans-serif', color: '#1e293b', fontWeight: 'bold' }}>
             للتأكيد، يرجى كتابة العبارة التالية حرفياً:

@@ -354,7 +354,7 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: () => void }
         </DialogTitle>
         <DialogContent sx={{ textAlign: 'start' }}>
           <DialogContentText sx={{ fontFamily: '"Cairo", sans-serif', color: '#475569', fontSize: '0.9rem', mb: 2, lineHeight: 1.7 }}>
-            سيؤدي هذا الإجراء إلى حذف جميع البيانات المخزنة محلياً على هذا الجهاز فقط (السجلات المحلية، طابور المزامنة، والملفات المؤقتة) دون إرسال أو حذف أي بيانات في السحابة (Firestore).
+            سيؤدي هذا الإجراء إلى حذف جميع البيانات المخزنة محلياً على هذا الجهاز فقط (السجلات المحلية، طابور المزامنة، والملفات المؤقتة) دون إرسال أو حذف أي بيانات في السحابة.
           </DialogContentText>
           <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 1, color: '#334155', fontFamily: '"Cairo", sans-serif' }}>
             الرجاء كتابة كلمة "مسح" في الحقل أدناه لتأكيد العملية:

@@ -2558,7 +2558,7 @@ export const dataService = {
       }, () => assertManagedSessionAllowed(sessionOwner), () => assertManagedSessionOwnerCurrent(sessionOwner));
     } catch (error) {
       if (isManagedSessionChangedError(error)) return { success: false, message: safeResultMessage(error, 'user-management') };
-      return { success: false, message: 'تم إنشاء الحساب على Firebase بنجاح لكن تعذر تحديث النسخة المحلية. أعد تحميل قائمة المستخدمين من الخادم قبل أي إجراء آخر.' };
+      return { success: false, message: 'تم إنشاء الحساب في السحابة لكن تعذر تحديث بياناته على هذا الجهاز. أعد تحميل قائمة المستخدمين قبل أي إجراء آخر.' };
     }
 
     // The managed-user service committed the profile and immutable central audit atomically.
@@ -2585,14 +2585,14 @@ export const dataService = {
     }
 
     const existing = users[index];
-    if (!existing.authUid) return { success: false, message: 'هذا سجل محلي قديم غير مرتبط بـ Firebase UID ولا يمكن اعتماده قبل ترحيله.' };
+    if (!existing.authUid) return { success: false, message: 'هذا سجل محلي قديم غير مرتبط بمعرّف حساب سحابي ولا يمكن اعتماده قبل ترحيله.' };
     const email = user.username.trim().toLowerCase();
     if (email !== existing.username.trim().toLowerCase()) return { success: false, message: 'لا يمكن تغيير بريد تسجيل الدخول لمستخدم مرتبط.' };
     if (users.some(other => other.id !== user.id && other.username.trim().toLowerCase() === email)) {
       return { success: false, message: 'البريد الإلكتروني مسجل لمستخدم آخر.' };
     }
     if (users.some(other => other.id !== user.id && other.authUid && other.authUid === existing.authUid)) {
-      return { success: false, message: 'Firebase UID مرتبط بمستخدم آخر.' };
+      return { success: false, message: 'معرّف الحساب السحابي مرتبط بمستخدم آخر.' };
     }
 
     const current = dataService.getCurrentUser();
@@ -2707,7 +2707,7 @@ export const dataService = {
     } catch {
       return {
         success: false,
-        message: 'تعذر تثبيت نية إعادة التعيين؛ لم يُستدعَ Firebase Authentication.',
+        message: 'تعذر توثيق طلب إعادة تعيين كلمة المرور؛ لم يُرسل الطلب إلى خدمة المصادقة.',
       };
     }
     try {

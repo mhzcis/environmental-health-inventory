@@ -1733,7 +1733,7 @@ const handleOpenDeleteDialog = (item: Material) => {
         </DialogTitle>
         <DialogContent sx={{ mt: 2, maxHeight: '60vh', overflowY: 'auto' }}>
           <Alert severity="info" sx={{ mb: 2, fontFamily: '"Cairo", sans-serif' }}>
-            أهلية الواجهة: materials_stocktake. التأثير السحابي يتطلب transactions_create وفق قواعد Firestore — materials_stocktake ليست سلطة سحابية مستقلة (P10-POL-1).
+            يتطلب حفظ تسوية الجرد صلاحية تسوية الجرد وصلاحية تسجيل الحركات.
           </Alert>
           {!dataService.hasPermission('transactions_create') && (
             <Alert severity="warning" sx={{ mb: 2, fontFamily: '"Cairo", sans-serif' }}>
