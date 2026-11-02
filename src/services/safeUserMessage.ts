@@ -122,6 +122,17 @@ const DOMAIN_RULES: ReadonlyArray<readonly [prefix: string, text: string]> = [
 ];
 
 const AUTH_RULES: Readonly<Record<string, string>> = {
+  invalid_credentials: 'البريد الإلكتروني أو كلمة المرور غير صحيحة.',
+  email_not_confirmed: 'يجب تأكيد البريد الإلكتروني قبل تسجيل الدخول.',
+  user_banned: 'هذا الحساب محظور. راجع مدير النظام.',
+  email_address_not_authorized: 'خدمة البريد غير مهيأة للإرسال إلى هذا العنوان. تواصل مع مدير النظام.',
+  over_email_send_rate_limit: 'تم تجاوز حد إرسال البريد مؤقتًا. انتظر قبل إعادة المحاولة.',
+  over_request_rate_limit: 'تم تجاوز حد الطلبات مؤقتًا. انتظر قبل إعادة المحاولة.',
+  weak_password: 'كلمة المرور لا تستوفي متطلبات الأمان.',
+  same_password: 'اختر كلمة مرور مختلفة عن كلمة المرور الحالية.',
+  otp_expired: 'رابط التحقق غير صالح أو انتهت صلاحيته. اطلب رابطًا جديدًا.',
+  session_not_found: 'انتهت جلسة التحقق. اطلب رابط استعادة جديدًا.',
+  reauthentication_needed: 'تتطلب هذه العملية إعادة التحقق من الحساب.',
   'auth/network-request-failed': 'تعذر الاتصال بخدمة الدخول. تحقق من الاتصال وأعد المحاولة.',
   'auth/popup-blocked': 'تم حظر النافذة المنبثقة. اسمح بالنوافذ المنبثقة لهذا الموقع ثم أعد المحاولة.',
   'auth/popup-closed-by-user': 'أُغلقت نافذة تسجيل الدخول قبل اكتمال العملية.',

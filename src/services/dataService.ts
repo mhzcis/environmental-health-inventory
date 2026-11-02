@@ -166,7 +166,7 @@ import {
   normalizeAuditLog,
 } from '../utils/auditPolicy';
 import { bindDiagnosticsSession, classifyError, recordDiagnostic } from './operationalDiagnostics';
-import { safeErrorDetail, safeResultMessage } from './safeUserMessage';
+import { safeErrorDetail, safeResultMessage, safeUserMessage } from './safeUserMessage';
 import { clearUnattributedRuntimeAlert } from './unattributedRuntimeAlert';
 
 const localStorage = offlineProjectionStorage;
@@ -2299,8 +2299,8 @@ export const dataService = {
     try {
       await supabaseAuthSignIn(cleanInput, password);
       return { success: true, message: 'تم التحقق من بيانات الدخول، جاري تهيئة الحساب...' };
-    } catch {
-      return { success: false, message: 'اسم المستخدم أو كلمة المرور غير صحيحة!' };
+    } catch (error) {
+      return { success: false, message: safeUserMessage(error, 'user-management', { fallback: 'تعذر إكمال تسجيل الدخول. تحقق من الاتصال وأعد المحاولة.' }) };
     }
   },
 

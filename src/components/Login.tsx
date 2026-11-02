@@ -9,6 +9,8 @@ import LockIcon from '@mui/icons-material/Lock';
 import PersonIcon from '@mui/icons-material/Person';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import { dataService } from '../services/dataService';
+import { supabaseSendPasswordReset } from '../services/supabase';
+import { passwordRecoveryMessage } from '../services/passwordRecovery';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import Checkbox from '@mui/material/Checkbox';
 
@@ -19,7 +21,11 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: () => void }
   const [rememberMe, setRememberMe] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [loading, setLoading] = useState(false);
-  const [snackbarOpen, setSnackbarOpen] = useState(false);
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
+  const [recoveryEmail, setRecoveryEmail] = useState('');
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const [recoverySent, setRecoverySent] = useState(false);
+  const [recoveryError, setRecoveryError] = useState('');
   const [localClearDialogOpen, setLocalClearDialogOpen] = useState(false);
   const [localClearConfirmText, setLocalClearConfirmText] = useState('');
   const [isClearingLocalData, setIsClearingLocalData] = useState(false);
@@ -64,6 +70,17 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: () => void }
 
 
     }, 400);
+  };
+
+  const requestRecovery = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (recoveryBusy) return;
+    const email = recoveryEmail.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setRecoveryError('أدخل بريدًا إلكترونيًا صالحًا.'); return; }
+    setRecoveryBusy(true); setRecoveryError('');
+    try { await supabaseSendPasswordReset(email); setRecoverySent(true); }
+    catch (error) { setRecoveryError(passwordRecoveryMessage(error)); }
+    finally { setRecoveryBusy(false); }
   };
 
   return (
@@ -286,7 +303,7 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: () => void }
             <Button
               fullWidth
               variant="text"
-              onClick={() => setSnackbarOpen(true)}
+              onClick={() => { setRecoveryEmail(username); setRecoveryError(''); setRecoverySent(false); setRecoveryOpen(true); }}
               sx={{
                 mb: 2,
                 color: '#64748b',
@@ -390,24 +407,22 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: () => void }
         </DialogActions>
       </Dialog>
     
-      {/* Forgot Password Alert */}
-      {snackbarOpen && (
-        <Alert
-          severity="info"
-          onClose={() => setSnackbarOpen(false)}
-          sx={{
-            position: 'fixed',
-            bottom: 20,
-            left: '50%',
-            transform: 'translateX(-50%)',
-            zIndex: 9999,
-            fontFamily: '"Cairo", sans-serif',
-            direction: 'rtl'
-          }}
-        >
-          يرجى التواصل مع مدير النظام لإعادة تعيين كلمة المرور
-        </Alert>
-      )}
+      <Dialog open={recoveryOpen} onClose={() => !recoveryBusy && setRecoveryOpen(false)} slotProps={{ paper: { sx: { direction: 'rtl', borderRadius: 3, width: 460 } } }}>
+        <Box component="form" onSubmit={requestRecovery}>
+          <DialogTitle>استعادة كلمة المرور</DialogTitle>
+          <DialogContent>
+            {recoverySent ? <Alert severity="success">تم قبول طلب الاستعادة. إذا كان البريد مسجّلًا ومسموحًا له باستقبال الرسائل، فستصلك رسالة تحتوي رابط تعيين كلمة مرور جديدة. افحص البريد غير الهام أيضًا.</Alert> : <>
+              <DialogContentText sx={{ mb: 2 }}>أدخل البريد الإلكتروني المرتبط بالحساب لإرسال رابط الاستعادة.</DialogContentText>
+              <TextField fullWidth required type="email" autoComplete="email" label="البريد الإلكتروني للحساب" value={recoveryEmail} onChange={event => setRecoveryEmail(event.target.value)} disabled={recoveryBusy} />
+            </>}
+            {recoveryError && <Alert severity="error" sx={{ mt: 2 }}>{recoveryError}</Alert>}
+          </DialogContent>
+          <DialogActions>
+            <Button disabled={recoveryBusy} onClick={() => setRecoveryOpen(false)}>إغلاق</Button>
+            {!recoverySent && <Button type="submit" variant="contained" disabled={recoveryBusy}>{recoveryBusy ? 'جارٍ الإرسال...' : 'إرسال رابط الاستعادة'}</Button>}
+          </DialogActions>
+        </Box>
+      </Dialog>
 
     </Box>
   );

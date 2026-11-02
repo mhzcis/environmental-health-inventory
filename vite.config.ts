@@ -17,6 +17,7 @@ export default defineConfig(() => {
       chunkSizeWarningLimit: 10000,
       target: 'es2015',
       rollupOptions: {
+        input: { main: path.resolve(__dirname, 'index.html'), recovery: path.resolve(__dirname, 'reset-password.html') },
         output: {}
       }
     },

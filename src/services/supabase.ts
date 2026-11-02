@@ -1,5 +1,6 @@
 import { createClient, type Session, type SupabaseClient, type User } from '@supabase/supabase-js';
-import config from '../../supabase-config.json';
+import { isSupabaseConfigured, passwordRecoveryUrl, supabasePublicKey as key, supabaseUrl as url } from './supabaseConfig';
+export { isSupabaseConfigured } from './supabaseConfig';
 
 export type SupabaseTableName = 'users' | 'settings' | 'materials' | 'transactions' | 'generator_logs' | 'audit_logs';
 export interface SupabaseAuthUser {
@@ -7,17 +8,12 @@ export interface SupabaseAuthUser {
   email: string | null;
   metadata: { creationTime?: string; lastSignInTime?: string };
 }
-const env = (import.meta.env || {}) as Record<string, string | undefined>;
-const saved = config as Record<string, string>;
-const url = env.VITE_SUPABASE_URL || saved.url || saved.supabaseUrl;
-const key = env.VITE_SUPABASE_ANON_KEY || saved.anonKey || saved.supabaseAnonKey;
-export const isSupabaseConfigured = (): boolean => Boolean(url && key);
 export const supabase: SupabaseClient | null = isSupabaseConfigured()
   ? createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } })
   : null;
 // Password verification uses an isolated client so it cannot replace the active session.
 export const secondarySupabase: SupabaseClient | null = isSupabaseConfigured()
-  ? createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } })
+  ? createClient(url, key, { auth: { storageKey: 'inventory-password-verification-v1', persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } })
   : null;
 
 let currentUser: SupabaseAuthUser | null = null;
@@ -74,7 +70,7 @@ export async function supabaseAuthVerifyPassword(email: string, password: string
   if (result.error) throw result.error;
 }
 export async function supabaseSendPasswordReset(email: string): Promise<void> {
-  const redirectTo = typeof window === 'undefined' ? undefined : new URL(env.BASE_URL || './', window.location.href).href;
+  const redirectTo = typeof window === 'undefined' ? undefined : passwordRecoveryUrl(window.location.href);
   const { error } = await client().auth.resetPasswordForEmail(email, { redirectTo });
   if (error) throw error;
 }
