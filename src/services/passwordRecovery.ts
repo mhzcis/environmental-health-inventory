@@ -9,9 +9,16 @@ export function createPasswordRecovery(storage: Storage = window.sessionStorage,
   if (!isSupabaseConfigured()) throw new Error('RECOVERY_NOT_CONFIGURED');
   const callbackUrl = new URL(href);
   const fragment = new URLSearchParams(callbackUrl.hash.slice(1));
+  const hasCallback = ['access_token', 'refresh_token', 'error', 'error_code', 'type'].some(key => fragment.has(key))
+    || ['code', 'error', 'error_code'].some(key => callbackUrl.searchParams.has(key));
+  const callbackError = ['error', 'error_code'].some(key => fragment.has(key) || callbackUrl.searchParams.has(key));
+  const expectsRecovery = !callbackError && fragment.get('type') === 'recovery'
+    && Boolean(fragment.get('access_token') && fragment.get('refresh_token'));
   // A new (including expired/invalid) link must not reuse an older recovery owner.
-  if (['access_token', 'refresh_token', 'error', 'error_code', 'type'].some(key => fragment.has(key))
-    || ['code', 'error', 'error_code'].some(key => callbackUrl.searchParams.has(key))) storage.removeItem(OWNER_KEY);
+  if (hasCallback) {
+    storage.removeItem(OWNER_KEY);
+    storage.removeItem(RECOVERY_AUTH_KEY);
+  }
   const client = createClient(supabaseUrl, supabasePublicKey, { auth: {
     storageKey: RECOVERY_AUTH_KEY, storage, persistSession: true,
     autoRefreshToken: false, detectSessionInUrl: true, flowType: 'implicit',
@@ -20,10 +27,15 @@ export function createPasswordRecovery(storage: Storage = window.sessionStorage,
   let initialization: Promise<void> | null = null;
   let passwordChanged = false;
   let updating = false;
+  let disposed = false;
+  let notifyRecovery: () => void = () => {};
+  const recoveryEvent = new Promise<void>(resolve => { notifyRecovery = resolve; });
   const { data: { subscription } } = client.auth.onAuthStateChange((event, session) => {
-    if (event === 'PASSWORD_RECOVERY' && session) {
+    if (disposed) return;
+    if (event === 'PASSWORD_RECOVERY' && session && (!hasCallback || expectsRecovery)) {
       owner = session.user.id;
       storage.setItem(OWNER_KEY, owner);
+      notifyRecovery();
     } else if (!session || (owner && session.user.id !== owner)) {
       owner = null;
       storage.removeItem(OWNER_KEY);
@@ -32,9 +44,9 @@ export function createPasswordRecovery(storage: Storage = window.sessionStorage,
 
   const verifyOwner = async (): Promise<string> => {
     const expected = owner;
-    if (!expected || passwordChanged) throw new Error('RECOVERY_LINK_INVALID');
+    if (!expected || passwordChanged || disposed) throw new Error('RECOVERY_LINK_INVALID');
     const { data, error } = await client.auth.getUser();
-    if (error || !data.user || data.user.id !== expected || owner !== expected) {
+    if (error || !data.user || data.user.id !== expected || owner !== expected || disposed) {
       throw new Error('RECOVERY_LINK_INVALID');
     }
     return expected;
@@ -43,8 +55,20 @@ export function createPasswordRecovery(storage: Storage = window.sessionStorage,
   return {
     initialize(): Promise<void> {
       initialization ??= (async () => {
+        if (hasCallback && !expectsRecovery) throw new Error('RECOVERY_LINK_INVALID');
         const { data, error } = await client.auth.getSession();
-        if (error || !data.session || data.session.user.id !== owner) throw new Error('RECOVERY_LINK_INVALID');
+        if (error || !data.session) throw new Error('RECOVERY_LINK_INVALID');
+        // auth-js resolves getSession before its setTimeout-delivered PASSWORD_RECOVERY.
+        // Wait for that event; INITIAL_SESSION alone must never authorize a reset.
+        if (expectsRecovery && !owner) {
+          let timeout: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await Promise.race([recoveryEvent, new Promise<void>((_, reject) => {
+              timeout = setTimeout(() => reject(new Error('RECOVERY_LINK_INVALID')), 10_000);
+            })]);
+          } finally { if (timeout !== undefined) clearTimeout(timeout); }
+        }
+        if (data.session.user.id !== owner) throw new Error('RECOVERY_LINK_INVALID');
         await verifyOwner();
       })();
       return initialization;
@@ -68,7 +92,7 @@ export function createPasswordRecovery(storage: Storage = window.sessionStorage,
         } catch { return { signedOut: false }; }
       } finally { updating = false; }
     },
-    dispose() { subscription.unsubscribe(); },
+    dispose() { disposed = true; notifyRecovery(); subscription.unsubscribe(); },
   };
 }
 

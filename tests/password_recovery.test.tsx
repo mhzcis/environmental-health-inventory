@@ -25,9 +25,40 @@ beforeEach(() => {
     onAuthStateChange: (callback: any) => { fake.callback = callback; return { data: { subscription: { unsubscribe: fake.unsubscribe } } }; },
   } }));
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe('Recovery session isolation and verification', () => {
+  it('waits for a delayed recovery event after the session is loaded', async () => {
+    const recovery = createPasswordRecovery(sessionStorage, url + '#type=recovery&access_token=synthetic&refresh_token=synthetic');
+    fake.callback('INITIAL_SESSION', session);
+    let initialized = false;
+    const pending = recovery.initialize().then(() => { initialized = true; });
+    await Promise.resolve();
+    expect(initialized).toBe(false);
+    expect(fake.getUser).not.toHaveBeenCalled();
+    fake.callback('PASSWORD_RECOVERY', session);
+    await pending;
+    expect(initialized).toBe(true);
+    recovery.dispose();
+  });
+  it('fails closed if a recovery event never arrives', async () => {
+    vi.useFakeTimers();
+    const recovery = createPasswordRecovery(sessionStorage, url + '#type=recovery&access_token=synthetic&refresh_token=synthetic');
+    const pending = expect(recovery.initialize()).rejects.toThrow('RECOVERY_LINK_INVALID');
+    fake.callback('INITIAL_SESSION', session);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await pending;
+    expect(fake.getUser).not.toHaveBeenCalled();
+    expect(fake.updateUser).not.toHaveBeenCalled();
+    recovery.dispose();
+  });
+  it('rejects a recovery event whose user differs from the loaded session', async () => {
+    const recovery = createPasswordRecovery(sessionStorage, url + '#type=recovery&access_token=synthetic&refresh_token=synthetic');
+    fake.callback('PASSWORD_RECOVERY', { user: { id: 'other-synthetic-user' } });
+    await expect(recovery.initialize()).rejects.toThrow('RECOVERY_LINK_INVALID');
+    expect(fake.updateUser).not.toHaveBeenCalled();
+    recovery.dispose();
+  });
   it('uses a separate tab-scoped client, preserves exact password, signs out, and refuses reuse', async () => {
     localStorage.setItem('admin-session', 'unchanged');
     const recovery = createPasswordRecovery(sessionStorage, url);
@@ -52,9 +83,14 @@ describe('Recovery session isolation and verification', () => {
   });
   it('does not reuse an old owner when a new expired callback arrives', async () => {
     sessionStorage.setItem('inventory-recovery-owner-v1', session.user.id);
+    sessionStorage.setItem(RECOVERY_AUTH_KEY, 'stale-synthetic-session');
     const recovery = createPasswordRecovery(sessionStorage, url + '#error_code=otp_expired');
+    fake.callback('PASSWORD_RECOVERY', session);
     await expect(recovery.initialize()).rejects.toThrow('RECOVERY_LINK_INVALID');
+    expect(sessionStorage.getItem(RECOVERY_AUTH_KEY)).toBeNull();
+    expect(sessionStorage.getItem('inventory-recovery-owner-v1')).toBeNull();
     expect(fake.updateUser).not.toHaveBeenCalled();
+    recovery.dispose();
   });
   it('rechecks ownership across server verification and blocks concurrent updates', async () => {
     const recovery = createPasswordRecovery(sessionStorage, url);
