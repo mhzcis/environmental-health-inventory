@@ -589,7 +589,16 @@ const queueCloudMutation = async (
     }
 
     for (const [table, entries] of upsertsByTable.entries()) {
-      await supabaseDb.upsertDocs(table, entries);
+      if (table === 'audit_logs') {
+        await supabaseDb.appendAuditLogs(entries);
+      } else if (table === 'settings' && !dataService.hasPermission('settings_edit')) {
+        for (const entry of entries) {
+          if (entry.id !== 'app_config') throw new Error('UNSUPPORTED_OPERATIONAL_SETTINGS_DOCUMENT');
+          await supabaseDb.updateExistingSettings(entry.payload);
+        }
+      } else {
+        await supabaseDb.upsertDocs(table, entries);
+      }
     }
     for (const [table, ids] of deletesByTable.entries()) {
       await supabaseDb.deleteDocs(table, ids);
@@ -2040,7 +2049,12 @@ export const dataService = {
 
     if (isSupabaseConfigured() && CLOUD_WRITES_ENABLED && getCurrentAuthUser()) {
       try {
-        await supabaseDb.upsertDoc('audit_logs', newLog.id, newLog as unknown as Record<string, unknown>);
+        if (clientAuditId) {
+          // Preserve the privileged backup-recovery receipt reconciliation path.
+          await supabaseDb.upsertDoc('audit_logs', newLog.id, newLog as unknown as Record<string, unknown>);
+        } else {
+          await supabaseDb.appendAuditLogs([{ id: newLog.id, payload: newLog as unknown as Record<string, unknown> }]);
+        }
       } catch (error) {
         handleCloudWriteError(error, 'persisted');
         if (context.requireCentralAck) throw error;
@@ -2197,11 +2211,13 @@ export const dataService = {
         const rows = await supabaseDb.getCollection<InventoryTransaction>('transactions');
         transactions = rows.map(r => ({ ...(stripSyncMetadata(r) as unknown as InventoryTransaction), id: r.id }));
       }
-      if (user.permissions.includes('settings_view')) {
+      // Every active user needs the authoritative warehouses, units and counters.
+      // settings_view controls the administration page, not these operational dependencies.
+      {
         const remoteSettings = await supabaseDb.getDoc<Record<string, unknown>>('settings', 'app_config');
         if (remoteSettings) {
           settings = composeSupabaseAppSettings(remoteSettings, DEFAULT_SETTINGS);
-        } else {
+        } else if (user.permissions.includes('settings_edit')) {
           // Brand-new empty Supabase database: initialize default settings and seed to cloud
           settings = withSettingsAttachmentManifest(
             canonicalizeWarehouseSettings({
@@ -2211,6 +2227,8 @@ export const dataService = {
             }),
           ) as AppSettings;
           await supabaseDb.upsertDoc('settings', 'app_config', settings as unknown as Record<string, unknown>).catch(() => {});
+        } else {
+          return { success: false, status: 'missing-settings', message: 'الإعدادات التشغيلية غير مهيأة. تواصل مع مدير النظام.' };
         }
       }
       if (user.permissions.includes('audit_view')) {
@@ -2269,7 +2287,7 @@ export const dataService = {
       if (user.permissions.includes('transactions_view')) {
         localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
       }
-      if (user.permissions.includes('settings_view') && settings) {
+      if (settings) {
         localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
       }
       if (user.permissions.includes('audit_view')) {
@@ -3764,7 +3782,7 @@ export async function initCloudSync() {
       return;
     }
     try {
-      if (table === 'settings' && dataService.hasPermission('settings_view')) {
+      if (table === 'settings') {
         const remoteSettings = await supabaseDb.getDoc<Record<string, unknown>>('settings', 'app_config');
         if (remoteSettings && cloudSyncGeneration === sessionGeneration) {
           const canonical = composeSupabaseAppSettings(remoteSettings, DEFAULT_SETTINGS);

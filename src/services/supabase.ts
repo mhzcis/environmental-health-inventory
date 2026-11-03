@@ -133,6 +133,21 @@ export const supabaseDb = {
       if (error) throw error;
     }
   },
+  /** Append receipts without SELECT/UPDATE privileges on the audit collection. */
+  async appendAuditLogs(entries: Array<{ id: string; payload: Record<string, unknown> }>): Promise<void> {
+    for (const entry of entries) {
+      const { error } = await client().from('audit_logs').insert(encode('audit_logs', entry.id, entry.payload));
+      // A retry of the same immutable receipt must never overwrite the original.
+      if (error && error.code !== '23505') throw error;
+    }
+  },
+  /** Operational writers can update an existing root without permission to create settings. */
+  async updateExistingSettings(payload: Record<string, unknown>): Promise<void> {
+    const { data, error } = await client().from('settings')
+      .update(encode('settings', 'app_config', payload)).eq('id', 'app_config').select('id').single();
+    if (error) throw error;
+    if (data?.id !== 'app_config') throw new Error('SETTINGS_UPDATE_NOT_ACKNOWLEDGED');
+  },
   async deleteDocs(table: SupabaseTableName, ids: string[]): Promise<void> {
     assertTable(table);
     for (let offset = 0; offset < ids.length; offset += PAGE_SIZE) {

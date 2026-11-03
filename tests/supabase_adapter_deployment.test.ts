@@ -12,10 +12,12 @@ vi.mock('@supabase/supabase-js', () => ({ createClient: vi.fn(() => fake.client)
 beforeEach(() => {
   vi.resetModules();
   fake.query = {};
-  for (const method of ['select', 'eq', 'order', 'delete']) fake.query[method] = vi.fn(() => fake.query);
+  for (const method of ['select', 'eq', 'order', 'delete', 'update']) fake.query[method] = vi.fn(() => fake.query);
   fake.query.maybeSingle = vi.fn(async () => ({ data: null, error: null }));
   fake.query.range = vi.fn(async () => ({ data: [], error: null }));
   fake.query.upsert = vi.fn(async () => ({ error: null }));
+  fake.query.insert = vi.fn(async () => ({ error: null }));
+  fake.query.single = vi.fn(async () => ({ data: { id: 'app_config' }, error: null }));
   fake.query.in = vi.fn(async () => ({ error: null }));
   fake.channel = {
     on: vi.fn((_event, _filter, callback) => { fake.realtimeCallback = callback; return fake.channel; }),
@@ -35,6 +37,34 @@ beforeEach(() => {
 });
 
 describe('Supabase deployment adapter', () => {
+  it('appends audit receipts without upsert/read/update access and never overwrites duplicates', async () => {
+    const { supabaseDb } = await import('../src/services/supabase');
+    fake.query.insert.mockResolvedValueOnce({ error: { code: '23505' } }).mockResolvedValueOnce({ error: null });
+    await supabaseDb.appendAuditLogs([
+      { id: 'existing-receipt', payload: { details: 'synthetic retry' } },
+      { id: 'new-receipt', payload: { details: 'synthetic new receipt' } },
+    ]);
+    expect(fake.query.insert).toHaveBeenCalledTimes(2);
+    expect(fake.query.upsert).not.toHaveBeenCalled();
+    expect(fake.query.select).not.toHaveBeenCalled();
+    expect(fake.query.update).not.toHaveBeenCalled();
+    const denied = { code: '42501' };
+    fake.query.insert.mockResolvedValueOnce({ error: denied });
+    await expect(supabaseDb.appendAuditLogs([{ id: 'denied', payload: {} }])).rejects.toBe(denied);
+  });
+  it('requires acknowledgement when updating operational settings and never inserts a missing root', async () => {
+    const { supabaseDb } = await import('../src/services/supabase');
+    await supabaseDb.updateExistingSettings({ transactionCounters: { inbound: 2 } });
+    expect(fake.query.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'app_config', data: expect.objectContaining({ transactionCounters: { inbound: 2 } }) }));
+    expect(fake.query.eq).toHaveBeenCalledWith('id', 'app_config');
+    fake.query.single.mockResolvedValueOnce({ data: null, error: null });
+    await expect(supabaseDb.updateExistingSettings({})).rejects.toThrow('SETTINGS_UPDATE_NOT_ACKNOWLEDGED');
+    const denied = { code: '42501' };
+    fake.query.single.mockResolvedValueOnce({ data: null, error: denied });
+    await expect(supabaseDb.updateExistingSettings({})).rejects.toBe(denied);
+    expect(fake.query.insert).not.toHaveBeenCalled();
+    expect(fake.query.upsert).not.toHaveBeenCalled();
+  });
   it('loads every page, including more than the default server limit, in stable ID order', async () => {
     const first = Array.from({ length: 500 }, (_, i) => ({ id: `row-${i}`, data: { name: `${i}` } }));
     fake.query.range.mockResolvedValueOnce({ data: first, error: null })
