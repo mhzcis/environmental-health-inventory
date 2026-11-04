@@ -308,6 +308,8 @@ export default function Transactions() {
           t.itemCode || '',
           t.transactionType || '',
           `${t.quantity} ${t.unit || 'وحدة'}`,
+          String(t.displayStockBefore ?? t.stockBefore ?? 0),
+          String(t.displayStockAfter ?? t.stockAfter ?? 0),
           t.supplierOrReceiver || ''
         ];
         if (selectedStorehouse !== 'all') return [parent];
@@ -315,7 +317,9 @@ export default function Transactions() {
           .filter((warehouse) => (t.displayWarehouseStockBefore?.[warehouse] || 0) !== 0 || (t.displayWarehouseStockAfter?.[warehouse] || 0) !== 0 || warehouse === t.storehouse)
           .map((warehouse) => [
             '', '', `↳ ${warehouse}`, `↳ تفصيل رصيد ${t.itemName}`, '', 'تفصيل',
-            warehouse === t.storehouse ? `${t.quantity} ${t.unit || 'وحدة'}` : '—', ''
+            warehouse === t.storehouse ? `${t.quantity} ${t.unit || 'وحدة'}` : '—',
+            String(t.displayWarehouseStockBefore?.[warehouse] ?? 0),
+            String(t.displayWarehouseStockAfter?.[warehouse] ?? 0), ''
           ]);
         return [parent, ...details];
       });

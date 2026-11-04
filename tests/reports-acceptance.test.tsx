@@ -4,7 +4,7 @@ import {afterEach,beforeEach,describe,it,expect,vi} from 'vitest';
 import {cleanup,render,screen,fireEvent,waitFor} from '@testing-library/react';
 import {Blob as NodeBlob} from 'node:buffer';
 import ExcelJS from 'exceljs';
-const fake=vi.hoisted(()=>({materials:[] as any[],transactions:[] as any[],logs:[] as any[],warehouse:'all',permissions:true,denied:[] as string[],pendingError:false,blocked:false,retry:vi.fn(),pdf:vi.fn(),save:vi.fn()}));
+const fake=vi.hoisted(()=>({materials:[] as any[],transactions:[] as any[],logs:[] as any[],warehouse:'all',permissions:true,denied:[] as string[],blocked:false,retry:vi.fn(),pdf:vi.fn(),save:vi.fn()}));
 vi.mock('../src/services/dataService',()=>({dataService:{getSettings:()=>({organizationName:'QA معزول',departmentName:'QA فحص',expiryWarningThresholdDays:30,categories:[{name:'QA-C1'},{name:'QA-C2'}],units:['قطعة'],storehouses:['QA-A','QA-B'],partners:[]}),getMaterials:()=>fake.materials,getTransactions:()=>fake.transactions,getGeneratorLogs:()=>fake.logs,subscribe:()=>()=>{},hasPermission:(p:string)=>fake.permissions&&!fake.denied.includes(p),listPendingInventoryMutations:async()=>[{id:'qa-pending',status:fake.blocked?'blocked':'pending',operations:[],transport:'supabase-v1'}],retryPendingInventoryMutations:()=>fake.retry(),getOpeningStockAttachment:()=>null,getStorehouseInitialStock:(id:string,wh:string)=>fake.materials.find(m=>m.id===id)?.initialStocks?.[wh]||0}}));
 vi.mock('../src/context/StorehouseContext',()=>({useStorehouse:()=>({selectedStorehouse:fake.warehouse,activeStorehouses:['QA-A','QA-B']})}));
 vi.mock('../src/utils/printHtml',()=>({requireStableStringPart:(s:any)=>{if(typeof s!=='string'||!s.trim())throw new Error('invalid id');return s.trim();},exportToPDF:(...a:any[])=>fake.pdf(...a)}));
@@ -87,4 +87,13 @@ it.each([true,false])('SYNC-04 retry message distinguishes blocked=%s from unkno
  fireEvent.click(await screen.findByRole('button',{name:'إعادة إرسال الطلبات المحفوظة'}));
  const status=await screen.findByRole('status');expect(status.textContent).toContain(blocked?'رُفض الطلب':'لم يصل إقرار');
  expect(status.textContent).not.toContain('تعذر الاتصال بالخدمة مؤقت');expect(fake.retry).toHaveBeenCalledOnce();
+});
+
+it.each(['QA-A','all'])('OUT-01 bulk Excel maps balances and partner to ten matching columns for %s',async(warehouse)=>{
+ fake.warehouse=warehouse;fake.transactions[0].supplierOrReceiver='QA partner';mountTransactions();
+ fireEvent.click(document.getElementById('select-all-transactions')!);fireEvent.click(document.getElementById('bulk-export-transactions-excel')!);
+ await waitFor(()=>expect(fake.save).toHaveBeenCalledOnce());const wb=new ExcelJS.Workbook();await wb.xlsx.load(await fake.save.mock.calls[0][0].arrayBuffer());const sheet=wb.worksheets[0];
+ expect(sheet.getRow(9).getCell(8).value).toBe('الرصيد قبل');expect(sheet.getRow(9).getCell(9).value).toBe('الرصيد بعد');
+ expect(sheet.getRow(10).getCell(8).value).toBe(0);expect(sheet.getRow(10).getCell(9).value).toBe(1);expect(sheet.getRow(10).getCell(10).value).toBe('QA partner');
+ if(warehouse==='all'){expect(sheet.getRow(11).getCell(3).value).toBe('↳ QA-A');expect(sheet.getRow(11).getCell(8).value).toBe(0);expect(sheet.getRow(11).getCell(9).value).toBe(1);}
 });
