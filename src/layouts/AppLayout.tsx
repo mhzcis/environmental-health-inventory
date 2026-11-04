@@ -1191,7 +1191,7 @@ export default function AppLayout({ children }: Props) {
                   fontSize: '0.85rem',
                 }}
               >
-                تم تشفير وتأمين قاعدة البيانات المحلية بنجاح
+                يرجى الانتظار حتى تظهر شاشة تسجيل الدخول
               </Typography>
             </Box>
           </Box>
