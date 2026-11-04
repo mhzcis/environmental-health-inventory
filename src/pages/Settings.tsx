@@ -802,7 +802,7 @@ export default function Settings() {
             transactionType: 'افتتاحي', storehouseId: warehouse.id, storehouse: warehouse.name, stockBefore: 0, stockAfter: opening,
             executedBy: dataService.getCurrentUser().fullName, supplierOrReceiver: 'رصيد افتتاحي من استيراد الأصناف',
             notes: 'استيراد Excel ذري', createdAt: now, updatedAt: now });
-        } catch (e) { throw new Error(`السطر ${i + 1}: ${e instanceof Error ? e.message : 'بيانات غير صالحة'}`); }
+        } catch (e) { throw new Error(`السطر ${i + 1}، ${e instanceof Error ? e.message : 'بيانات غير صالحة'}`); }
       }
       await dataService.importMaterialsBatch(items, openings);
       setSuccessMsg(`اعتمد الخادم الدفعة كاملة: ${added} صنف جديد و${updated} تحديث و${openings.length} رصيد افتتاحي.`);
@@ -838,7 +838,7 @@ export default function Settings() {
             itemCategory: item.category, unit: item.unit, transactionType: type, quantity, storehouseId: warehouse.id,
             storehouse: warehouse.name, stockBefore: 0, stockAfter: 0, executedBy: dataService.getCurrentUser().fullName,
             supplierOrReceiver, notes, createdAt: now, updatedAt: now });
-        } catch (e) { throw new Error(`السطر ${i + 1}: ${e instanceof Error ? e.message : 'بيانات غير صالحة'}`); }
+        } catch (e) { throw new Error(`السطر ${i + 1}، ${e instanceof Error ? e.message : 'بيانات غير صالحة'}`); }
       }
       if (transactions.length) {
         if (transactions.length > 449) throw new Error('الحد 449 حركة في دفعة واحدة؛ قسّم الملف قبل الاستيراد.');
