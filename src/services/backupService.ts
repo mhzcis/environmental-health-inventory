@@ -26,7 +26,8 @@ import {
   persistSessionOwnedOfflineDomainProjection,
 } from './offlineDomainStore';
 import { buildAuditLog, normalizeAuditLog } from '../utils/auditPolicy';
-import { fingerprintDocument } from '../utils/syncProtocol';
+import { fingerprintDocument, stripSyncMetadata } from '../utils/syncProtocol';
+import { composeSupabaseAppSettings } from './supabaseSettings';
 import { validateSyncMutation, type SyncOperation } from './syncCoordinator';
 
 const localStorage = offlineProjectionStorage;
@@ -1709,23 +1710,41 @@ export const compareLocalAndCloudData = async (): Promise<DataComparisonReport> 
     report.storehousesOnlyLocal = localStorehouses.filter(s => !cloudStorehouses.includes(s));
     report.storehousesOnlyCloud = cloudStorehouses.filter(s => !localStorehouses.includes(s));
 
-    localStorehouses.forEach(s => { report.warehouseTotalsLocal[s] = 0; });
-    cloudStorehouses.forEach(s => { report.warehouseTotalsCloud[s] = 0; });
+    // The ledger owns balances. Raw material rows need not carry derived stocks.
+    const localProjection = buildWarehouseBackupProjection({ settings: localSettings, materials: localMaterials, transactions: localTransactions });
+    const cloudSettings = cloudSettingsDoc ? composeSupabaseAppSettings(cloudSettingsDoc as unknown as Record<string, unknown>, localSettings) : localSettings;
+    const cloudProjection = buildWarehouseBackupProjection({ settings: cloudSettings, materials: cloudMaterials, transactions: cloudTransactions });
+    const localTotals = calculateWarehouseTotals(localProjection.materials, localStorehouses);
+    const cloudTotals = calculateWarehouseTotals(cloudProjection.materials, cloudStorehouses);
+    report.warehouseTotalsLocal = localTotals.totals;
+    report.warehouseTotalsCloud = cloudTotals.totals;
+    report.stockMismatchLocal = [...localProjection.errors, ...localTotals.errors];
+    report.stockMismatchCloud = [...cloudProjection.errors, ...cloudTotals.errors];
 
-    localMaterials.forEach((m: any) => {
-      if (m.warehouseStocks) {
-        Object.entries(m.warehouseStocks).forEach(([wh, qty]) => {
-          report.warehouseTotalsLocal[wh] = (report.warehouseTotalsLocal[wh] || 0) + Number(qty || 0);
-        });
+    const groups = {
+      materials: [localProjection.materials, cloudProjection.materials],
+      transactions: [localProjection.transactions, cloudProjection.transactions],
+      users: [localUsers, cloudUsers],
+      generatorLogs: [localGenLogs, cloudGenLogs],
+      auditLogs: [localAuditLogs.map(log => normalizeAuditLog(log, log.id)), cloudAuditLogs.map(log => normalizeAuditLog(log, log.id))],
+    };
+    for (const [group, [localRows, cloudRows]] of Object.entries(groups)) {
+      const localById = new Map(localRows.filter(Boolean).map(row => [row!.id, stripSyncMetadata(row)]));
+      report.mismatchedRecords[group] = cloudRows.filter(row => row && localById.has(row.id) && canonical(localById.get(row.id)) !== canonical(stripSyncMetadata(row))).map(row => row!.id);
+      if (group === 'materials' || group === 'transactions' || group === 'users') {
+        const duplicates = (rows: typeof localRows) => {
+          const counts = new Map<string, number>();
+          for (const row of rows) if (row) counts.set(row.id, (counts.get(row.id) || 0) + 1);
+          return [...counts].filter(([, count]) => count > 1).map(([id]) => id);
+        };
+        report.duplicateIds[`${group}Local`] = duplicates(localRows);
+        report.duplicateIds[`${group}Cloud`] = duplicates(cloudRows);
       }
-    });
-    cloudMaterials.forEach((m: any) => {
-      if (m.warehouseStocks) {
-        Object.entries(m.warehouseStocks).forEach(([wh, qty]) => {
-          report.warehouseTotalsCloud[wh] = (report.warehouseTotalsCloud[wh] || 0) + Number(qty || 0);
-        });
-      }
-    });
+    }
+    if (hasLocalSettings && cloudSettingsDoc && canonical(composeSupabaseAppSettings(localSettings as unknown as Record<string, unknown>, localSettings)) !== canonical(cloudSettings)) report.mismatchedRecords.settings.push('app_config');
+    report.passwordFieldsCount = cloudUsers.filter(user => hasForbiddenCredentialKey(user)).length;
+    const cloudMaterialIds = new Set(cloudMaterials.map(material => material.id));
+    report.orphanTransactionsCount = cloudTransactions.filter(tx => !cloudMaterialIds.has(tx.itemId)).length;
 
     const diffIds = (localArr: Array<{ id: string }>, cloudArr: Array<{ id: string }>) => {
       const lSet = new Set(localArr.map(i => i.id));
@@ -1743,6 +1762,10 @@ export const compareLocalAndCloudData = async (): Promise<DataComparisonReport> 
     const txDiff = diffIds(localTransactions, cloudTransactions);
     report.missingInCloud.transactions = txDiff.missingInCloud;
     report.missingLocally.transactions = txDiff.missingLocally;
+
+    const userDiff = diffIds(localUsers, cloudUsers);
+    report.missingInCloud.users = userDiff.missingInCloud;
+    report.missingLocally.users = userDiff.missingLocally;
 
     const genDiff = diffIds(localGenLogs, cloudGenLogs);
     report.missingInCloud.generatorLogs = genDiff.missingInCloud;
@@ -1765,11 +1788,18 @@ export const compareLocalAndCloudData = async (): Promise<DataComparisonReport> 
       report.missingInCloud.generatorLogs.length > 0 ||
       report.missingLocally.generatorLogs.length > 0;
 
+    const hasContentDiff = Object.entries(report.mismatchedRecords).some(([group, rows]) => group !== 'auditLogs' && rows.length > 0)
+      || report.missingInCloud.users.length > 0 || report.missingLocally.users.length > 0
+      || Object.values(report.duplicateIds).some(ids => ids.length > 0)
+      || report.stockMismatchLocal.length > 0 || report.stockMismatchCloud.length > 0
+      || report.passwordFieldsCount > 0 || report.orphanTransactionsCount > 0
+      || canonical(report.warehouseTotalsLocal) !== canonical(report.warehouseTotalsCloud);
+
     const hasAuditDiff =
       report.missingInCloud.auditLogs.length > 0 ||
-      report.missingLocally.auditLogs.length > 0;
+      report.missingLocally.auditLogs.length > 0 || report.mismatchedRecords.auditLogs.length > 0;
 
-    if (hasBusinessDiff) report.status = 'differences-found';
+    if (hasBusinessDiff || hasContentDiff) report.status = 'differences-found';
     else if (hasAuditDiff) report.status = 'audit-only-differences';
     else report.status = 'matched';
   } catch (err: any) {

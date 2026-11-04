@@ -39,7 +39,7 @@ vi.mock('../src/services/supabase',()=>({
 import {dataService,stopCloudSync,__p10EnqueueFenceTestApi} from '../src/services/dataService';
 import {canonicalizeWarehouseSettings} from '../src/utils/warehouseSettings';
 import {buildMaterialWarehouseView,buildTransactionLedger} from '../src/utils/inventoryLogic';
-import {createBackup,validateBackup,applyBackupLocally} from '../src/services/backupService';
+import {createBackup,validateBackup,applyBackupLocally,compareLocalAndCloudData} from '../src/services/backupService';
 import {validateInventoryDataset} from '../src/utils/inventoryIntegrity';
 const adminId='11111111-1111-4111-8111-111111111111';
 const allPermissions=['dashboard_view','materials_view','materials_create','materials_edit','materials_delete','materials_stocktake','transactions_view','transactions_create','transactions_delete','reports_view','reports_export','reports_print','audit_view','generator_log','settings_view','settings_edit','users_manage','system_reset'];
@@ -81,6 +81,29 @@ import {__p9MonitoringTestApi} from '../src/services/dataService';
 import {isValidInventoryDate} from '../src/utils/inventoryIntegrity';
 
 describe('Remediation acceptance — candidate source only',()=>{
+ it('live diagnostics derive warehouse totals from the ledger and detect changed content under the same IDs',async()=>{
+  await reference();
+  const matched=await compareLocalAndCloudData();
+  expect(matched.status,JSON.stringify(matched)).toBe('matched');
+  expect(matched.warehouseTotalsLocal).toEqual({'QA-A':90,'QA-B':30});
+  expect(matched.warehouseTotalsCloud).toEqual(matched.warehouseTotalsLocal);
+  const inbound=[...fake.backend.transactions.values()].find(t=>t.transactionType==='وارد');
+  fake.backend.transactions.set(inbound.id,{...inbound,quantity:41});
+  const changed=await compareLocalAndCloudData();
+  expect(changed.status).toBe('differences-found');
+  expect(changed.mismatchedRecords.transactions).toContain(inbound.id);
+  expect(changed.warehouseTotalsCloud['QA-A']).toBe(91);
+ });
+ it('live diagnostics flag profile differences and orphan references instead of a false matched result',async()=>{
+  await reference();
+  fake.backend.users.set(adminId,{...user,permissions:['materials_view']});
+  const first=[...fake.backend.transactions.values()][0];
+  fake.backend.transactions.set(first.id,{...first,itemId:'qa-missing'});
+  const report=await compareLocalAndCloudData();
+  expect(report.status).toBe('differences-found');
+  expect(report.mismatchedRecords.users).toContain(adminId);
+  expect(report.orphanTransactionsCount).toBe(1);
+ });
  it('F01 uncertain transport retains durable projection without a success audit',async()=>{localStorage.setItem(k.materials,JSON.stringify([material()]));fake.failTable='transactions';const before=localStorage.getItem(k.audit);const result=await dataService.saveTransaction(tx('وارد',5));expect(result.success).toBe(false);expect(dataService.getTransactions()).toHaveLength(1);expect(await dataService.listPendingInventoryMutations()).toHaveLength(1);expect(localStorage.getItem(k.audit)).toBe(before);expect(fake.backend.audit_logs.size).toBe(0);});
  it('F01 missing authenticated session cannot masquerade as central success',async()=>{localStorage.setItem(k.materials,JSON.stringify([material()]));fake.uid='';const result=await dataService.saveTransaction(tx('وارد',5));expect(result.success).toBe(false);expect(fake.calls).toHaveLength(0);expect(dataService.getTransactions()).toHaveLength(0);});
  it('F09 direction agrees across material, warehouse, ledger and calculator',async()=>{await reference();await save(tx('تسوية',2,'qa-a',{transferType:'out',date:'2026-11-06'}));expect(dataService.getItemStock('qa-m1')).toBe(118);expect(dataService.getItemStockByStorehouse('qa-m1','qa-a')).toBe(88);expect(dataService.calculateStock(dataService.getTransactions())).toBe(118);const rows=buildTransactionLedger(dataService.getTransactions(),'all',settings.storehouses,dataService.getMaterials());expect(rows[0]?.displayStockAfter).toBe(118);});
