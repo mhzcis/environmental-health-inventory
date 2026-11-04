@@ -83,6 +83,10 @@ import {isValidInventoryDate} from '../src/utils/inventoryIntegrity';
 describe('Remediation acceptance — candidate source only',()=>{
  it('live diagnostics derive warehouse totals from the ledger and detect changed content under the same IDs',async()=>{
   await reference();
+  // The local projection has completed a JSON round trip while raw cloud rows
+  // still omit optional derived fields. Both represent the same business data.
+  const backup=await createBackup();
+  localStorage.setItem(k.materials,JSON.stringify(backup.materials));
   const matched=await compareLocalAndCloudData();
   expect(matched.status,JSON.stringify(matched)).toBe('matched');
   expect(matched.warehouseTotalsLocal).toEqual({'QA-A':90,'QA-B':30});

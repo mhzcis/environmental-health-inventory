@@ -1728,9 +1728,11 @@ export const compareLocalAndCloudData = async (): Promise<DataComparisonReport> 
       generatorLogs: [localGenLogs, cloudGenLogs],
       auditLogs: [localAuditLogs.map(log => normalizeAuditLog(log, log.id)), cloudAuditLogs.map(log => normalizeAuditLog(log, log.id))],
     };
+    // JSON persistence omits undefined optional fields introduced by projections.
+    const comparisonValue = (value: unknown) => JSON.parse(JSON.stringify(stripSyncMetadata(value)));
     for (const [group, [localRows, cloudRows]] of Object.entries(groups)) {
-      const localById = new Map(localRows.filter(Boolean).map(row => [row!.id, stripSyncMetadata(row)]));
-      report.mismatchedRecords[group] = cloudRows.filter(row => row && localById.has(row.id) && canonical(localById.get(row.id)) !== canonical(stripSyncMetadata(row))).map(row => row!.id);
+      const localById = new Map(localRows.filter(Boolean).map(row => [row!.id, comparisonValue(row)]));
+      report.mismatchedRecords[group] = cloudRows.filter(row => row && localById.has(row.id) && canonical(localById.get(row.id)) !== canonical(comparisonValue(row))).map(row => row!.id);
       if (group === 'materials' || group === 'transactions' || group === 'users') {
         const duplicates = (rows: typeof localRows) => {
           const counts = new Map<string, number>();
