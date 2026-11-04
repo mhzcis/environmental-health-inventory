@@ -252,7 +252,12 @@ export const supabaseDb = {
         timers.delete(table); if (!active) return;
         running.add(table); dirty.delete(table);
         try { await onChange(table); }
-        catch { console.error('Realtime reconciliation failed'); }
+        catch (error) {
+          // Retry only a read invalidated by a newer local ACK, without waiting
+          // for another row event. Network/permission failures are not polled.
+          if (error instanceof Error && error.message === 'INVENTORY_SNAPSHOT_CHANGED') dirty.add(table);
+          else console.error('Realtime reconciliation failed');
+        }
         finally { running.delete(table); if (dirty.has(table)) schedule(table); }
       }, 250));
     };

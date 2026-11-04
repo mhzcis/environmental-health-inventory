@@ -3831,6 +3831,10 @@ export async function initCloudSync() {
         }
       }
     } catch (error) {
+      // A local ACK invalidated this in-flight read. The subscriber will fetch
+      // the newer snapshot; this race is not a persistent monitoring failure.
+      if (error instanceof Error && error.message === 'INVENTORY_SNAPSHOT_CHANGED') throw error;
+      if (cloudSyncGeneration !== sessionGeneration || getCurrentAuthUser()?.uid !== cloudSyncOwnerUid) return;
       setMonitoringError(table, `Sync reconciliation error: ${safeErrorDetail(error)}`);
       dataService.notify();
     }

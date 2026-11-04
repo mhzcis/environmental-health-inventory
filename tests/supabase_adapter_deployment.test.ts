@@ -110,6 +110,46 @@ describe('Supabase deployment adapter', () => {
     await expect(fetch).rejects.toThrow('INVENTORY_SNAPSHOT_CHANGED');
     expect(supabaseDb.prepareOperations([{collection:'materials',docId:'m1',kind:'set',value:{name:'next'},expected:{kind:'missing'}}])[0].expected?.data?.name).toBe('new');
   });
+  it('reconciles a read racing with an ACK without requiring another realtime event', async () => {
+    vi.useFakeTimers();
+    try {
+      const { supabaseDb } = await import('../src/services/supabase');
+      let release: (value: any) => void;
+      fake.query.range.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }))
+        .mockResolvedValue({ data: [{ id: 'm1', data: { id: 'm1', name: 'new' } }], error: null });
+      let projected: any[] = [];
+      const stop = supabaseDb.subscribeTables(['materials'], async table => {
+        projected = await supabaseDb.getCollection(table);
+      });
+      fake.realtimeCallback!(); await vi.advanceTimersByTimeAsync(250);
+      supabaseDb.rememberOperations([{ collection: 'materials', docId: 'm1', kind: 'set', value: { id: 'm1', name: 'new' } }]);
+      release!({ data: [{ id: 'm1', data: { id: 'm1', name: 'old' } }], error: null });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(projected).toEqual([]);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(projected).toEqual([{ id: 'm1', name: 'new' }]);
+      expect(fake.query.range).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(fake.query.range).toHaveBeenCalledTimes(2);
+      stop();
+    } finally { vi.useRealTimers(); }
+  });
+  it('does not poll ordinary reconciliation failures or retry after unsubscribe', async () => {
+    vi.useFakeTimers();
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { supabaseDb } = await import('../src/services/supabase');
+      const listener = vi.fn().mockRejectedValueOnce(new Error('network unavailable'))
+        .mockRejectedValueOnce(new Error('INVENTORY_SNAPSHOT_CHANGED'));
+      const stop = supabaseDb.subscribeTables(['materials'], listener);
+      fake.realtimeCallback!(); await vi.advanceTimersByTimeAsync(2000);
+      expect(listener).toHaveBeenCalledTimes(1);
+      fake.realtimeCallback!(); await vi.advanceTimersByTimeAsync(250);
+      expect(listener).toHaveBeenCalledTimes(2);
+      stop(); await vi.advanceTimersByTimeAsync(1000);
+      expect(listener).toHaveBeenCalledTimes(2);
+    } finally { log.mockRestore(); vi.useRealTimers(); }
+  });
   it('publishes auth changes outside the auth callback and clears state on sign-out', async () => {
     const adapter = await import('../src/services/supabase');
     const listener = vi.fn();
