@@ -6,7 +6,7 @@ import NotificationToast from '../components/NotificationToast';
 import { 
   Box, Typography, Paper, Grid, MenuItem, Button, Table, TableBody, 
   TableCell, TableContainer, TableHead, TableRow, TablePagination, TextField, 
-  Divider, Card, Chip, IconButton, Tooltip,
+  Divider, Card, Chip, IconButton, Tooltip, Alert,
   Dialog, DialogTitle, DialogContent
 } from '@mui/material';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
@@ -71,6 +71,16 @@ export default function Reports() {
     return t.date || '';
   };
   const [reportType, setReportType] = useState<ReportType>('inventory');
+  const canReadReport = (type: ReportType) => dataService.hasPermission('reports_view') &&
+    dataService.hasPermission(type === 'generator_log' ? 'generator_log' :
+      type === 'transactions' ? 'transactions_view' : 'materials_view');
+  const authorizeOutput = (permission: 'reports_export' | 'reports_print') => {
+    if (!canReadReport(reportType) || !dataService.hasPermission(permission)) {
+      setErrorMessage('لا تمتلك صلاحية عرض بيانات هذا التقرير أو إخراجه.');
+      return false;
+    }
+    return true;
+  };
   const [materials, setMaterials] = useState<any[]>([]);
   const [transactions, setTransactions] = useState<InventoryTransaction[]>([]);
   const [generatorLogs, setGeneratorLogs] = useState<any[]>([]);
@@ -137,9 +147,9 @@ export default function Reports() {
   }, []);
 
   const loadData = () => {
-    setMaterials(dataService.getMaterials());
-    setTransactions(dataService.getTransactions());
-    setGeneratorLogs(dataService.getGeneratorLogs());
+    setMaterials(dataService.hasPermission('materials_view') ? dataService.getMaterials() : []);
+    setTransactions(dataService.hasPermission('transactions_view') ? dataService.getTransactions() : []);
+    setGeneratorLogs(dataService.hasPermission('generator_log') ? dataService.getGeneratorLogs() : []);
     setSettings(dataService.getSettings());
   };
 
@@ -166,6 +176,7 @@ export default function Reports() {
 
   // Get filtered data array based on chosen report type and sub-filters
   const getFilteredData = () => {
+    if (!canReadReport(reportType)) return [];
     const thresholdDays = settings.expiryWarningThresholdDays || 30;
     
 
@@ -346,6 +357,7 @@ export default function Reports() {
 
   // Excel professional exporter generating an RTL, beautifully styled spreadsheet list using exceljs
   const handleExportExcel = async () => {
+    if (!authorizeOutput('reports_export')) return;
     try {
       const fontName = 'Segoe UI';
       const stampStr = new Date().toISOString().split('T')[0];
@@ -673,6 +685,7 @@ export default function Reports() {
 
   // Direct Arabic PDF Generation in browser with 100% reliable local file download
   const handleExportPDF = async () => {
+    if (!authorizeOutput('reports_print')) return;
     try {
       setExportingPDF(true);
       const stampStr = new Date().toISOString().split('T')[0];
@@ -980,6 +993,14 @@ export default function Reports() {
 
   const stat = getStats();
 
+  if (!canReadReport(reportType)) {
+    const fallback = (['inventory', 'transactions', 'generator_log'] as ReportType[]).find(canReadReport);
+    return <Box sx={{ p: 3, direction: 'rtl' }}>
+      <Alert severity="warning">لا تمتلك صلاحية عرض بيانات هذا التقرير.</Alert>
+      {fallback && <Button onClick={() => setReportType(fallback)}>اختيار تقرير مسموح</Button>}
+    </Box>;
+  }
+
   return (
     <Box sx={{ p: { xs: 1, md: 3 }, direction: 'rtl', minHeight: '100vh', bgcolor: '#f8fafc' }}>
       
@@ -1036,13 +1057,13 @@ export default function Reports() {
               }}
               slotProps={{ input: { style: { borderRadius: '10px', fontWeight: '700', color: '#1e293b' } } }}
             >
-              <MenuItem value="inventory">{renderOption("تقرير الجرد العام وجرد الأرصدة المتوفرة حالياً", "category")}</MenuItem>
-              <MenuItem value="low_stock">{renderOption("تقرير إنفاد مخزون الأمان", "category")}</MenuItem>
-              <MenuItem value="expiry_warning">{renderOption('تقرير كشف فترات الصلاحيات وحالة الأصناف المشروطة بالصلاحية', 'category')}</MenuItem>
-              <MenuItem value="transactions">{renderOption("سجل حركات المستودع التفصيلي", "category")}</MenuItem>
-              <MenuItem value="category_summary">{renderOption("تقرير الموازنة والملخص الشامل", "category")}</MenuItem>
-              <MenuItem value="opening_stock">{renderOption("سند توثيق الأرصدة الافتتاحية", "category")}</MenuItem>
-              <MenuItem value="generator_log">{renderOption("سجل تشغيل ومتابعة عداد المولد", "category")}</MenuItem>
+              <MenuItem value="inventory" disabled={!canReadReport('inventory')}>{renderOption("تقرير الجرد العام وجرد الأرصدة المتوفرة حالياً", "category")}</MenuItem>
+              <MenuItem value="low_stock" disabled={!canReadReport('low_stock')}>{renderOption("تقرير إنفاد مخزون الأمان", "category")}</MenuItem>
+              <MenuItem value="expiry_warning" disabled={!canReadReport('expiry_warning')}>{renderOption('تقرير كشف فترات الصلاحيات وحالة الأصناف المشروطة بالصلاحية', 'category')}</MenuItem>
+              <MenuItem value="transactions" disabled={!canReadReport('transactions')}>{renderOption("سجل حركات المستودع التفصيلي", "category")}</MenuItem>
+              <MenuItem value="category_summary" disabled={!canReadReport('category_summary')}>{renderOption("تقرير الموازنة والملخص الشامل", "category")}</MenuItem>
+              <MenuItem value="opening_stock" disabled={!canReadReport('opening_stock')}>{renderOption("سند توثيق الأرصدة الافتتاحية", "category")}</MenuItem>
+              <MenuItem value="generator_log" disabled={!canReadReport('generator_log')}>{renderOption("سجل تشغيل ومتابعة عداد المولد", "category")}</MenuItem>
             </TextField>
           </Grid>
 
