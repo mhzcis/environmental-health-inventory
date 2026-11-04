@@ -4,14 +4,17 @@ import {afterEach,beforeEach,describe,it,expect,vi} from 'vitest';
 import {cleanup,render,screen,fireEvent,waitFor} from '@testing-library/react';
 import {Blob as NodeBlob} from 'node:buffer';
 import ExcelJS from 'exceljs';
-const fake=vi.hoisted(()=>({materials:[] as any[],transactions:[] as any[],logs:[] as any[],warehouse:'all',permissions:true,pdf:vi.fn(),save:vi.fn()}));
-vi.mock('../src/services/dataService',()=>({dataService:{getSettings:()=>({organizationName:'QA معزول',departmentName:'QA فحص',expiryWarningThresholdDays:30,categories:[{name:'QA-C1'},{name:'QA-C2'}],units:['قطعة'],storehouses:['QA-A','QA-B'],partners:[]}),getMaterials:()=>fake.materials,getTransactions:()=>fake.transactions,getGeneratorLogs:()=>fake.logs,subscribe:()=>()=>{},hasPermission:()=>fake.permissions,getOpeningStockAttachment:()=>null,getStorehouseInitialStock:(id:string,wh:string)=>fake.materials.find(m=>m.id===id)?.initialStocks?.[wh]||0}}));
+const fake=vi.hoisted(()=>({materials:[] as any[],transactions:[] as any[],logs:[] as any[],warehouse:'all',permissions:true,denied:[] as string[],pdf:vi.fn(),save:vi.fn()}));
+vi.mock('../src/services/dataService',()=>({dataService:{getSettings:()=>({organizationName:'QA معزول',departmentName:'QA فحص',expiryWarningThresholdDays:30,categories:[{name:'QA-C1'},{name:'QA-C2'}],units:['قطعة'],storehouses:['QA-A','QA-B'],partners:[]}),getMaterials:()=>fake.materials,getTransactions:()=>fake.transactions,getGeneratorLogs:()=>fake.logs,subscribe:()=>()=>{},hasPermission:(p:string)=>fake.permissions&&!fake.denied.includes(p),getOpeningStockAttachment:()=>null,getStorehouseInitialStock:(id:string,wh:string)=>fake.materials.find(m=>m.id===id)?.initialStocks?.[wh]||0}}));
 vi.mock('../src/context/StorehouseContext',()=>({useStorehouse:()=>({selectedStorehouse:fake.warehouse,activeStorehouses:['QA-A','QA-B']})}));
 vi.mock('../src/utils/printHtml',()=>({requireStableStringPart:(s:any)=>{if(typeof s!=='string'||!s.trim())throw new Error('invalid id');return s.trim();},exportToPDF:(...a:any[])=>fake.pdf(...a)}));
 vi.mock('file-saver',()=>({saveAs:(...a:any[])=>fake.save(...a)}));
+vi.mock('../src/components/CreateTransactionModal',()=>({default:()=>null}));
 import Reports from '../src/pages/Reports';
+import Transactions from '../src/pages/Transactions';
+import {MemoryRouter} from 'react-router-dom';
 beforeEach(()=>{
- fake.warehouse='all';fake.permissions=true;fake.pdf.mockReset().mockResolvedValue(undefined);fake.save.mockReset();vi.stubGlobal('Blob',NodeBlob);
+ fake.warehouse='all';fake.permissions=true;fake.denied=[];fake.pdf.mockReset().mockResolvedValue(undefined);fake.save.mockReset();vi.stubGlobal('Blob',NodeBlob);
  const day=(n:number)=>new Date(Date.now()+n*86400000).toISOString().slice(0,10);
  fake.materials=Array.from({length:21},(_,i)=>({id:'qa-r'+i,code:'QA-'+String(1000+i),name:'QA صنف عربي '+i,category:i<10?'QA-C1':'QA-C2',type:'مادة',unit:'قطعة',minimumStock:5,currentStock:i,initialStock:i,initialStocks:{'QA-A':i},warehouseStocks:{'QA-A':i},storageLocation:'QA-A',expiryDate:i===1?day(-1):i===2?day(10):i===3?day(90):undefined}));
  fake.transactions=[{id:'qa-t1',itemId:'qa-r1',itemCode:'QA-1001',itemName:'QA صنف عربي 1',itemCategory:'QA-C1',unit:'قطعة',transactionType:'افتتاحي',quantity:1,date:'2026-11-01',transactionNumber:'QA-O1',storehouse:'QA-A',storehouseId:'qa-a',createdAt:'2026-11-01T00:00:00Z',executedBy:'QA'}];
@@ -35,4 +38,43 @@ describe('QA_FULL Reports real UI with real Excel serialization; isolated data',
  it('OUT-04: Excel generation failure must show an error to the user',async()=>{render(<Reports/>);vi.spyOn(ExcelJS.Workbook.prototype,'xlsx','get').mockReturnValue({writeBuffer:async()=>{throw new Error('QA_EXPORT_FAILURE');}} as any);fireEvent.click(screen.getByRole('button',{name:'تصدير اكسل'}));await new Promise(r=>setTimeout(r,50));expect(screen.getByRole('alert').textContent).toMatch(/خطأ|فشل|تعذر/);});
  it('RBAC-02: no report output permission hides export and PDF buttons',()=>{fake.permissions=false;render(<Reports/>);expect(screen.queryByRole('button',{name:'تصدير اكسل'})).toBeNull();expect(screen.queryByRole('button',{name:'طباعة pdf'})).toBeNull();});
  it('SEC-03: material name remains literal at the typed PDF boundary',async()=>{fake.materials[0].name='<img id="qa-safe-sentinel" src="invalid" onerror="window.qaSentinel=1">';render(<Reports/>);fireEvent.click(screen.getByRole('button',{name:'طباعة pdf'}));await waitFor(()=>expect(fake.pdf).toHaveBeenCalledOnce());expect(fake.pdf.mock.calls[0][0].tables[0].rows[0][1]).toBe(fake.materials[0].name); /* Actual sink isolation is covered by remediation-print and real text-PDF QA. */});
+});
+
+it('RBAC report type cannot expose generator records without generator_log',async()=>{
+ fake.denied=['generator_log'];render(<Reports/>);
+ fireEvent.mouseDown(screen.getByRole('combobox',{name:'تحديد نوع التقرير الفني المراد توليده'}));
+ expect((await screen.findByRole('option',{name:/سجل تشغيل ومتابعة عداد المولد/})).getAttribute('aria-disabled')).toBe('true');
+ expect(screen.queryByText('qa-g1')).toBeNull();
+});
+it('RBAC revoking generator permission after selection removes the report and output controls',async()=>{
+ const ui=render(<Reports/>);await choose(labels[6]);fake.denied=['generator_log'];ui.rerender(<Reports/>);
+ expect(screen.getByRole('alert').textContent).toContain('لا تمتلك صلاحية');
+ expect(screen.queryByRole('button',{name:'تصدير اكسل'})).toBeNull();
+ expect(screen.queryByRole('button',{name:'طباعة pdf'})).toBeNull();expect(fake.pdf).not.toHaveBeenCalled();expect(fake.save).not.toHaveBeenCalled();
+ fireEvent.click(screen.getByRole('button',{name:'اختيار تقرير مسموح'}));
+ expect(screen.getByRole('combobox',{name:'تحديد نوع التقرير الفني المراد توليده'})).toBeTruthy();
+});
+it.each([['reports_export','تصدير اكسل'],['reports_print','طباعة pdf']])('RBAC output handler rechecks %s after rendered permission changes',async(permission,label)=>{
+ render(<Reports/>);fake.denied=[permission];fireEvent.click(screen.getByRole('button',{name:label}));
+ expect(screen.getByRole('alert').textContent).toContain('لا تمتلك صلاحية');expect(fake.pdf).not.toHaveBeenCalled();expect(fake.save).not.toHaveBeenCalled();
+});
+
+const mountTransactions=()=>render(<MemoryRouter><Transactions/></MemoryRouter>);
+it('RBAC transaction print and bulk output controls respect separate rights',()=>{
+ fake.denied=['reports_print','reports_export','transactions_delete'];mountTransactions();
+ expect((screen.getByRole('button',{name:'معاينة وطباعة السند المخزني'}) as HTMLButtonElement).disabled).toBe(true);
+ fireEvent.click(document.getElementById('select-all-transactions')!);
+ expect((document.getElementById('bulk-export-transactions-pdf') as HTMLButtonElement).disabled).toBe(true);
+ expect((document.getElementById('bulk-export-transactions-excel') as HTMLButtonElement).disabled).toBe(true);
+ expect(screen.queryByText('مؤرشفة')).toBeNull();expect(screen.getByText('الحذف غير مسموح')).toBeTruthy();
+});
+it.each([['reports_print','bulk-export-transactions-pdf'],['reports_export','bulk-export-transactions-excel']])('RBAC bulk output handler rechecks %s before producing a file',async(permission,id)=>{
+ mountTransactions();fireEvent.click(document.getElementById('select-all-transactions')!);fake.denied=[permission];
+ fireEvent.click(document.getElementById(id)!);
+ expect(screen.getByRole('alert').textContent).toContain('لا تمتلك صلاحية');expect(fake.pdf).not.toHaveBeenCalled();expect(fake.save).not.toHaveBeenCalled();
+});
+it('RBAC voucher handler rechecks print right after preview was opened',async()=>{
+ mountTransactions();fireEvent.click(screen.getByRole('button',{name:'معاينة وطباعة السند المخزني'}));
+ const print=screen.getByRole('button',{name:/طباعة وإصدار المستند الآن/});fake.denied=['reports_print'];fireEvent.click(print);
+ expect((await screen.findByRole('alert')).textContent).toContain('لا تمتلك صلاحية');expect(fake.pdf).not.toHaveBeenCalled();
 });

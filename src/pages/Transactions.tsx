@@ -179,12 +179,23 @@ export default function Transactions() {
     }
   };
 
+  const authorizeOutput = (permission: 'reports_export' | 'reports_print') => {
+    if (!dataService.hasPermission('transactions_view') || !dataService.hasPermission(permission)) {
+      setOpenVoucherDialog(false);
+      setErrorMessage('لا تمتلك صلاحية طباعة أو تصدير الحركات المخزنية.');
+      return false;
+    }
+    return true;
+  };
+
   const handleOpenVoucher = (item: TransactionViewRow) => {
+    if (!authorizeOutput('reports_print')) return;
     setTransactionToPrint(item);
     setOpenVoucherDialog(true);
   };
 
   const handleBulkExportPDF = async () => {
+    if (!authorizeOutput('reports_print')) return;
     try {
       setExportingPDF(true);
       const selectedItems = ledgerTransactions.filter(t => selectedTransactionIds.includes(t.id));
@@ -279,6 +290,7 @@ export default function Transactions() {
   };
 
   const handleBulkExportExcel = async () => {
+    if (!authorizeOutput('reports_export')) return;
     try {
       setExportingExcel(true);
       const selectedItems = ledgerTransactions.filter(t => selectedTransactionIds.includes(t.id));
@@ -362,6 +374,7 @@ export default function Transactions() {
   };
 
   const handlePrintVoucher = async () => {
+    if (!authorizeOutput('reports_print')) return;
     if (!transactionToPrint) return;
     try {
       setExportingPDF(true);
@@ -858,7 +871,7 @@ export default function Transactions() {
               variant="contained"
               size="small"
               onClick={handleBulkExportPDF}
-              disabled={exportingPDF}
+              disabled={exportingPDF || !dataService.hasPermission('reports_print')}
               sx={{
                 bgcolor: '#0f766e',
                 color: 'white',
@@ -877,7 +890,7 @@ export default function Transactions() {
               variant="contained"
               size="small"
               onClick={handleBulkExportExcel}
-              disabled={exportingExcel}
+              disabled={exportingExcel || !dataService.hasPermission('reports_export')}
               sx={{
                 bgcolor: '#15803d',
                 color: 'white',
@@ -1037,7 +1050,7 @@ export default function Transactions() {
                         {/* Slot 2: Print (Width: 36px) */}
                         <Box sx={{ width: 36, display: 'flex', justifyContent: 'center' }}>
                           <Tooltip title="معاينة وطباعة السند المخزني">
-                            <IconButton size="small" sx={{ color: '#0284c7' }} onClick={() => handleOpenVoucher(tx)}>
+                            <IconButton size="small" disabled={!dataService.hasPermission('reports_print')} sx={{ color: '#0284c7' }} onClick={() => handleOpenVoucher(tx)}>
                               <PrintIcon fontSize="small" />
                             </IconButton>
                           </Tooltip>
@@ -1052,7 +1065,7 @@ export default function Transactions() {
                               </IconButton>
                             </Tooltip>
                           ) : (
-                            <Chip label="مؤرشفة" size="small" sx={{ height: 20, fontSize: '9px', fontWeight: 'bold', bgcolor: '#f1f5f9', color: '#64748b' }} />
+                            <Chip label="الحذف غير مسموح" size="small" sx={{ height: 20, fontSize: '9px', fontWeight: 'bold', bgcolor: '#f1f5f9', color: '#64748b' }} />
                           )}
                         </Box>
                       </Box>
@@ -1402,7 +1415,7 @@ export default function Transactions() {
           <Button
             variant="contained"
             color="primary"
-            disabled={exportingPDF}
+            disabled={exportingPDF || !dataService.hasPermission('reports_print')}
             onClick={handlePrintVoucher}
             sx={{ bgcolor: '#0284c7', px: 4, py: 1.1, fontWeight: 'bold', borderRadius: '10px', '&:hover': { bgcolor: '#0369a1' } }}
           >

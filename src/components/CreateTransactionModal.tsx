@@ -327,6 +327,9 @@ export default function CreateTransactionModal({ open, onClose, onSuccess, onErr
           throw new Error('يرجى إدخال اسم المورد/الجهة الجديدة');
         }
         if (savePartnerEntity) {
+          if (!dataService.hasPermission('settings_edit')) {
+            throw new Error('حفظ جهة في الإعدادات يتطلب صلاحية تعديل الإعدادات.');
+          }
           const type = data.transactionType === 'وارد' ? 'مورد' : 'جهة مستلمة';
           const exists = settings.partners.some(p => p.name === finalSupplierOrReceiver && p.type === type);
           if (!exists) {
@@ -652,10 +655,10 @@ export default function CreateTransactionModal({ open, onClose, onSuccess, onErr
                           value={customPartnerEntityName}
                           onChange={(e) => setCustomPartnerEntityName(e.target.value)}
                         />
-                        <FormControlLabel
+                        {dataService.hasPermission('settings_edit') && <FormControlLabel
                           control={<Checkbox checked={savePartnerEntity} onChange={(e) => setSavePartnerEntity(e.target.checked)} />}
                           label="حفظ هذه الجهة في الإعدادات لاستخدامها مستقبلاً"
-                        />
+                        />}
                       </Box>
                     )}
                   </>
