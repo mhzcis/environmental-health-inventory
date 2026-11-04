@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Alert, Box, Button, Typography } from '@mui/material';
 import { dataService } from '../services/dataService';
-import { subscribeInventoryOutbox } from '../services/supabaseOutbox';
+import { InventoryPendingError, subscribeInventoryOutbox } from '../services/supabaseOutbox';
 import { safeUserMessage } from '../services/safeUserMessage';
 
 type Pending = Awaited<ReturnType<typeof dataService.listPendingInventoryMutations>>;
@@ -24,7 +24,13 @@ export default function InventorySyncPanel() {
       const current = dataService.getCurrentUser();
       const boot = await dataService.bootstrapFreshDeviceData(current);
       if (!boot.success) setError(boot.message || 'تمت معالجة الطلبات لكن تعذر تحديث العرض؛ احتفظ ببيانات الجهاز.');
-    } catch (e) { setError(safeUserMessage(e, 'sync')); }
+    } catch (e) {
+      setError(e instanceof InventoryPendingError
+        ? e.blocked
+          ? 'رُفض الطلب أو تعارض مع بيانات الخادم. بقي محفوظًا على الجهاز للمراجعة؛ لم يُعتمد مركزيًا.'
+          : 'لم يصل إقرار الخادم. بقي الطلب محفوظًا على الجهاز؛ أعد إرساله بعد استقرار الاتصال دون إعادة إدخاله.'
+        : safeUserMessage(e, 'sync'));
+    }
     finally { setBusy(false); }
   };
   if (!rows.length && !error) return null;

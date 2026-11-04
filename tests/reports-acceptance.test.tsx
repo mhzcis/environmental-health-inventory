@@ -4,17 +4,20 @@ import {afterEach,beforeEach,describe,it,expect,vi} from 'vitest';
 import {cleanup,render,screen,fireEvent,waitFor} from '@testing-library/react';
 import {Blob as NodeBlob} from 'node:buffer';
 import ExcelJS from 'exceljs';
-const fake=vi.hoisted(()=>({materials:[] as any[],transactions:[] as any[],logs:[] as any[],warehouse:'all',permissions:true,denied:[] as string[],pdf:vi.fn(),save:vi.fn()}));
-vi.mock('../src/services/dataService',()=>({dataService:{getSettings:()=>({organizationName:'QA معزول',departmentName:'QA فحص',expiryWarningThresholdDays:30,categories:[{name:'QA-C1'},{name:'QA-C2'}],units:['قطعة'],storehouses:['QA-A','QA-B'],partners:[]}),getMaterials:()=>fake.materials,getTransactions:()=>fake.transactions,getGeneratorLogs:()=>fake.logs,subscribe:()=>()=>{},hasPermission:(p:string)=>fake.permissions&&!fake.denied.includes(p),getOpeningStockAttachment:()=>null,getStorehouseInitialStock:(id:string,wh:string)=>fake.materials.find(m=>m.id===id)?.initialStocks?.[wh]||0}}));
+const fake=vi.hoisted(()=>({materials:[] as any[],transactions:[] as any[],logs:[] as any[],warehouse:'all',permissions:true,denied:[] as string[],blocked:false,retry:vi.fn(),pdf:vi.fn(),save:vi.fn()}));
+vi.mock('../src/services/dataService',()=>({dataService:{getSettings:()=>({organizationName:'QA معزول',departmentName:'QA فحص',expiryWarningThresholdDays:30,categories:[{name:'QA-C1'},{name:'QA-C2'}],units:['قطعة'],storehouses:['QA-A','QA-B'],partners:[]}),getMaterials:()=>fake.materials,getTransactions:()=>fake.transactions,getGeneratorLogs:()=>fake.logs,subscribe:()=>()=>{},hasPermission:(p:string)=>fake.permissions&&!fake.denied.includes(p),listPendingInventoryMutations:async()=>[{id:'qa-pending',status:fake.blocked?'blocked':'pending',operations:[],transport:'supabase-v1'}],retryPendingInventoryMutations:()=>fake.retry(),getOpeningStockAttachment:()=>null,getStorehouseInitialStock:(id:string,wh:string)=>fake.materials.find(m=>m.id===id)?.initialStocks?.[wh]||0}}));
 vi.mock('../src/context/StorehouseContext',()=>({useStorehouse:()=>({selectedStorehouse:fake.warehouse,activeStorehouses:['QA-A','QA-B']})}));
 vi.mock('../src/utils/printHtml',()=>({requireStableStringPart:(s:any)=>{if(typeof s!=='string'||!s.trim())throw new Error('invalid id');return s.trim();},exportToPDF:(...a:any[])=>fake.pdf(...a)}));
 vi.mock('file-saver',()=>({saveAs:(...a:any[])=>fake.save(...a)}));
 vi.mock('../src/components/CreateTransactionModal',()=>({default:()=>null}));
+vi.mock('../src/services/supabaseOutbox',()=>({subscribeInventoryOutbox:()=>()=>{},InventoryPendingError:class extends Error {constructor(readonly mutationId:string,readonly blocked:boolean){super('QA pending');}}}));
+import InventorySyncPanel from '../src/components/InventorySyncPanel';
+import {InventoryPendingError} from '../src/services/supabaseOutbox';
 import Reports from '../src/pages/Reports';
 import Transactions from '../src/pages/Transactions';
 import {MemoryRouter} from 'react-router-dom';
 beforeEach(()=>{
- fake.warehouse='all';fake.permissions=true;fake.denied=[];fake.pdf.mockReset().mockResolvedValue(undefined);fake.save.mockReset();vi.stubGlobal('Blob',NodeBlob);
+ fake.warehouse='all';fake.permissions=true;fake.denied=[];fake.retry.mockReset();fake.blocked=false;fake.pdf.mockReset().mockResolvedValue(undefined);fake.save.mockReset();vi.stubGlobal('Blob',NodeBlob);
  const day=(n:number)=>new Date(Date.now()+n*86400000).toISOString().slice(0,10);
  fake.materials=Array.from({length:21},(_,i)=>({id:'qa-r'+i,code:'QA-'+String(1000+i),name:'QA صنف عربي '+i,category:i<10?'QA-C1':'QA-C2',type:'مادة',unit:'قطعة',minimumStock:5,currentStock:i,initialStock:i,initialStocks:{'QA-A':i},warehouseStocks:{'QA-A':i},storageLocation:'QA-A',expiryDate:i===1?day(-1):i===2?day(10):i===3?day(90):undefined}));
  fake.transactions=[{id:'qa-t1',itemId:'qa-r1',itemCode:'QA-1001',itemName:'QA صنف عربي 1',itemCategory:'QA-C1',unit:'قطعة',transactionType:'افتتاحي',quantity:1,date:'2026-11-01',transactionNumber:'QA-O1',storehouse:'QA-A',storehouseId:'qa-a',createdAt:'2026-11-01T00:00:00Z',executedBy:'QA'}];
@@ -77,4 +80,20 @@ it('RBAC voucher handler rechecks print right after preview was opened',async()=
  mountTransactions();fireEvent.click(screen.getByRole('button',{name:'معاينة وطباعة السند المخزني'}));
  const print=screen.getByRole('button',{name:/طباعة وإصدار المستند الآن/});fake.denied=['reports_print'];fireEvent.click(print);
  expect((await screen.findByRole('alert')).textContent).toContain('لا تمتلك صلاحية');expect(fake.pdf).not.toHaveBeenCalled();
+});
+
+it.each([true,false])('SYNC-04 retry message distinguishes blocked=%s from unknown acknowledgement',async(blocked)=>{
+ fake.blocked=blocked;fake.retry.mockRejectedValue(new InventoryPendingError('qa-pending',blocked));render(<InventorySyncPanel/>);
+ fireEvent.click(await screen.findByRole('button',{name:'إعادة إرسال الطلبات المحفوظة'}));
+ const status=await screen.findByRole('status');expect(status.textContent).toContain(blocked?'رُفض الطلب':'لم يصل إقرار');
+ expect(status.textContent).not.toContain('تعذر الاتصال بالخدمة مؤقت');expect(fake.retry).toHaveBeenCalledOnce();
+});
+
+it.each(['QA-A','all'])('OUT-01 bulk Excel maps balances and partner to ten matching columns for %s',async(warehouse)=>{
+ fake.warehouse=warehouse;fake.transactions[0].supplierOrReceiver='QA partner';mountTransactions();
+ fireEvent.click(document.getElementById('select-all-transactions')!);fireEvent.click(document.getElementById('bulk-export-transactions-excel')!);
+ await waitFor(()=>expect(fake.save).toHaveBeenCalledOnce());const wb=new ExcelJS.Workbook();await wb.xlsx.load(await fake.save.mock.calls[0][0].arrayBuffer());const sheet=wb.worksheets[0];
+ expect(sheet.getRow(9).getCell(8).value).toBe('الرصيد قبل');expect(sheet.getRow(9).getCell(9).value).toBe('الرصيد بعد');
+ expect(sheet.getRow(10).getCell(8).value).toBe(0);expect(sheet.getRow(10).getCell(9).value).toBe(1);expect(sheet.getRow(10).getCell(10).value).toBe('QA partner');
+ if(warehouse==='all'){expect(sheet.getRow(11).getCell(3).value).toBe('↳ QA-A');expect(sheet.getRow(11).getCell(8).value).toBe(0);expect(sheet.getRow(11).getCell(9).value).toBe(1);}
 });
