@@ -173,8 +173,6 @@ export default function Reports() {
       case 'inventory': {
         // Filter subRows and non-matching filters
         return baseView.filter(item => {
-          if (item.isSubRow && selectedStorehouse === 'all') return true; // Keep subrows if 'all' for print detail
-          if (!item.isSubRow && selectedStorehouse === 'all') return true; // Keep parent if 'all'
           if (selectedStorehouse !== 'all' && item.isSubRow) return false;
           
           if (categoryFilter !== 'all' && item.category !== categoryFilter) return false;
@@ -669,7 +667,7 @@ export default function Reports() {
       setSuccessMessage(`تم تصدير ملف Excel منسق واحترافي بنجاح باسم: ${filename}`);
       
     } catch (err: any) {
-
+      setErrorMessage('تعذر تصدير Excel: ' + safeUserMessage(err, 'export'));
     }
   };
 

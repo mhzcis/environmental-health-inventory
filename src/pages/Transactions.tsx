@@ -2,6 +2,7 @@ import { requireStableStringPart } from '../utils/printHtml';
 import { presentResultMessage } from '../services/safeUserMessage';
 import { exportToPDF } from '../utils/printHtml';
 import { Fragment, useState, useEffect, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import NotificationToast from '../components/NotificationToast';
 import EmptyTableState from '../components/EmptyTableState';
 import { 
@@ -40,6 +41,8 @@ import { renderOption } from '../utils/emoji';
 // Zod form validation for transaction
 
 export default function Transactions() {
+  const [routeFilters, setRouteFilters] = useSearchParams();
+  const linkedTransactionId = routeFilters.get('transactionId');
   const [transactions, setTransactions] = useState<InventoryTransaction[]>([]);
   const [materials, setMaterials] = useState<Material[]>([]);
   const [settings, setSettings] = useState(dataService.getSettings());
@@ -532,7 +535,7 @@ export default function Transactions() {
     // Reset page when filters change
   useEffect(() => {
     setPage(0);
-  }, [searchQuery, typeFilter, itemTypeFilter, dateFrom, dateTo, smartDateRange, attachmentFilter, employeeFilter, selectedStorehouse]);
+  }, [searchQuery, typeFilter, itemTypeFilter, dateFrom, dateTo, smartDateRange, attachmentFilter, employeeFilter, selectedStorehouse, linkedTransactionId]);
 
   useEffect(() => {
     setSelectedTransactionIds([]);
@@ -570,7 +573,7 @@ export default function Transactions() {
       
     const matchesStorehouse = true; // Central ledger already enforces exact warehouse scope.
 
-    return matchesSearch && matchesType && matchesItemType && matchesDate && matchesAttachment && matchesEmployee && matchesStorehouse;
+    return (!linkedTransactionId || t.id === linkedTransactionId) && matchesSearch && matchesType && matchesItemType && matchesDate && matchesAttachment && matchesEmployee && matchesStorehouse;
   });
 
 
@@ -595,6 +598,7 @@ export default function Transactions() {
 
   return (
     <Box sx={{ p: 1 }}>
+      {linkedTransactionId && <Button onClick={() => setRouteFilters({})}>عرض جميع الحركات</Button>}
       {/* Header */}
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 4 }}>
         <Box>

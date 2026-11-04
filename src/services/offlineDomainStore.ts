@@ -966,6 +966,14 @@ export class IndexedDbOfflineDomainStore implements OfflineDomainSnapshotStore {
     });
   }
 
+  async countAllJournals(): Promise<number> {
+    const db = await this.open();
+    const transaction = db.transaction(JOURNALS_STORE, 'readonly');
+    const count = await requestAsPromise(transaction.objectStore(JOURNALS_STORE).count());
+    await transactionDone(transaction);
+    return count;
+  }
+
   async listJournals(userId: string): Promise<OfflineMutationJournal[]> {
     const db = await this.open();
     const transaction = db.transaction(JOURNALS_STORE, 'readonly');

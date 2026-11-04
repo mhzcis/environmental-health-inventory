@@ -67,6 +67,9 @@ const CONTEXT_FALLBACK_CATEGORY: Readonly<Record<SafeMessageContext, DiagnosticC
 
 /** Fixed Arabic text per domain-code prefix. Longest matching prefix wins; first entry of a tie wins. */
 const DOMAIN_RULES: ReadonlyArray<readonly [prefix: string, text: string]> = [
+  ['INVENTORY_PENDING', 'الطلب محفوظ على هذا الجهاز وينتظر الإقرار المركزي. راجع لوحة المزامنة قبل إعادة إدخاله.'],
+  ['INVENTORY_CONFLICT', 'تغيرت البيانات على الخادم؛ احتفظ بالطلب وراجعه من لوحة المزامنة.'],
+  ['INVENTORY_', 'تعذر اعتماد الطلب. راجع البيانات والصلاحيات وحالة المزامنة.'],
   ['OFFLINE_DOMAIN_QUOTA_EXCEEDED', 'مساحة التخزين المحلي في المتصفح ممتلئة. حرّر مساحة ثم أعد المحاولة، ولا تُحذف بيانات غير مزامنة.'],
   ['OFFLINE_DOMAIN_SESSION', 'تغيّرت الجلسة أو انتهت أثناء العملية. أعد تسجيل الدخول ثم أعد المحاولة.'],
   ['OFFLINE_DOMAIN_STALE_TAB', 'تم تحديث البيانات من نافذة أخرى. أعد تحميل الصفحة ثم أعد المحاولة.'],

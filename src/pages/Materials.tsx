@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { presentResultMessage, safeUserMessage } from '../services/safeUserMessage';
 import NotificationToast from '../components/NotificationToast';
 import EmptyTableState from '../components/EmptyTableState';
@@ -25,7 +26,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as zod from 'zod';
 import { dataService } from '../services/dataService';
 import { Material, InventoryTransaction } from '../types';
-import { buildMaterialWarehouseView, MaterialViewRow } from '../utils/inventoryLogic';
+import { buildTransactionLedger, buildMaterialWarehouseView, MaterialViewRow } from '../utils/inventoryLogic';
 import { useStorehouse } from '../context/StorehouseContext';
 
 import { exportToPDF } from '../utils/printHtml';
@@ -129,6 +130,11 @@ export default function Materials() {
   const [openDetailsDialog, setOpenDetailsDialog] = useState(false);
   const [detailsMaterial, setDetailsMaterial] = useState<MaterialViewRow | null>(null);
 
+  const detailsHistory = detailsMaterial && dataService.hasPermission('transactions_view')
+    ? buildTransactionLedger(dataService.getTransactions(), selectedStorehouse, settings.storehouses, materials)
+      .filter(tx => tx.itemId === (detailsMaterial._originalId || detailsMaterial.id))
+    : [];
+
   // Stocktake states
   const [openStocktakeDialog, setOpenStocktakeDialog] = useState(false);
   const [stocktakeList, setStocktakeList] = useState<StocktakeRow[]>([]);
@@ -223,8 +229,8 @@ export default function Materials() {
       return;
     }
 
-    let reconciledCount = 0;
-    let errorCount = 0;
+    const adjustments: InventoryTransaction[] = [];
+    const preview: string[] = [];
     
     setErrorMessage(null);
     
@@ -263,25 +269,21 @@ export default function Materials() {
           updatedAt: new Date().toISOString(),
         };
         
-        const res = await dataService.saveTransaction(reconTx);
-        if (res.success) {
-          reconciledCount++;
-        } else {
-          errorCount++;
-        }
+        adjustments.push(reconTx);
+        preview.push(`${row.code} — ${row.storehouse}: ${systemStock} ← ${physicalCount} (${diff > 0 ? '+' : ''}${diff})`);
       }
     }
     
-    if (errorCount > 0) {
-      setErrorMessage(`تمت تسوية بعض الحركات بنجاح، ولكن فشلت ${errorCount} تسويات بسبب عجز الرصيد.`);
-    } else if (reconciledCount > 0) {
-      setSuccessMessage(`تم بنجاح تسوية الجرد السنوي لـ (${reconciledCount}) حركة مخزنية وتعديل مطابقة أرصدتها بالكامل بالدفاتر والمستودعات.`);
-      setOpenStocktakeDialog(false);
-      loadMaterials();
-    } else {
-      setSuccessMessage('لم يتم إجراء أي تعديلات لعدم وجود أي فروقات بين الجرد الفعلي وأرصدة النظام الدفترية الحالية.');
-      setOpenStocktakeDialog(false);
+    if (adjustments.length === 0) {
+      setSuccessMessage('لا توجد فروقات لتسويتها.');
+      return;
     }
+    if (!window.confirm(`معاينة تسوية الجرد: ${adjustments.length} حركة\n${preview.join('\n')}\nهل تعتمد الفروق الموضحة؟`)) return;
+    const result = await dataService.saveTransactionBatch(adjustments);
+    if (!result.success) { setErrorMessage(result.message); return; }
+    setSuccessMessage(`تم حفظ ${adjustments.length} حركة تسوية.`);
+    setOpenStocktakeDialog(false);
+    loadMaterials();
   };
 
   // Form setup
@@ -1621,7 +1623,7 @@ const handleOpenDeleteDialog = (item: Material) => {
             <Grid container spacing={2}>
               <Grid size={6}>
                 <Typography variant="caption" sx={{ color: '#64748b' }}>كود التخصيص</Typography>
-                <Typography variant="body1" sx={{ fontWeight: 'bold', color: '#007ab7', fontFamily: 'monospace' }}>{detailsMaterial.code}</Typography>
+                <Typography variant="body1" dir="ltr" sx={{ fontWeight: 'bold', color: '#007ab7', fontFamily: 'monospace', userSelect: 'all' }}>{detailsMaterial.code}</Typography>
               </Grid>
               <Grid size={6}>
                 <Typography variant="caption" sx={{ color: '#64748b' }}>اسم الصنف</Typography>
@@ -1653,6 +1655,28 @@ const handleOpenDeleteDialog = (item: Material) => {
                   {detailsMaterial.notes || 'لا يوجد ملاحظات مسجلة على هذا الصنف.'}
                 </Typography>
               </Grid>
+
+              {dataService.hasPermission('transactions_view') && (
+                <Grid size={12}>
+                  <Typography variant="subtitle2">بطاقة حركة الصنف — {selectedStorehouse === 'all' ? 'جميع المستودعات' : selectedStorehouse}</Typography>
+                  <TableContainer sx={{ maxHeight: 280 }}>
+                    <Table size="small" aria-label="بطاقة حركة الصنف">
+                      <TableHead><TableRow>{['التاريخ', 'السند', 'المستودع', 'النوع / الاتجاه', 'الكمية', 'الرصيد'].map(label => <TableCell key={label}>{label}</TableCell>)}</TableRow></TableHead>
+                      <TableBody>{detailsHistory.map(tx => <TableRow key={tx.id}>
+                        <TableCell>{tx.date}</TableCell>
+                        <TableCell><Link to={`/transactions?transactionId=${encodeURIComponent(tx.id)}`}>{tx.transactionNumber}</Link></TableCell>
+                        <TableCell>{tx.storehouse}</TableCell>
+                        <TableCell>{tx.transactionType} {tx.transferType === 'in' ? 'وارد' : tx.transferType === 'out' ? 'صادر' : ''}</TableCell>
+                        <TableCell>{tx.quantity}</TableCell><TableCell>{tx.displayStockAfter}</TableCell>
+                      </TableRow>)}</TableBody>
+                    </Table>
+                  </TableContainer>
+                  {detailsHistory.length === 0 && <Typography variant="body2">لا توجد حركات ضمن النطاق المحدد.</Typography>}
+                </Grid>
+              )}
+
+              {detailsMaterial.currentStock <= detailsMaterial.minimumStock && <Grid size={12}><Alert severity="warning">الرصيد عند حد الأمان أو دونه: {detailsMaterial.currentStock} من حد {detailsMaterial.minimumStock}.</Alert></Grid>}
+              {detailsMaterial.expiryDate && new Date(detailsMaterial.expiryDate).getTime() <= Date.now() + (settings.expiryWarningThresholdDays || 30) * 86400000 && <Grid size={12}><Alert severity="warning">تنبيه الصلاحية: {detailsMaterial.expiryDate}</Alert></Grid>}
 
               {/* Optional Fields Readonly */}
               {(detailsMaterial.productionDate || detailsMaterial.expiryDate || detailsMaterial.manufacturer || detailsMaterial.hazardLevel) && (

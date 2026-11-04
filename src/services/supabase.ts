@@ -1,3 +1,4 @@
+import type { InventorySyncOperation } from './supabaseOutbox';
 import { createClient, type Session, type SupabaseClient, type User } from '@supabase/supabase-js';
 import { isSupabaseConfigured, passwordRecoveryUrl, supabasePublicKey as key, supabaseUrl as url } from './supabaseConfig';
 export { isSupabaseConfigured } from './supabaseConfig';
@@ -16,6 +17,8 @@ export const secondarySupabase: SupabaseClient | null = isSupabaseConfigured()
   ? createClient(url, key, { auth: { storageKey: 'inventory-password-verification-v1', persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } })
   : null;
 
+const remoteBaselines = new Map<string, Record<string, unknown>>();
+let baselineRevision = 0;
 let currentUser: SupabaseAuthUser | null = null;
 let initialized = false;
 let token: string | null = null;
@@ -31,6 +34,7 @@ const acceptSession = (session: Session | null) => {
   initialized = true;
   token = nextToken;
   if (!changed) return;
+  if (currentUser?.uid !== session?.user?.id) { remoteBaselines.clear(); baselineRevision++; }
   currentUser = session?.user ? userShape(session.user) : null;
   const delivered = currentUser;
   // Never start an async Supabase call inside the auth lock.
@@ -88,7 +92,34 @@ const assertTable = (table: SupabaseTableName) => {
   if (!allowedTables.has(table)) throw new Error('UNSUPPORTED_SUPABASE_TABLE');
 };
 type Row = { id: string; data: Record<string, unknown>; [key: string]: unknown };
-const decode = <T>(row: Row): T => ({ ...row.data, id: row.id }) as T;
+const decode = <T>(table: SupabaseTableName, row: Row): T => {
+  return { ...row.data, id: row.id } as T;
+};
+export interface InventoryRpcOperation {
+  collection: SupabaseTableName;
+  docId: string;
+  kind: 'set' | 'delete';
+  value?: Record<string, unknown>;
+  expected?: { kind: 'present' | 'missing'; data?: Record<string, unknown> };
+}
+export interface InventoryRpcPayload {
+  mode: 'mutation' | 'audit' | 'restore';
+  label: string;
+  operations?: InventoryRpcOperation[];
+  backup?: Record<string, unknown>;
+  expectedState?: string;
+}
+export interface InventoryRpcAck {
+  audit: Record<string, unknown>;
+  replayed: boolean;
+}
+export interface InventoryRestorePreview {
+  expectedState: string;
+  diffs: Record<string, { current: number; backup: number; added: number; removed: number; changed: number }>;
+  auditHistory: 'preserved';
+  authIdentities: 'preserved';
+}
+
 const encode = (table: SupabaseTableName, id: string, payload: Record<string, unknown>): Row => {
   const data = { ...payload, id };
   const row: Row = { id, data, updated_at: new Date().toISOString() };
@@ -107,65 +138,130 @@ const PAGE_SIZE = 500;
 export const supabaseDb = {
   async getDoc<T = Record<string, unknown>>(table: SupabaseTableName, id: string): Promise<T | null> {
     assertTable(table);
+    const revision = baselineRevision; const uid = currentUser?.uid;
     const { data, error } = await client().from(table).select('*').eq('id', id).maybeSingle();
     if (error) throw error;
-    return data ? decode<T>(data) : null;
+    if (uid !== currentUser?.uid) throw new Error('INVENTORY_SESSION_CHANGED');
+    if (revision !== baselineRevision) throw new Error('INVENTORY_SNAPSHOT_CHANGED');
+    if (data) remoteBaselines.set(`${table}/${id}`, structuredClone(data.data));
+    if (!data) remoteBaselines.delete(`${table}/${id}`);
+    return data ? decode<T>(table, data) : null;
   },
   async getCollection<T = Record<string, unknown>>(table: SupabaseTableName): Promise<T[]> {
     assertTable(table);
-    const rows: T[] = [];
+    const revision = baselineRevision; const uid = currentUser?.uid;
+    const rows: T[] = []; const rawRows: Row[] = [];
     // Supabase caps each response: always fetch every page with a stable ordering.
     for (let offset = 0; ; offset += PAGE_SIZE) {
       const { data, error } = await client().from(table).select('*').order('id').range(offset, offset + PAGE_SIZE - 1);
       if (error) throw error;
-      rows.push(...(data || []).map(row => decode<T>(row)));
-      if (!data || data.length < PAGE_SIZE) return rows;
+      if (uid !== currentUser?.uid) throw new Error('INVENTORY_SESSION_CHANGED');
+      if (revision !== baselineRevision) throw new Error('INVENTORY_SNAPSHOT_CHANGED');
+      rawRows.push(...(data || []));
+      rows.push(...(data || []).map(row => decode<T>(table, row)));
+      if (!data || data.length < PAGE_SIZE) {
+        for (const row of rawRows) remoteBaselines.set(`${table}/${row.id}`, structuredClone(row.data));
+        const ids = new Set(rows.map(row => (row as { id: string }).id));
+        for (const cacheKey of remoteBaselines.keys()) if (cacheKey.startsWith(`${table}/`) && !ids.has(cacheKey.slice(table.length + 1))) remoteBaselines.delete(cacheKey);
+        return rows;
+      }
     }
+  },
+  prepareOperations(operations: InventorySyncOperation[]): InventoryRpcOperation[] {
+    return operations.map(op => {
+      const table = op.collection as SupabaseTableName;
+      assertTable(table);
+      const cached = remoteBaselines.get(`${table}/${op.docId}`);
+      const baseline = cached ?? (op.expected.kind === 'present' ? op.expected.exactLegacyPayload : undefined);
+      if (!baseline && op.expected.kind === 'present') throw new Error('INVENTORY_BASELINE_REQUIRED');
+      return {
+        collection: table, docId: op.docId, kind: op.kind,
+        ...(op.kind === 'set' ? { value: { ...op.value, id: op.docId } } : {}),
+        expected: baseline ? { kind: 'present', data: structuredClone(baseline) } : { kind: 'missing' },
+      };
+    });
+  },
+  rememberOperations(operations: InventoryRpcOperation[]): void {
+    baselineRevision++;
+    for (const op of operations) {
+      const key = `${op.collection}/${op.docId}`;
+      if (op.kind === 'delete') remoteBaselines.delete(key);
+      else if (op.value) remoteBaselines.set(key, structuredClone(op.value));
+    }
+  },
+  async commitMutation(mutationId: string, payload: InventoryRpcPayload): Promise<InventoryRpcAck> {
+    const uid = currentUser?.uid;
+    const { data, error } = await client().rpc('inventory_commit', { p_mutation_id: mutationId, p_payload: payload });
+    if (error) throw error;
+    if (uid !== currentUser?.uid) throw new Error('INVENTORY_SESSION_CHANGED');
+    if (!data || data.audit?.id !== mutationId) throw new Error('INVENTORY_ACK_INVALID');
+    if (payload.operations) this.rememberOperations(payload.operations);
+    return data as InventoryRpcAck;
+  },
+  async previewRestore(backup: Record<string, unknown>): Promise<InventoryRestorePreview> {
+    const { data, error } = await client().rpc('inventory_restore_preview', { p_backup: backup });
+    if (error) throw error;
+    if (!data?.expectedState || !data.diffs) throw new Error('INVENTORY_RESTORE_PREVIEW_INVALID');
+    return data as InventoryRestorePreview;
   },
   async upsertDoc(table: SupabaseTableName, id: string, payload: Record<string, unknown>): Promise<void> {
     await this.upsertDocs(table, [{ id, payload }]);
   },
   async upsertDocs(table: SupabaseTableName, entries: Array<{ id: string; payload: Record<string, unknown> }>): Promise<void> {
     assertTable(table);
-    for (let offset = 0; offset < entries.length; offset += PAGE_SIZE) {
-      const batch = entries.slice(offset, offset + PAGE_SIZE).map(entry => encode(table, entry.id, entry.payload));
-      const { error } = await client().from(table).upsert(batch, { onConflict: 'id' });
-      if (error) throw error;
-    }
+    if (entries.length === 0) return;
+    const operations = entries.map(entry => {
+      const data = remoteBaselines.get(`${table}/${entry.id}`);
+      return { collection: table, docId: entry.id, kind: 'set' as const, value: { ...entry.payload, id: entry.id }, expected: data ? { kind: 'present' as const, data } : { kind: 'missing' as const } };
+    });
+    await this.commitMutation(crypto.randomUUID(), { mode: 'mutation', label: 'حفظ بيانات التطبيق', operations });
   },
-  /** Append receipts without SELECT/UPDATE privileges on the audit collection. */
-  async appendAuditLogs(entries: Array<{ id: string; payload: Record<string, unknown> }>): Promise<void> {
+  async appendAuditLogs(entries: Array<{ id: string; payload: Record<string, unknown> }>): Promise<Record<string, unknown>[]> {
+    const receipts: Record<string, unknown>[] = [];
     for (const entry of entries) {
-      const { error } = await client().from('audit_logs').insert(encode('audit_logs', entry.id, entry.payload));
-      // A retry of the same immutable receipt must never overwrite the original.
-      if (error && error.code !== '23505') throw error;
+      const ack = await this.commitMutation(entry.id, { mode: 'audit', label: 'حدث في التطبيق', operations: [{ collection: 'audit_logs', docId: entry.id, kind: 'set', value: entry.payload }] });
+      receipts.push(ack.audit);
     }
+    return receipts;
   },
-  /** Operational writers can update an existing root without permission to create settings. */
   async updateExistingSettings(payload: Record<string, unknown>): Promise<void> {
-    const { data, error } = await client().from('settings')
-      .update(encode('settings', 'app_config', payload)).eq('id', 'app_config').select('id').single();
-    if (error) throw error;
-    if (data?.id !== 'app_config') throw new Error('SETTINGS_UPDATE_NOT_ACKNOWLEDGED');
+    if (!remoteBaselines.has('settings/app_config')) throw new Error('INVENTORY_BASELINE_REQUIRED');
+    await this.upsertDoc('settings', 'app_config', payload);
   },
   async deleteDocs(table: SupabaseTableName, ids: string[]): Promise<void> {
     assertTable(table);
-    for (let offset = 0; offset < ids.length; offset += PAGE_SIZE) {
-      const { error } = await client().from(table).delete().in('id', ids.slice(offset, offset + PAGE_SIZE));
-      if (error) throw error;
-    }
+    if (ids.length === 0) return;
+    const operations = ids.map(id => {
+      const data = remoteBaselines.get(`${table}/${id}`);
+      if (!data) throw new Error('INVENTORY_BASELINE_REQUIRED');
+      return { collection: table, docId: id, kind: 'delete' as const, expected: { kind: 'present' as const, data } };
+    });
+    await this.commitMutation(crypto.randomUUID(), { mode: 'mutation', label: 'حذف سجلات محددة', operations });
   },
   subscribeTables(tables: SupabaseTableName[], onChange: (table: SupabaseTableName) => void | Promise<void>): () => void {
     let active = true;
     const sb = client();
+    const timers = new Map<SupabaseTableName, ReturnType<typeof setTimeout>>();
+    const running = new Set<SupabaseTableName>();
+    const dirty = new Set<SupabaseTableName>();
+    const schedule = (table: SupabaseTableName) => {
+      if (!active) return;
+      dirty.add(table);
+      if (running.has(table) || timers.has(table)) return;
+      timers.set(table, setTimeout(async () => {
+        timers.delete(table); if (!active) return;
+        running.add(table); dirty.delete(table);
+        try { await onChange(table); }
+        catch { console.error('Realtime reconciliation failed'); }
+        finally { running.delete(table); if (dirty.has(table)) schedule(table); }
+      }, 250));
+    };
     let channel = sb.channel(`inventory-${crypto.randomUUID()}`);
     for (const table of tables) {
       assertTable(table);
-      channel = channel.on('postgres_changes', { event: '*', schema: 'public', table }, () => {
-        if (active) void Promise.resolve(onChange(table)).catch(error => console.error('Realtime reconciliation failed', error));
-      });
+      channel = channel.on('postgres_changes', { event: '*', schema: 'public', table }, () => schedule(table));
     }
     channel.subscribe();
-    return () => { active = false; void sb.removeChannel(channel); };
+    return () => { active = false; for (const timer of timers.values()) clearTimeout(timer); timers.clear(); dirty.clear(); void sb.removeChannel(channel); };
   },
 };
