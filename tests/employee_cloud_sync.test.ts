@@ -9,9 +9,11 @@ const fake = vi.hoisted(() => ({
   getDoc: vi.fn(), getCollection: vi.fn(), upsertDoc: vi.fn(), upsertDocs: vi.fn(),
   appendAuditLogs: vi.fn(), updateExistingSettings: vi.fn(), deleteDocs: vi.fn(),
   subscribeTables: vi.fn(() => () => {}),
+  prepareOperations: vi.fn((ops:any[])=>ops.map(op=>({...op,expected:op.expected.kind==='present'?{kind:'present',data:op.expected.exactLegacyPayload}:{kind:'missing'}}))),
+  rememberOperations: vi.fn(), commitMutation: vi.fn(async(id:string)=>({audit:{id,timestamp:new Date().toISOString(),user:'Synthetic employee',action:'اعتماد',details:'QA',itemType:'حركة'},replayed:false})),
 }));
 vi.mock('../src/services/supabase', () => ({
-  supabase: null, secondarySupabase: null,
+  supabase: null, secondarySupabase: null, subscribeAuthState: () => () => {},
   isSupabaseConfigured: () => true,
   getCurrentAuthUser: () => ({ uid: 'synthetic-employee', email: 'employee@example.invalid' }),
   supabaseDb: fake,
@@ -26,12 +28,13 @@ const employee: SystemUser = {
   fullName: 'Synthetic employee', role: 'أمين مستودع', active: true,
   permissions: ['materials_view', 'materials_create', 'materials_edit', 'transactions_view', 'transactions_create', 'reports_view'],
 };
-beforeEach(() => {
+beforeEach(async () => {
+  const {IndexedDbSyncQueueStore}=await import('../src/services/syncQueueStore'); await new IndexedDbSyncQueueStore().clearForUser(employee.id);
   vi.clearAllMocks(); localStorage.clear(); sessionStorage.clear();
   __p10EnqueueFenceTestApi.clear();
   fake.getCollection.mockResolvedValue([]);
   fake.upsertDoc.mockResolvedValue(undefined); fake.upsertDocs.mockResolvedValue(undefined);
-  fake.appendAuditLogs.mockResolvedValue(undefined); fake.updateExistingSettings.mockResolvedValue(undefined);
+  fake.appendAuditLogs.mockImplementation(async(entries:any[])=>entries.map(e=>({...e.payload,id:e.id}))); fake.updateExistingSettings.mockResolvedValue(undefined);
 });
 
 const cloudSettings = () => canonicalizeWarehouseSettings({
@@ -60,23 +63,15 @@ describe('Employee operational cloud dependencies', () => {
     expect(await dataService.bootstrapFreshDeviceData(employee)).toMatchObject({ success: false, status: 'missing-settings' });
     expect(fake.upsertDoc).not.toHaveBeenCalled();
   });
-  it('routes operational counter changes through UPDATE and emits audit receipts through INSERT', async () => {
-    const remote = cloudSettings();
-    fake.getDoc.mockResolvedValue(remote);
-    await dataService.bootstrapFreshDeviceData(employee);
-    dataService.setCurrentUser(employee.id);
-    const next = { ...remote, transactionCounters: { ...remote.transactionCounters!, inbound: 18 } };
-    localStorage.setItem('remix_settings_v1', JSON.stringify(next));
-    await __p10EnqueueFenceTestApi.queueCloudMutation([
-      createSyncSetOperation('settings', 'app_config', toSlimSettingsRoot(next), toSlimSettingsRoot(remote)),
-    ], 'synthetic-counter-update');
-    expect(fake.updateExistingSettings).toHaveBeenCalledOnce();
-    expect(fake.updateExistingSettings).toHaveBeenCalledWith(expect.objectContaining({ transactionCounters: expect.objectContaining({ inbound: 18 }) }));
-    expect(fake.upsertDocs).not.toHaveBeenCalled();
-    expect(fake.appendAuditLogs).toHaveBeenCalledOnce();
-    await dataService.logAudit('Synthetic employee action', 'Synthetic receipt');
-    expect(fake.appendAuditLogs).toHaveBeenCalledTimes(2);
-    expect(fake.upsertDoc).not.toHaveBeenCalled();
+  it('routes an operational command through one acknowledged RPC and never direct DML', async () => {
+    const remote=cloudSettings(); fake.getDoc.mockResolvedValue(remote);
+    await dataService.bootstrapFreshDeviceData(employee); dataService.setCurrentUser(employee.id);
+    const next={...remote,transactionCounters:{...remote.transactionCounters!,inbound:18}};
+    await __p10EnqueueFenceTestApi.queueCloudMutation([{kind:'set',collection:'settings',docId:'app_config',value:next,expected:{kind:'present',fingerprint:'synthetic',exactLegacyPayload:remote}}],'synthetic-command');
+    expect(fake.commitMutation).toHaveBeenCalledOnce();
+    expect(fake.commitMutation.mock.calls[0][1]).toMatchObject({mode:'mutation',operations:[{collection:'settings',expected:{kind:'present',data:remote},value:expect.objectContaining({transactionCounters:expect.objectContaining({inbound:18})})}]});
+    expect(fake.upsertDocs).not.toHaveBeenCalled(); expect(fake.updateExistingSettings).not.toHaveBeenCalled();
+    await dataService.logAudit('Synthetic employee action','Synthetic receipt'); expect(fake.appendAuditLogs).toHaveBeenCalledOnce();
     expect(dataService.getLastCloudWriteError()).toBeNull();
   });
 });

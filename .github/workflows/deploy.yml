@@ -1,6 +1,9 @@
 name: Deploy Inventory App to GitHub Pages
 
 on:
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - main
@@ -13,7 +16,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: "pages"
+  group: "pages-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'production' }}"
   cancel-in-progress: true
 
 jobs:
@@ -29,6 +32,7 @@ jobs:
           node-version: 22
 
       - name: Configure GitHub Pages
+        if: github.event_name != 'pull_request'
         uses: actions/configure-pages@v5
 
       - name: Install dependencies
@@ -43,6 +47,11 @@ jobs:
       - name: Test Supabase adapter, inventory and warehouse centrality
         run: npm run test:deployment
 
+      - name: Test durable atomic writes and repaired workflows
+        run: |
+          npm run test:atomic
+          npm run test:repairs
+
       - name: Build Vite application for GitHub Pages
         env:
           VITE_BASE_PATH: /${{ github.event.repository.name }}/
@@ -54,11 +63,13 @@ jobs:
           touch dist/.nojekyll
 
       - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./dist
 
   deploy:
+    if: github.event_name != 'pull_request'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

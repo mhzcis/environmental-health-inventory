@@ -1,3 +1,4 @@
+import { getInventoryTransactionDirection } from './inventoryIntegrity';
 import { Material, InventoryTransaction } from '../types';
 import { dataService } from '../services/dataService';
 
@@ -284,10 +285,7 @@ export function buildTransactionLedger(
     const previousTotalBalance = sumActive(balances);
     const warehouseStockBefore = snapshotActive(balances);
 
-    const inbound =
-      tx.transactionType === 'وارد' || tx.transactionType === 'افتتاحي' ||
-      (tx.transactionType === 'تحويل' && tx.transferType === 'in') ||
-      (tx.transactionType === 'تسوية' && (tx.transferType === 'in' || tx.quantity >= 0));
+    const inbound = getInventoryTransactionDirection(tx) === 'in';
     const newWarehouseBalance = previousWarehouseBalance + (inbound ? tx.quantity : -tx.quantity);
     balances.set(warehouse, newWarehouseBalance);
     const newTotalBalance = sumActive(balances);
@@ -373,10 +371,7 @@ export function getHistoricalWarehouseStocksDetailed(
     const warehouse = tx.storehouse;
     if (!warehouse || !isOperational(warehouse)) return;
     if (runningStocks[warehouse] === undefined) runningStocks[warehouse] = 0;
-    const inbound =
-      tx.transactionType === 'وارد' || tx.transactionType === 'افتتاحي' ||
-      (tx.transactionType === 'تحويل' && tx.transferType === 'in') ||
-      (tx.transactionType === 'تسوية' && (tx.transferType === 'in' || tx.quantity >= 0));
+    const inbound = getInventoryTransactionDirection(tx) === 'in';
     runningStocks[warehouse] += inbound ? tx.quantity : -tx.quantity;
   };
 

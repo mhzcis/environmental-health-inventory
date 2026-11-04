@@ -1,6 +1,6 @@
 const CACHE_PREFIX = 'inventory-app-shell-';
-const CACHE_VERSION = `${CACHE_PREFIX}v2`;
-const APP_SHELL = ['./', './index.html', './manifest.webmanifest'];
+const CACHE_VERSION = `${CACHE_PREFIX}v3`;
+const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './Cairo-Regular.ttf'];
 const STATIC_ASSET = /\/assets\/[A-Za-z0-9._-]+$/;
 
 const isCacheableRequest = (request) => {
@@ -9,7 +9,7 @@ const isCacheableRequest = (request) => {
   if (url.origin !== self.location.origin) return false;
   if (request.headers.has('authorization')) return false;
   if (request.mode === 'navigate') return url.pathname.endsWith('/') || url.pathname.endsWith('/index.html');
-  return STATIC_ASSET.test(url.pathname) || url.pathname.endsWith('/manifest.webmanifest');
+  return STATIC_ASSET.test(url.pathname) || url.pathname.endsWith('/manifest.webmanifest') || url.pathname.endsWith('/Cairo-Regular.ttf');
 };
 
 const canStoreResponse = (response) => {

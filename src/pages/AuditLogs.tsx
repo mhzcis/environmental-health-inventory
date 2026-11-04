@@ -53,6 +53,10 @@ export default function AuditLogs() {
     return matchesSearch && matchesType;
   });
 
+  useEffect(() => {
+    setPage(current => Math.min(current, Math.max(0, Math.ceil(filteredLogs.length / rowsPerPage) - 1)));
+  }, [filteredLogs.length, rowsPerPage]);
+
   const paginatedLogs = filteredLogs.slice(
     page * rowsPerPage,
     page * rowsPerPage + rowsPerPage
@@ -92,7 +96,7 @@ export default function AuditLogs() {
               placeholder="البحث بالإجراء، تفاصيل المشهد، هوية الموظف المسؤول..."
               size="small"
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => { setSearchQuery(e.target.value); setPage(0); }}
               slotProps={{
                 input: {
                   startAdornment: <SearchIcon sx={{ color: '#94a3b8', mr: 1 }} />,
@@ -108,7 +112,7 @@ export default function AuditLogs() {
               size="small"
               label="تصفية نوع الحدث"
               value={typeFilter}
-              onChange={(e) => setTypeFilter(e.target.value)}
+              onChange={(e) => { setTypeFilter(e.target.value); setPage(0); }}
               slotProps={{ input: { style: { borderRadius: '10px' } } }}
             >
               <MenuItem value="all">{renderOption("كل الأحداث المسجلة")}</MenuItem>

@@ -1,3 +1,4 @@
+import InventorySyncPanel from '../components/InventorySyncPanel';
 import React, { useRef, useState } from 'react';
 import { 
   Box, CssBaseline, AppBar, Toolbar, Typography, Drawer, List, ListItem, 
@@ -786,6 +787,7 @@ export default function AppLayout({ children }: Props) {
         }}
       >
         <Toolbar sx={{ mb: 1 }} /> {/* Spacing helper for fixed AppBar */}
+        <InventorySyncPanel />
         <OperationalAlertBanner />
         <ServiceWorkerHealthIndicator />
         <StorageHealthIndicator />

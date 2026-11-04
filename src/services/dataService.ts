@@ -1,3 +1,5 @@
+import { type InventorySyncOperation, runInventoryDeviceReset, getInventoryOutboxCounts, subscribeInventoryOutbox, cancelRejectedInventoryOutbox, enqueueInventoryMutation, enqueueInventoryRestore, InventoryPendingError, listInventoryOutbox, resumeInventoryProjection, retryInventoryOutbox } from './supabaseOutbox';
+import { IndexedDbSyncQueueStore } from './syncQueueStore';
 import { composeSupabaseAppSettings } from './supabaseSettings';
 import { Material, InventoryTransaction, AuditLog, AppSettings, SystemUser, GeneratorLogEntry, GeneratorLogSimulationResult, type AuditEventContext } from '../types';
 import { db, auth } from './firebase';
@@ -130,6 +132,7 @@ import {
   deactivateOfflineDomainForUser,
   deleteActiveOfflineMutationJournal,
   getActiveOfflineDomainUserId,
+  IndexedDbOfflineDomainStore,
   getActiveOfflineMutationJournalCount,
   listValidatedActiveOfflineMutationJournals,
   OFFLINE_DOMAIN_STORAGE_KEYS,
@@ -346,7 +349,8 @@ const handleCloudWriteError = (err: any, persistence?: SyncErrorPersistence) => 
 };
 
 const shouldRestoreLocalProjection = (error: unknown): boolean =>
-  !(error instanceof OfflineDomainSessionChangedError
+  !(error instanceof InventoryPendingError
+    || error instanceof OfflineDomainSessionChangedError
     || error instanceof OfflineDomainJournalRecoveryRequiredError
     || error instanceof OfflineDomainProjectionRecoveryRequiredError);
 
@@ -513,13 +517,13 @@ const stagedAtomicAuditStorage = (
 const slimSettingsCloudValue = (settings: AppSettings): Record<string, unknown> =>
   toSlimSettingsRoot(withSettingsAttachmentManifest(canonicalizeWarehouseSettings({ ...settings })) as AppSettings);
 
-const settingsRootSyncOp = (next: AppSettings, previous: AppSettings | undefined) =>
-  createSyncSetOperation(
-    'settings',
-    'app_config',
-    slimSettingsCloudValue(next),
-    previous ? slimSettingsCloudValue(previous) : undefined,
-  );
+const settingsRootSyncOp = (next: AppSettings, previous: AppSettings | undefined): SyncOperation => {
+  assertComposedSettingsViewModel(next as unknown as Record<string, unknown>);
+  const value = JSON.parse(JSON.stringify(next)) as Record<string, unknown>;
+  return { kind: 'set', collection: 'settings', docId: 'app_config', value,
+    expected: previous ? { kind: 'present', fingerprint: fingerprintDocument(previous), exactLegacyPayload: JSON.parse(JSON.stringify(previous)) } : { kind: 'missing' },
+  };
+};
 
 const assertProtectedCloudEnqueueAllowed = (): void => {
   const blocked = getProtectedCloudEnqueueBlockReason();
@@ -528,90 +532,52 @@ const assertProtectedCloudEnqueueAllowed = (): void => {
   }
 };
 
+const applyInventoryProjection = (operations: InventorySyncOperation[]): void => {
+  for (const op of operations) {
+    // Permissions are installed locally only after a canonical server read.
+    if (op.collection === 'users') continue;
+    const key = ({ materials: STORAGE_KEYS.MATERIALS, transactions: STORAGE_KEYS.TRANSACTIONS,
+      generator_logs: STORAGE_KEYS.GENERATOR_LOGS, users: STORAGE_KEYS.USERS, audit_logs: STORAGE_KEYS.AUDIT_LOGS,
+      settings: STORAGE_KEYS.SETTINGS } as Record<string, string>)[op.collection];
+    if (!key) throw new Error('INVENTORY_COLLECTION_UNSUPPORTED');
+    if (op.collection === 'settings') {
+      if (op.kind !== 'set' || op.docId !== 'app_config') throw new Error('INVENTORY_SETTINGS_INVALID');
+      const { id: _documentId, ...settings } = op.value;
+      localStorage.setItem(key, JSON.stringify(settings));
+    } else {
+      const rows = JSON.parse(localStorage.getItem(key) || '[]') as Record<string, unknown>[];
+      const next = rows.filter(row => row.id !== op.docId);
+      if (op.kind === 'set') next.unshift({ ...op.value, id: op.docId });
+      localStorage.setItem(key, JSON.stringify(next));
+    }
+  }
+};
+const publishInventoryAck = (ack: { audit: Record<string, unknown> }): void => {
+  const log = normalizeAuditLog(ack.audit);
+  if (!log) throw new Error('INVENTORY_ACK_INVALID');
+  const logs = dataService.getAuditLogs().filter(row => row.id !== log.id);
+  localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify([log, ...logs]));
+};
 const queueCloudMutation = async (
-  operations: SyncOperation[],
-  label: string,
-  options: {
-    requireRemoteCommit?: boolean;
-    scheduleFlush?: boolean;
-    clientMutationId?: string;
-    createdAt?: number;
-  } = {},
+  operations: SyncOperation[], label: string,
+  options: { requireRemoteCommit?: boolean; scheduleFlush?: boolean; clientMutationId?: string; createdAt?: number } = {},
 ): Promise<void> => {
-  const settings = dataService.getSettings();
-  const stableMutationId = typeof options.clientMutationId === 'string'
-    ? options.clientMutationId.trim()
-    : '';
-  const mutationId = stableMutationId || createAuditId('domain');
-  const atomicAuditLogs = label === 'append-audit-log' || operations.length === 0
-    ? null
-    : prepareAtomicMutationAudits(label, operations, mutationId);
-  if (atomicAuditLogs) {
-    publishAtomicMutationAudits(atomicAuditLogs);
+  if (operations.length === 0) return;
+  if (!isSupabaseConfigured()) { applyInventoryProjection(operations); return; }
+  if (!CLOUD_WRITES_ENABLED || !dataService.getSettings().cloudSyncEnabled || !getCurrentAuthUser()) {
+    throw new Error('تعذر الحفظ المركزي؛ تحقق من الجلسة والاتصال وتفعيل المزامنة.');
   }
-  const durableOperations: SyncOperation[] = atomicAuditLogs
-    ? [
-        ...operations,
-        ...atomicAuditLogs.map(log => createSyncSetOperation(
-          'audit_logs',
-          log.id,
-          log as unknown as Record<string, unknown>,
-          undefined,
-        )),
-      ]
-    : operations;
-
-  if (!isSupabaseConfigured() || !CLOUD_WRITES_ENABLED || !settings.cloudSyncEnabled || durableOperations.length === 0) {
-    return;
-  }
-
   assertProtectedCloudEnqueueAllowed();
-  pendingCloudWritesCount += 1;
+  pendingCloudWritesCount++;
   dataService.notify();
   try {
-    const upsertsByTable = new Map<SupabaseTableName, Array<{ id: string; payload: Record<string, unknown> }>>();
-    const deletesByTable = new Map<SupabaseTableName, string[]>();
-
-    for (const op of durableOperations) {
-      const table = op.collection as SupabaseTableName;
-      if (op.kind === 'delete') {
-        const list = deletesByTable.get(table) || [];
-        list.push(op.docId);
-        deletesByTable.set(table, list);
-      } else if (op.value) {
-        const list = upsertsByTable.get(table) || [];
-        const payload = table === "settings" && op.docId === "app_config"
-          ? { ...(dataService.getSettings() as unknown as Record<string, unknown>), id: op.docId }
-          : { ...op.value, id: op.docId };
-        list.push({ id: op.docId, payload });
-        upsertsByTable.set(table, list);
-      }
-    }
-
-    for (const [table, entries] of upsertsByTable.entries()) {
-      if (table === 'audit_logs') {
-        await supabaseDb.appendAuditLogs(entries);
-      } else if (table === 'settings' && !dataService.hasPermission('settings_edit')) {
-        for (const entry of entries) {
-          if (entry.id !== 'app_config') throw new Error('UNSUPPORTED_OPERATIONAL_SETTINGS_DOCUMENT');
-          await supabaseDb.updateExistingSettings(entry.payload);
-        }
-      } else {
-        await supabaseDb.upsertDocs(table, entries);
-      }
-    }
-    for (const [table, ids] of deletesByTable.entries()) {
-      await supabaseDb.deleteDocs(table, ids);
-    }
-    lastCloudWriteError = null;
-    lastCloudWriteErrorPersistence = 'unknown';
+    const ack = await enqueueInventoryMutation(operations, label, options.clientMutationId?.trim() || createAuditId('domain'), applyInventoryProjection);
+    publishInventoryAck(ack);
+    lastCloudWriteError = null; lastCloudWriteErrorPersistence = 'unknown';
   } catch (error) {
-    handleCloudWriteError(error, 'persisted');
-    if (options.requireRemoteCommit) throw error;
-  } finally {
-    pendingCloudWritesCount = Math.max(0, pendingCloudWritesCount - 1);
-    dataService.notify();
-  }
+    handleCloudWriteError(error, error instanceof InventoryPendingError ? 'persisted' : 'unknown');
+    throw error;
+  } finally { pendingCloudWritesCount = Math.max(0, pendingCloudWritesCount - 1); dataService.notify(); }
 };
 
 const commitOfflineProjectionWrite = async (
@@ -625,7 +591,16 @@ const commitOfflineProjectionWrite = async (
 };
 
 const getOutstandingSyncWorkCount = async (): Promise<number> => {
-  return pendingCloudWritesCount;
+  // A device clear deletes every owner's local database, including signed-out owners.
+  const queued = await new IndexedDbSyncQueueStore().countAll();
+  const journals = await new IndexedDbOfflineDomainStore().countAllJournals();
+  return pendingCloudWritesCount + queued + journals;
+};
+
+const assertNoOutstandingSyncWork = async (requireClearError = true): Promise<void> => {
+  if (await getOutstandingSyncWorkCount() > 0 || requireClearError && lastCloudWriteError) {
+    throw new Error('توجد أعمال مزامنة معلقة أو نتيجة سحابية غير محسومة. أوقف الإجراء وحافظ على بيانات الجهاز حتى المصالحة.');
+  }
 };
 
 const STORAGE_KEYS = {
@@ -764,6 +739,19 @@ const ensureCloudSettingsSeeded = async (
 };
 
 export const dataService = {
+  listPendingInventoryMutations: () => listInventoryOutbox(),
+  cancelRejectedInventoryMutations: async (): Promise<number> => {
+    const count = await cancelRejectedInventoryOutbox(applyInventoryProjection);
+    lastCloudWriteError = null; lastCloudWriteErrorPersistence = 'unknown';
+    dataService.notify();
+    return count;
+  },
+  retryPendingInventoryMutations: async (): Promise<number> => {
+    const count = await retryInventoryOutbox(publishInventoryAck);
+    lastCloudWriteError = null; lastCloudWriteErrorPersistence = 'unknown';
+    dataService.notify();
+    return count;
+  },
   getPendingCloudWritesCount: () => pendingCloudWritesCount,
   getMonitoringDifferences: () => monitoringDifferences,
   getMonitoringError: () => monitoringError,
@@ -792,13 +780,13 @@ export const dataService = {
   getMonitoringOutboxCounts: (): MonitoringOutboxCounts => {
     const snapshot = getAppSyncSnapshot();
     return {
-      staging: snapshot.staging,
-      pending: snapshot.pending,
+      staging: snapshot.staging + (isSupabaseConfigured() && !getInventoryOutboxCounts().ready ? 1 : 0),
+      pending: snapshot.pending + pendingCloudWritesCount + getInventoryOutboxCounts().pending + getInventoryOutboxCounts().processing,
       retrying: snapshot.retrying,
-      flushing: snapshot.flushing,
+      flushing: snapshot.flushing || pendingCloudWritesCount > 0,
       conflicts: snapshot.conflicts,
-      blocked: snapshot.blocked,
-      quarantined: snapshot.quarantined,
+      blocked: snapshot.blocked + getInventoryOutboxCounts().blocked,
+      quarantined: snapshot.quarantined + getInventoryOutboxCounts().quarantined,
     };
   },
   getMonitoringHealth: (): MonitoringHealth => {
@@ -806,13 +794,13 @@ export const dataService = {
     const lifecycle = getAppSyncLifecycle();
     const settings = dataService.getSettings();
     const outbox: MonitoringOutboxCounts = {
-      staging: snapshot.staging,
-      pending: snapshot.pending,
+      staging: snapshot.staging + (isSupabaseConfigured() && !getInventoryOutboxCounts().ready ? 1 : 0),
+      pending: snapshot.pending + pendingCloudWritesCount + getInventoryOutboxCounts().pending + getInventoryOutboxCounts().processing,
       retrying: snapshot.retrying,
-      flushing: snapshot.flushing,
+      flushing: snapshot.flushing || pendingCloudWritesCount > 0,
       conflicts: snapshot.conflicts,
-      blocked: snapshot.blocked,
-      quarantined: snapshot.quarantined,
+      blocked: snapshot.blocked + getInventoryOutboxCounts().blocked,
+      quarantined: snapshot.quarantined + getInventoryOutboxCounts().quarantined,
     };
     const authUserId = getCurrentAuthUser()?.uid ?? null;
     const domainUserId = getActiveOfflineDomainUserId() ?? authUserId;
@@ -968,7 +956,7 @@ export const dataService = {
         parsed.departmentName = DEFAULT_SETTINGS.departmentName;
         needsSave = true;
       }
-      
+
       if (!parsed.transactionCounters) {
         parsed.transactionCounters = { inbound: 0, outbound: 0, consumed: 0 };
         needsSave = true;
@@ -1008,12 +996,13 @@ export const dataService = {
       throw new Error(productLimitMessage(error));
     }
 
-    localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settingsToSave));
+
     try {
       await queueCloudMutation([
         settingsRootSyncOp(settingsToSave, previousSettings),
       ], 'save-settings-atomic');
     } catch (error) {
+      if (error instanceof InventoryPendingError) throw error;
       if (previousRaw === null) localStorage.removeItem(STORAGE_KEYS.SETTINGS);
       else localStorage.setItem(STORAGE_KEYS.SETTINGS, previousRaw);
       throw error;
@@ -1042,13 +1031,14 @@ export const dataService = {
     } catch (error) {
       throw new Error(productLimitMessage(error));
     }
-    localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(updated));
+
     const docId = openingAttachmentDocId(key);
     try {
       await queueCloudMutation([
         settingsRootSyncOp(updated, previousSettings),
       ], `save-opening-attachment:${docId}`);
     } catch (error) {
+      if (error instanceof InventoryPendingError) throw error;
       if (previousRaw === null) localStorage.removeItem(STORAGE_KEYS.SETTINGS);
       else localStorage.setItem(STORAGE_KEYS.SETTINGS, previousRaw);
       throw error;
@@ -1110,23 +1100,30 @@ export const dataService = {
     }
   },
 
-  updateReferenceValues: async (type: 'category' | 'unit' | 'storehouse', oldValue: string, newValue: string): Promise<void> => {
+  updateReferenceValues: async (type: 'category' | 'unit' | 'storehouse', oldValue: string, newValue: string, requestedSettings?: AppSettings): Promise<void> => {
+    if (!dataService.hasPermission('settings_edit')) throw new Error('لا تملك صلاحية تعديل القيم المرجعية.');
     if (type === 'storehouse') {
       const result = await dataService.renameStorehouse(oldValue, newValue);
       if (!result.success) throw new Error(result.message);
       return;
     }
-    const materials = dataService.getMaterials();
-    for (const material of materials) {
-      if (type === 'category' && material.category === oldValue) { material.category = newValue; await dataService.saveMaterial(material); }
-      if (type === 'unit' && material.unit === oldValue) { material.unit = newValue; await dataService.saveMaterial(material); }
-    }
-
-    const transactions = dataService.getTransactions();
-    for (const transaction of transactions) {
-      if (type === 'category' && transaction.itemCategory === oldValue) { transaction.itemCategory = newValue; await dataService.saveTransaction(transaction); }
-      if (type === 'unit' && transaction.unit === oldValue) { transaction.unit = newValue; await dataService.saveTransaction(transaction); }
-    }
+    const previous = dataService.getSettings();
+    const next = requestedSettings || { ...previous,
+      categories: previous.categories.map(c => type === 'category' && c.name === oldValue ? {...c,name:newValue} : c),
+      units: previous.units.map(u => type === 'unit' && u === oldValue ? newValue : u),
+    };
+    assertComposedSettingsViewModel(next as unknown as Record<string,unknown>);
+    const materials = dataService.getMaterials(); const transactions = dataService.getTransactions();
+    const changedMaterials = oldValue === newValue ? [] : materials.filter(m => type === 'category' ? m.category === oldValue : m.unit === oldValue);
+    const changedTransactions = oldValue === newValue ? [] : transactions.filter(t => type === 'category' ? t.itemCategory === oldValue : t.unit === oldValue);
+    if (changedMaterials.length && !dataService.hasPermission('materials_edit') || changedTransactions.length && !dataService.hasPermission('transactions_create')) throw new Error('تحديث السجلات المرتبطة يتطلب صلاحية تعديل الأصناف وتسجيل الحركات.');
+    if (changedMaterials.length + changedTransactions.length + 1 > 450) throw new Error('عدد السجلات المرتبطة يتجاوز حد العملية الذرية؛ أُلغي التعديل كاملًا.');
+    await queueCloudMutation([
+      settingsRootSyncOp(next, previous),
+      ...changedMaterials.map(m => createSyncSetOperation('materials',m.id,{...m,...(type === 'category' ? {category:newValue} : {unit:newValue})},m)),
+      ...changedTransactions.map(t => createSyncSetOperation('transactions',t.id,{...t,...(type === 'category' ? {itemCategory:newValue} : {unit:newValue})},t)),
+    ], 'rename-reference-and-linked-records');
+    dataService.recordLocalWrite(); dataService.notify();
   },
 
   // MATERIALS
@@ -1214,12 +1211,8 @@ export const dataService = {
 
       for (const tx of nonInitTransactions) {
         const storehouseId = tx.storehouseId;
-        if (
-          tx.transactionType === 'وارد' ||
-          (tx.transactionType === 'تحويل' && tx.transferType === 'in') ||
-          (tx.transactionType === 'تسوية' && (tx.transferType === 'in' || tx.quantity >= 0))
-        ) addStock(storehouseId, tx.quantity);
-        else addStock(storehouseId, -tx.quantity);
+        const direction = getInventoryTransactionDirection(tx);
+        if (direction) addStock(storehouseId, direction === 'in' ? Number(tx.quantity) : -Number(tx.quantity));
       }
 
       const warehouseStocks: Record<string, number> = {};
@@ -1334,10 +1327,9 @@ export const dataService = {
     if (blockingErrors.length > 0) throw new Error(blockingErrors[0].message);
 
     try {
-      await ensureCloudSettingsSeeded(previousSettings, { includeRoot: false });
-      localStorage.setItem(STORAGE_KEYS.MATERIALS, JSON.stringify(nextMaterials));
-      localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(nextTransactions));
-      localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+
+
+
       await queueCloudMutation([
         settingsRootSyncOp(settings, previousSettings),
         createSyncSetOperation('materials', preparedMaterial.id, preparedMaterial as unknown as Record<string, unknown>, undefined),
@@ -1361,6 +1353,55 @@ export const dataService = {
     );
     dataService.recordLocalWrite();
     dataService.notify();
+  },
+
+  importMaterialsBatch: async (input: Material[], openings: InventoryTransaction[]): Promise<void> => {
+    if (!input.length) throw new Error('لا توجد أصناف صالحة للاستيراد.');
+    if (input.length + openings.length + 1 > 450) throw new Error('الدفعة أكبر من 450 سجلًا مرتبطًا؛ قسّم الملف قبل الاستيراد.');
+    const settings = dataService.getSettings();
+    const previousSettings = structuredClone(settings);
+    const existing = dataService.getMaterials();
+    const existingById = new Map(existing.map(m => [m.id, m]));
+    const ids = new Set<string>(); const codes = new Set<string>();
+    const prepared = input.map(raw => {
+      const old = existingById.get(raw.id);
+      if (!dataService.hasPermission(old ? 'materials_edit' : 'materials_create')) throw new Error('لا تملك صلاحية استيراد هذه الأصناف.');
+      const code = raw.code.trim().toLowerCase();
+      if (ids.has(raw.id) || codes.has(code) || existing.some(m => m.id !== raw.id && m.code.trim().toLowerCase() === code)) throw new Error('كود أو معرف صنف مكرر في الدفعة.');
+      ids.add(raw.id); codes.add(code);
+      const warehouse = getStorehouseByReference(settings, raw.primaryStorehouseId || raw.storageLocation, false);
+      if (!warehouse || !settings.units.includes(raw.unit) || !settings.categories.some(c => c.name === raw.category)) throw new Error('يلزم تعريف التصنيف والوحدة والمستودع الفعال في الإعدادات قبل الاستيراد.');
+      if (!raw.name.trim() || !code || !Number.isFinite(raw.minimumStock) || raw.minimumStock < 0) throw new Error('بيانات الصنف غير صالحة.');
+      return { ...raw, primaryStorehouseId: warehouse.id, storageLocation: warehouse.name,
+        initialStock: old?.initialStock || 0, createdAt: old?.createdAt || raw.createdAt };
+    });
+    if (openings.length && !dataService.hasPermission('transactions_create')) throw new Error('الرصيد الافتتاحي يتطلب صلاحية تسجيل الحركات.');
+    const ledger = dataService.getTransactions() as IntegrityTransaction[];
+    const numbers = new Set(ledger.map(t => t.transactionNumber));
+    const txIds = new Set(ledger.map(t => t.id));
+    const openingItems = new Set<string>();
+    const counters = { ...settings.transactionCounters, opening: settings.transactionCounters?.opening || 0 };
+    const transactions = openings.map(raw => {
+      const item = prepared.find(m => m.id === raw.itemId);
+      if (!item || existingById.has(item.id) || openingItems.has(item.id) || txIds.has(raw.id) || raw.transactionType !== 'افتتاحي' || !Number.isFinite(raw.quantity) || raw.quantity <= 0) throw new Error('الرصيد الافتتاحي في الملف غير صالح أو مكرر.');
+      openingItems.add(item.id); txIds.add(raw.id);
+      let number: string;
+      do { counters.opening++; number = `OP-${String(counters.opening).padStart(4, '0')}`; } while (numbers.has(number));
+      numbers.add(number);
+      return { ...raw, transactionNumber: number, itemId: item.id, itemCode: item.code, itemName: item.name,
+        itemCategory: item.category, itemType: item.type, unit: item.unit, storehouseId: item.primaryStorehouseId,
+        storehouse: item.storageLocation, stockBefore: 0, stockAfter: raw.quantity };
+    });
+    const materials = [...existing.filter(m => !ids.has(m.id)), ...prepared];
+    const validation = validateInventoryDataset([...ledger, ...transactions], { materials, storehouses: getStorehouseEntities(settings) });
+    if (!validation.valid) throw new Error(validation.errors[0].message);
+    settings.transactionCounters = counters;
+    await queueCloudMutation([
+      ...(transactions.length ? [settingsRootSyncOp(settings, previousSettings)] : []),
+      ...prepared.map(m => createSyncSetOperation('materials', m.id, m as unknown as Record<string, unknown>, existingById.get(m.id))),
+      ...transactions.map(t => createSyncSetOperation('transactions', t.id, t as unknown as Record<string, unknown>, undefined)),
+    ], 'import-materials-with-opening-balances');
+    dataService.recordLocalWrite(); dataService.notify();
   },
 
   saveMaterial: async (material: Material): Promise<void> => {
@@ -1392,10 +1433,9 @@ export const dataService = {
       materials[index] = material;
     }
 
-    localStorage.setItem(STORAGE_KEYS.MATERIALS, JSON.stringify(materials));
+
 
     try {
-      await ensureCloudSettingsSeeded(warehouseWriteSettings, { includeRoot: true });
       await queueCloudMutation([
         createSyncSetOperation('materials', material.id, material as unknown as Record<string, unknown>, previousMaterial),
       ], isNew ? 'create-material' : 'update-material');
@@ -1435,12 +1475,12 @@ export const dataService = {
     // If forcing and has transactions, delete them
     if (hasTransactions && force) {
       const remainingTransactions = transactions.filter((t) => t.itemId !== id);
-      localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(remainingTransactions));
-      
+
+
     }
 
     const filtered = materials.filter((m) => m.id !== id);
-    localStorage.setItem(STORAGE_KEYS.MATERIALS, JSON.stringify(filtered));
+
 
     try {
       await queueCloudMutation([
@@ -1448,6 +1488,7 @@ export const dataService = {
         createSyncDeleteOperation('materials', id, material),
       ], 'delete-material-with-ledger');
     } catch (error) {
+      if (error instanceof InventoryPendingError) return { success: false, message: error.message };
       if (!shouldRestoreLocalProjection(error)) throw error;
       if (previousMaterialsRaw === null) localStorage.removeItem(STORAGE_KEYS.MATERIALS);
       else localStorage.setItem(STORAGE_KEYS.MATERIALS, previousMaterialsRaw);
@@ -1470,7 +1511,7 @@ export const dataService = {
   generateItemCode: (categoryName: string): string => {
     const settings = dataService.getSettings();
     const catConfig = settings.categories.find(c => c.name === categoryName);
-    
+
     const prefix = catConfig?.prefix || 'GEN';
     const startRange = catConfig ? Number(catConfig.startRange) : 1000;
     const endRange = catConfig ? Number(catConfig.endRange) : 9999;
@@ -1504,7 +1545,7 @@ export const dataService = {
     data = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS) || data;
     let parsed: InventoryTransaction[] = JSON.parse(data);
     let needsSave = false;
-    
+
     // Migration for transaction numbers and suffixes
     parsed = parsed.map(tx => {
       let modified = false;
@@ -1525,7 +1566,7 @@ export const dataService = {
         else if (tx.transactionType === 'تحويل') prefix = 'T';
         else if (tx.transactionType === 'تسوية') prefix = 'A';
         else if (tx.transactionType === 'افتتاحي') prefix = 'OP';
-        
+
         tx.transactionNumber = `${prefix}-${tx.id.replace(/[^0-9]/g, '') || Math.floor(Math.random() * 1000).toString().padStart(4, '0')}`;
         if (tx.transactionType === 'تحويل') {
            if (tx.transferType === 'in') tx.transactionNumber += '-IN';
@@ -1730,19 +1771,8 @@ export const dataService = {
     const previousTransactionsRaw = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
     const previousSettingsRaw = localStorage.getItem(STORAGE_KEYS.SETTINGS);
     settings.transactionCounters = counters;
-    try {
-      localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(next));
-      localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
-    } catch (_) {
-      if (previousTransactionsRaw === null) localStorage.removeItem(STORAGE_KEYS.TRANSACTIONS);
-      else localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, previousTransactionsRaw);
-      if (previousSettingsRaw === null) localStorage.removeItem(STORAGE_KEYS.SETTINGS);
-      else localStorage.setItem(STORAGE_KEYS.SETTINGS, previousSettingsRaw);
-      return { success: false, message: 'تعذر حفظ الحركة محلياً؛ لم يتم تنفيذ أي كتابة سحابية.' };
-    }
 
     try {
-      await ensureCloudSettingsSeeded(previousSettings, { includeRoot: false });
       await queueCloudMutation([
         settingsRootSyncOp(settings, previousSettings),
         ...prepared.map((tx) => createSyncSetOperation(
@@ -1753,6 +1783,7 @@ export const dataService = {
         )),
       ], 'save-transaction-batch');
     } catch (error) {
+      if (error instanceof InventoryPendingError) return { success: false, message: error.message };
       if (!shouldRestoreLocalProjection(error)) throw error;
       if (previousTransactionsRaw === null) localStorage.removeItem(STORAGE_KEYS.TRANSACTIONS);
       else localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, previousTransactionsRaw);
@@ -1773,7 +1804,7 @@ export const dataService = {
         tx.attachment,
       );
     } else {
-      await dataService.logAudit('إضافة حركات مخزنية', `تم تسجيل ${prepared.length} حركة مخزنية كعملية ذرية واحدة بعد التحقق المسبق من سلامة الرصيد.`, 'حركة');
+      await dataService.logAudit('إضافة حركات مخزنية', `تم تسجيل ${prepared.length} حركة مخزنية بعد التحقق المسبق من سلامة الرصيد.`, 'حركة');
     }
     dataService.recordLocalWrite();
     dataService.notify();
@@ -1797,7 +1828,6 @@ export const dataService = {
     const previousRaw = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
     const previousById = new Map(previous.map(transaction => [transaction.id, transaction]));
     const changed = transactions.filter(transaction => JSON.stringify(previousById.get(transaction.id)) !== JSON.stringify(transaction));
-    localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
     try {
       await queueCloudMutation(changed.map(transaction => createSyncSetOperation(
         'transactions', transaction.id, transaction as unknown as Record<string, unknown>, previousById.get(transaction.id),
@@ -1817,6 +1847,9 @@ export const dataService = {
   },
 
   deleteTransactions: async (requestedIds: string[]): Promise<{ success: boolean; message: string; deletedIds?: string[] }> => {
+    if (!dataService.hasPermission('transactions_delete')) {
+      return { success: false, message: 'PERMISSION_DENIED: transactions_delete' };
+    }
     if (!Array.isArray(requestedIds) || requestedIds.length === 0) return { success: false, message: 'لم يتم تحديد حركات للحذف.' };
     const transactions = dataService.getTransactions() as IntegrityTransaction[];
     const byId = new Map(transactions.map((tx) => [tx.id, tx] as const));
@@ -1868,14 +1901,7 @@ export const dataService = {
 
     const previousTransactions = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
     const previousMaterials = localStorage.getItem(STORAGE_KEYS.MATERIALS);
-    try {
-      localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(nextTransactions));
-      if (materialUpdates.size > 0) localStorage.setItem(STORAGE_KEYS.MATERIALS, JSON.stringify(rawMaterials));
-    } catch (_) {
-      if (previousTransactions === null) localStorage.removeItem(STORAGE_KEYS.TRANSACTIONS); else localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, previousTransactions);
-      if (previousMaterials === null) localStorage.removeItem(STORAGE_KEYS.MATERIALS); else localStorage.setItem(STORAGE_KEYS.MATERIALS, previousMaterials);
-      return { success: false, message: 'تعذر تطبيق الحذف محلياً وتمت استعادة الحالة السابقة.' };
-    }
+
 
     try {
       await queueCloudMutation([
@@ -1888,6 +1914,7 @@ export const dataService = {
         )),
       ], 'delete-transaction-batch');
     } catch (error) {
+      if (error instanceof InventoryPendingError) return { success: false, message: error.message };
       if (!shouldRestoreLocalProjection(error)) throw error;
       if (previousTransactions === null) localStorage.removeItem(STORAGE_KEYS.TRANSACTIONS); else localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, previousTransactions);
       if (previousMaterials === null) localStorage.removeItem(STORAGE_KEYS.MATERIALS); else localStorage.setItem(STORAGE_KEYS.MATERIALS, previousMaterials);
@@ -1977,22 +2004,10 @@ export const dataService = {
   },
 
   calculateStock: (transactions: InventoryTransaction[]): number => {
-    let stock = 0;
-    // To calculate correctly, let's process transactions in chronological order if sorted differently
-    const sorted = [...transactions].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-    for (const t of sorted) {
-      if (
-        t.transactionType === 'وارد' ||
-        t.transactionType === 'افتتاحي' ||
-        (t.transactionType === 'تحويل' && t.transferType === 'in') ||
-        (t.transactionType === 'تسوية' && (t.transferType === 'in' || t.quantity >= 0))
-      ) {
-        stock += t.quantity;
-      } else {
-        stock -= t.quantity;
-      }
-    }
-    return stock;
+    return transactions.reduce((stock, transaction) => {
+      const direction = getInventoryTransactionDirection(transaction);
+      return stock + (direction === 'in' ? Number(transaction.quantity) : direction === 'out' ? -Number(transaction.quantity) : 0);
+    }, 0);
   },
 
   // AUDIT LOGS
@@ -2022,6 +2037,9 @@ export const dataService = {
     const context = typeof contextOrLegacyAttachment === 'object' && contextOrLegacyAttachment !== null
       ? contextOrLegacyAttachment
       : { operationType: 'system' as const, affectedEntities: ['system/application'] };
+    if (context.requireCentralAck && (!isSupabaseConfigured() || !CLOUD_WRITES_ENABLED || !getCurrentAuthUser())) {
+      throw new Error('تعذر الحصول على إقرار التدقيق المركزي؛ لم يُعتمد الإجراء.');
+    }
     const clientAuditId = typeof (context as AuditEventContext).clientAuditId === 'string'
       ? (context as AuditEventContext).clientAuditId!.trim()
       : '';
@@ -2038,28 +2056,19 @@ export const dataService = {
       itemType,
       context,
     });
-    if (clientAuditId) {
-      const existingIdx = logs.findIndex(entry => entry?.id === clientAuditId);
-      if (existingIdx >= 0) logs[existingIdx] = newLog;
-      else logs.unshift(newLog);
-    } else {
-      logs.unshift(newLog);
-    }
-    localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify(logs));
-
     if (isSupabaseConfigured() && CLOUD_WRITES_ENABLED && getCurrentAuthUser()) {
       try {
-        if (clientAuditId) {
-          // Preserve the privileged backup-recovery receipt reconciliation path.
-          await supabaseDb.upsertDoc('audit_logs', newLog.id, newLog as unknown as Record<string, unknown>);
-        } else {
-          await supabaseDb.appendAuditLogs([{ id: newLog.id, payload: newLog as unknown as Record<string, unknown> }]);
-        }
+        const receipts = await supabaseDb.appendAuditLogs([{ id: newLog.id, payload: newLog as unknown as Record<string, unknown> }]);
+        if (receipts?.[0]) { publishInventoryAck({ audit: receipts[0] }); return; }
       } catch (error) {
-        handleCloudWriteError(error, 'persisted');
+        handleCloudWriteError(error, 'unknown');
         if (context.requireCentralAck) throw error;
+        return;
       }
     }
+    // Explicit local mode or a test adapter without a returned canonical receipt.
+    const remaining = logs.filter(entry => entry.id !== newLog.id);
+    localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify([newLog, ...remaining]));
   },
 
   // USERS MANAGEMENT
@@ -2076,10 +2085,10 @@ export const dataService = {
         // use initial
       }
     }
-    
+
     let needsSave = false;
     const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    
+
     const migrated = usersList.map(user => {
       let modified = false;
       const updatedUser = { ...user };
@@ -2099,7 +2108,7 @@ export const dataService = {
         updatedUser.active = true;
         modified = true;
       }
-      
+
       if (modified) needsSave = true;
       return updatedUser;
     });
@@ -2196,6 +2205,14 @@ export const dataService = {
     }
 
     try {
+      const pending = await listInventoryOutbox();
+      if (pending.length > 0) {
+        if (await getOutstandingSyncWorkCount() > pending.length + pendingCloudWritesCount) throw new Error('INVENTORY_SESSION_CHANGED');
+        if (pending.some(row => row.userId !== authUser.uid)) throw new Error('INVENTORY_SESSION_CHANGED');
+        await resumeInventoryProjection(applyInventoryProjection);
+        return { success: true, status: 'pending-local', message: 'توجد طلبات محفوظة على الجهاز تنتظر الإقرار؛ راجع لوحة المزامنة.' };
+      }
+      await assertNoOutstandingSyncWork(false);
       let materials: Material[] = [];
       let transactions: InventoryTransaction[] = [];
       let settings: AppSettings | null = null;
@@ -2226,7 +2243,7 @@ export const dataService = {
               firebaseInitialized: true,
             }),
           ) as AppSettings;
-          await supabaseDb.upsertDoc('settings', 'app_config', settings as unknown as Record<string, unknown>).catch(() => {});
+          await supabaseDb.upsertDoc('settings', 'app_config', settings as unknown as Record<string, unknown>);
         } else {
           return { success: false, status: 'missing-settings', message: 'الإعدادات التشغيلية غير مهيأة. تواصل مع مدير النظام.' };
         }
@@ -2281,6 +2298,8 @@ export const dataService = {
         }
       }
 
+      await assertNoOutstandingSyncWork(false);
+      if (getCurrentAuthUser()?.uid !== authUser.uid) throw new Error('INVENTORY_SESSION_CHANGED');
       if (user.permissions.includes('materials_view')) {
         localStorage.setItem(STORAGE_KEYS.MATERIALS, JSON.stringify(materials));
       }
@@ -2718,7 +2737,7 @@ export const dataService = {
         {
           operationType: 'security',
           affectedEntities: [`users/${user.authUid || user.id}`],
-          requireDurable: true,
+          requireCentralAck: true,
           templateId: 'password_reset',
         },
       );
@@ -2783,10 +2802,12 @@ export const dataService = {
     return 'safe';
   },
 
-  resetToFactoryDefaults: async () => {
+  resetToFactoryDefaults: async () => runInventoryDeviceReset(async () => {
     if (!dataService.hasPermission('system_reset')) {
       throw new Error('PERMISSION_DENIED: system_reset');
     }
+    await assertNoOutstandingSyncWork();
+    const resetOwner = getCurrentAuthUser()?.uid;
     const currentSettings = dataService.getSettings();
     const wasCloudSyncEnabled = currentSettings.cloudSyncEnabled;
 
@@ -2798,10 +2819,12 @@ export const dataService = {
         operationType: 'system',
         affectedEntities: ['system/factory-reset'],
         templateId: 'factory_reset',
-        requireDurable: true,
+        requireCentralAck: true,
       },
     );
 
+    await assertNoOutstandingSyncWork();
+    if (getCurrentAuthUser()?.uid !== resetOwner) throw new Error('INVENTORY_SESSION_CHANGED');
     const retainedAuditLogs = dataService.getAuditLogs();
     const currentUser = dataService.getCurrentUser();
     stopCloudSync();
@@ -2833,19 +2856,19 @@ export const dataService = {
       // informational only
     }
     dataService.notify();
-  },
+  }),
 
-  clearLocalDeviceDataOnly: async (): Promise<void> => {
-    await clearActiveAppSyncQueue().catch(() => 0);
-    await clearActiveOfflineMutationJournals().catch(() => {});
+  clearLocalDeviceDataOnly: async (): Promise<void> => runInventoryDeviceReset(async () => {
+    await assertNoOutstandingSyncWork();
     stopCloudSync();
     if (getCurrentAuthUser()) {
       try {
         await supabaseAuthSignOut();
       } catch {
-        // Best-effort local sign-out
+        throw new Error('تعذر إنهاء الجلسة بأمان؛ لم تُمسح بيانات الجهاز.');
       }
     }
+    if (getCurrentAuthUser()) throw new Error('INVENTORY_SESSION_CHANGED');
     try {
       clearOfflineDomainProjection();
     } catch {
@@ -2882,104 +2905,57 @@ export const dataService = {
       }
     }
     dataService.notify();
-  },
+  }),
 
   uploadAllLocalDataToCloud: async (): Promise<{ success: boolean; message: string }> => {
-    if (!isSupabaseConfigured() || !getCurrentAuthUser()) {
-      return { success: false, message: 'خدمة السحابة غير متصلة حالياً. يرجى تسجيل الدخول أولاً.' };
-    }
+    if (!dataService.hasPermission('settings_edit') || !dataService.hasPermission('users_manage')) return { success: false, message: 'لا تملك صلاحية دمج بيانات الجهاز.' };
     try {
-      const settings = dataService.getSettings();
-      const materials = dataService.getMaterials();
-      const transactions = dataService.getTransactions();
-      const generatorLogs = dataService.getGeneratorLogs();
-      const auditLogs = dataService.getAuditLogs();
-
-      await supabaseDb.upsertDoc('settings', 'app_config', settings as unknown as Record<string, unknown>);
-      if (materials.length > 0) {
-        await supabaseDb.upsertDocs(
-          'materials',
-          materials.map(m => ({ id: m.id, payload: m as unknown as Record<string, unknown> })),
-        );
+      await assertNoOutstandingSyncWork();
+      const operations: SyncOperation[] = [settingsRootSyncOp(dataService.getSettings(), dataService.getSettings())];
+      for (const [collection, rows] of [ ['materials', dataService.getMaterials()], ['transactions', dataService.getTransactions()], ['generator_logs', dataService.getGeneratorLogs()] ] as const) {
+        for (const row of rows) operations.push(createSyncSetOperation(collection, row.id, row as unknown as Record<string, unknown>, row as unknown as Record<string, unknown>));
       }
-      if (transactions.length > 0) {
-        await supabaseDb.upsertDocs(
-          'transactions',
-          transactions.map(t => ({ id: t.id, payload: t as unknown as Record<string, unknown> })),
-        );
-      }
-      if (generatorLogs.length > 0) {
-        await supabaseDb.upsertDocs(
-          'generator_logs',
-          generatorLogs.map(g => ({ id: g.id, payload: g as unknown as Record<string, unknown> })),
-        );
-      }
-      if (auditLogs.length > 0) {
-        await supabaseDb.upsertDocs(
-          'audit_logs',
-          auditLogs.map(a => ({ id: a.id, payload: a as unknown as Record<string, unknown> })),
-        );
-      }
-      return {
-        success: true,
-        message: 'تم رفع ومزامنة جميع البيانات المحلية إلى قاعدة بيانات Supabase بنجاح.',
-      };
-    } catch (error) {
-      return {
-        success: false,
-        message: safeResultMessage(error, 'sync'),
-      };
-    }
+      if (operations.length > 450) return { success: false, message: 'حجم الدمج يتجاوز حد العملية الواحدة؛ صدّر نسخة محلية واستخدم الاستعادة المعاينة.' };
+      await queueCloudMutation(operations, 'دمج بيانات الجهاز');
+      return { success: true, message: 'دُمجت بيانات الجهاز مع السحابة دون حذف السجلات الأخرى. هذا دمج وليس استعادة نسخة كاملة.' };
+    } catch (error) { return { success: false, message: error instanceof InventoryPendingError ? error.message : safeResultMessage(error, 'sync') }; }
   },
 
-  restoreBackupData: async (parsed: unknown): Promise<{ success: boolean; message: string }> => {
-    if (!dataService.hasPermission('users_manage')
-      || !dataService.hasPermission('settings_edit')
-      || !dataService.hasPermission('system_reset')) {
-      return {
-        success: false,
-        message: 'تم رفض الاستعادة: تتطلب العملية صلاحيات users_manage وsettings_edit وsystem_reset.',
-      };
-    }
+  previewBackupRestore: async (parsed: unknown) => {
+    if (!dataService.hasPermission('users_manage') || !dataService.hasPermission('settings_edit') || !dataService.hasPermission('system_reset')) throw new Error('INVENTORY_RESTORE_DENIED');
+    await assertNoOutstandingSyncWork();
     const check = await validateBackup(parsed);
-    if (!check.success || !check.backup) {
-      return { success: false, message: `تم رفض النسخة قبل تغيير أي بيانات: ${check.errors.join(' ')}` };
-    }
+    if (!check.success || !check.backup) throw new Error('INVENTORY_BACKUP_INVALID');
+    const b = check.backup;
+    const backup = { settings: b.settings, materials: b.materials, transactions: b.transactions, generatorLogs: b.generatorLogs, users: b.users } as unknown as Record<string, unknown>;
+    return supabaseDb.previewRestore(backup);
+  },
 
-    let rollback: (() => void) | null = null;
+  restoreBackupData: async (parsed: unknown, preview?: { expectedState: string }): Promise<{ success: boolean; message: string }> => {
+    if (!dataService.hasPermission('users_manage') || !dataService.hasPermission('settings_edit') || !dataService.hasPermission('system_reset')) return { success: false, message: 'الاستعادة تتطلب صلاحيات إدارة المستخدمين والإعدادات وإعادة الضبط.' };
+    const check = await validateBackup(parsed);
+    if (!check.success || !check.backup) return { success: false, message: `تم رفض النسخة قبل تغيير أي بيانات: ${check.errors.join(' ')}` };
+    if (!preview?.expectedState) return { success: false, message: 'يجب معاينة فروق النسخة مع الخادم واعتمادها قبل الاستعادة.' };
     try {
-      stopCloudSync();
-      rollback = applyBackupLocally(check.backup);
-      if (isSupabaseConfigured() && getCurrentAuthUser()) {
-        const uploadRes = await dataService.uploadAllLocalDataToCloud();
-        if (!uploadRes.success) {
-          throw new Error(uploadRes.message);
-        }
-      }
-      await dataService.logAudit(
-        'استعادة نسخة احتياطية آمنة',
-        `تمت استعادة النسخة ${check.backup.manifest.backupId} مع الحفاظ على مركزية المستودع ${check.backup.manifest.selectedStorehouse}`,
-        'إعدادات',
-        {
-          operationType: 'backup',
-          affectedEntities: ['system/backup-restore'],
-          templateId: 'backup_restore',
-          requireDurable: true,
-        },
-      );
+      await assertNoOutstandingSyncWork();
+      const b = check.backup;
+      const backup = { settings: b.settings, materials: b.materials, transactions: b.transactions, generatorLogs: b.generatorLogs, users: b.users } as unknown as Record<string, unknown>;
+      const ack = await enqueueInventoryRestore(backup, preview.expectedState);
+      publishInventoryAck(ack);
+      try {
+      const retainedAudit = dataService.getAuditLogs();
+      applyBackupLocally(b);
+      localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify(retainedAudit));
+      const current = dataService.getCurrentUser();
+      const refreshed = await dataService.bootstrapFreshDeviceData(current);
       await initCloudSync();
       dataService.notify();
-      return {
-        success: true,
-        message: `تمت استعادة ${check.backup.manifest.counts.materials} صنف و${check.backup.manifest.counts.transactions} حركة بنجاح مع الحفاظ على مركزية المستودع ومزامنة السحابة.`,
-      };
+      return { success: true, message: refreshed.success ? 'اعتمد الخادم الاستعادة كاملة في معاملة واحدة. حُفظت هويات الدخول وكلمات المرور وسجل التدقيق الحالي.' : 'اعتمد الخادم الاستعادة كاملة؛ تعذر تحديث عرض الجهاز. أعد تحميل الصفحة بالحساب نفسه وكلمة مروره الحالية.' };
+      } catch {
+        return { success: true, message: 'اعتمد الخادم الاستعادة كاملة؛ تعذر تحديث عرض الجهاز. أعد تحميل الصفحة بالحساب نفسه وكلمة مروره الحالية.' };
+      }
     } catch (error) {
-      if (rollback) rollback();
-      await initCloudSync().catch(() => {});
-      return {
-        success: false,
-        message: safeResultMessage(error, 'restore'),
-      };
+      return { success: false, message: error instanceof InventoryPendingError ? error.message : safeResultMessage(error, 'restore') };
     }
   },
 
@@ -3103,7 +3079,7 @@ export const dataService = {
             operationType: 'backup',
             affectedEntities: ['system/backup-restore'],
             templateId: 'backup_restore',
-            requireDurable: true,
+            requireCentralAck: true,
             clientAuditId: restoreAuditOperationId,
             clientAuditTimestamp: restoreAuditTimestamp,
             clientMutationId: restoreDeliveryMutationId,
@@ -3154,14 +3130,14 @@ export const dataService = {
     if (!CLOUD_LISTENERS_ENABLED) {
       return { success: false, message: 'المزامنة السحابية معطلة لحين اعتماد ترحيل السحابة' };
     }
-    
+
     const settings = dataService.getSettings();
     settings.cloudSyncEnabled = true; // Force always enabled as requested
-    
+
     if (!isSupabaseConfigured()) {
       return { success: false, message: 'تعذر تنشيط السحابة: ملقم جوجل سحابة غير مهيأ' };
     }
-    
+
     // Upload local data to Firestore so the user doesn't see blank page
     if (!settings.firebaseInitialized) {
       const res = await dataService.uploadAllLocalDataToCloud();
@@ -3170,13 +3146,13 @@ export const dataService = {
       }
       settings.firebaseInitialized = true;
     }
-    
+
     // Save settings locally
     localStorage.setItem('remix_settings_v1', JSON.stringify(settings));
-    
+
     // Initialize or teardown cloud sync listeners
     initCloudSync();
-    
+
     dataService.notify();
     return { success: true, message: 'التزامن السحابي المباشر مفعل دائماً وإلزامي لضمان دقة وتطابق البيانات بين الأجهزة.' };
   },
@@ -3313,25 +3289,16 @@ export const dataService = {
     const previousTransactionsRaw = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
     const previousSettingsRaw = localStorage.getItem(STORAGE_KEYS.SETTINGS);
     settings.transactionCounters.transfer = seq;
-    try {
-      localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(next));
-      localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
-    } catch (_) {
-      if (previousTransactionsRaw === null) localStorage.removeItem(STORAGE_KEYS.TRANSACTIONS);
-      else localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, previousTransactionsRaw);
-      if (previousSettingsRaw === null) localStorage.removeItem(STORAGE_KEYS.SETTINGS);
-      else localStorage.setItem(STORAGE_KEYS.SETTINGS, previousSettingsRaw);
-      return { success: false, message: 'تعذر حفظ التحويل محلياً؛ لم يتم تنفيذ أي كتابة سحابية.' };
-    }
+
 
     try {
-      await ensureCloudSettingsSeeded(previousSettings, { includeRoot: false });
       await queueCloudMutation([
         settingsRootSyncOp(settings, previousSettings),
         createSyncSetOperation('transactions', sourceTx.id, sourceTx as unknown as Record<string, unknown>, undefined),
         createSyncSetOperation('transactions', destinationTx.id, destinationTx as unknown as Record<string, unknown>, undefined),
       ], `save-transfer:${operationId}`);
     } catch (error) {
+      if (error instanceof InventoryPendingError) return { success: false, message: error.message };
       if (!shouldRestoreLocalProjection(error)) throw error;
       if (previousTransactionsRaw === null) localStorage.removeItem(STORAGE_KEYS.TRANSACTIONS);
       else localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, previousTransactionsRaw);
@@ -3572,7 +3539,7 @@ export const dataService = {
     const changed = sorted.filter((log) => JSON.stringify(log) !== JSON.stringify(previousById.get(log.id)));
     const writeLimit = validateAtomicWriteCount(changed.length + deletedLogs.length, MAX_ATOMIC_FIRESTORE_WRITES);
     if (!writeLimit.valid) throw new Error(writeLimit.errors[0].message);
-    localStorage.setItem(STORAGE_KEYS.GENERATOR_LOGS, JSON.stringify(sorted));
+
 
     try {
       await queueCloudMutation([
@@ -3782,9 +3749,10 @@ export async function initCloudSync() {
       return;
     }
     try {
+      if (await getOutstandingSyncWorkCount() > 0) return;
       if (table === 'settings') {
         const remoteSettings = await supabaseDb.getDoc<Record<string, unknown>>('settings', 'app_config');
-        if (remoteSettings && cloudSyncGeneration === sessionGeneration) {
+        if (remoteSettings && cloudSyncGeneration === sessionGeneration && await getOutstandingSyncWorkCount() === 0) {
           const canonical = composeSupabaseAppSettings(remoteSettings, DEFAULT_SETTINGS);
           localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(canonical));
           setMonitoringError('settings', null);
@@ -3793,7 +3761,7 @@ export async function initCloudSync() {
         }
       } else if (table === 'materials' && dataService.hasPermission('materials_view')) {
         const rows = await supabaseDb.getCollection<Material>('materials');
-        if (cloudSyncGeneration === sessionGeneration) {
+        if (cloudSyncGeneration === sessionGeneration && await getOutstandingSyncWorkCount() === 0) {
           const currentSettings = dataService.getSettings();
           const currentTransactions = dataService.getTransactions();
           const cleaned = rows.map(r => ({ ...(stripSyncMetadata(r) as unknown as Material), id: r.id }));
@@ -3812,7 +3780,7 @@ export async function initCloudSync() {
         }
       } else if (table === 'transactions' && dataService.hasPermission('transactions_view')) {
         const rows = await supabaseDb.getCollection<InventoryTransaction>('transactions');
-        if (cloudSyncGeneration === sessionGeneration) {
+        if (cloudSyncGeneration === sessionGeneration && await getOutstandingSyncWorkCount() === 0) {
           const currentSettings = dataService.getSettings();
           const currentMaterials = dataService.getMaterials();
           const cleaned = rows.map(r => ({ ...(stripSyncMetadata(r) as unknown as InventoryTransaction), id: r.id }));
@@ -3831,7 +3799,7 @@ export async function initCloudSync() {
         }
       } else if (table === 'audit_logs' && dataService.hasPermission('audit_view')) {
         const rows = await supabaseDb.getCollection<Record<string, unknown>>('audit_logs');
-        if (cloudSyncGeneration === sessionGeneration) {
+        if (cloudSyncGeneration === sessionGeneration && await getOutstandingSyncWorkCount() === 0) {
           const logs = rows
             .map(d => normalizeAuditLog(stripSyncMetadata(d), String(d.id || '')))
             .filter((entry): entry is AuditLog => !!entry)
@@ -3843,7 +3811,7 @@ export async function initCloudSync() {
         }
       } else if (table === 'generator_logs' && dataService.hasPermission('generator_log')) {
         const rows = await supabaseDb.getCollection<GeneratorLogEntry>('generator_logs');
-        if (cloudSyncGeneration === sessionGeneration) {
+        if (cloudSyncGeneration === sessionGeneration && await getOutstandingSyncWorkCount() === 0) {
           const cleaned = rows.map(r => ({ ...(stripSyncMetadata(r) as unknown as GeneratorLogEntry), id: r.id }));
           localStorage.setItem(STORAGE_KEYS.GENERATOR_LOGS, JSON.stringify(cleaned));
           setMonitoringError('generator_logs', null);
@@ -3852,7 +3820,7 @@ export async function initCloudSync() {
         }
       } else if (table === 'users' && dataService.hasPermission('users_manage')) {
         const rows = await supabaseDb.getCollection<SystemUser>('users');
-        if (cloudSyncGeneration === sessionGeneration) {
+        if (cloudSyncGeneration === sessionGeneration && await getOutstandingSyncWorkCount() === 0) {
           const cleaned = rows.map(u => {
             const copy = { ...(stripSyncMetadata(u) as unknown as SystemUser), id: u.id };
             delete (copy as unknown as Record<string, unknown>).password;
@@ -3868,3 +3836,6 @@ export async function initCloudSync() {
     }
   });
 }
+
+// A local queue change refreshes health without a network request or timer.
+subscribeInventoryOutbox(() => dataService.notify());

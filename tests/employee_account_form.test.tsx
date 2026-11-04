@@ -26,6 +26,7 @@ vi.mock('../src/services/dataService', () => ({ dataService: {
 }, monitoringPhaseArabicLabel: () => 'المزامنة سليمة', monitoringPhaseColor: () => 'green', pendingDeliveryCount: () => 0 }));
 vi.mock('../src/theme/ThemeContext', () => ({ useThemeMode: () => ({ mode: 'light', toggleColorMode: vi.fn() }) }));
 vi.mock('../src/context/StorehouseContext', () => ({ useStorehouse: () => ({ selectedStorehouse: 'جميع المستودعات', activeStorehouses: [], setSelectedStorehouse: vi.fn() }) }));
+vi.mock('../src/components/InventorySyncPanel', () => ({ default: () => null }));
 vi.mock('../src/components/OperationalAlertBanner', () => ({ OperationalAlertBanner: () => null }));
 vi.mock('../src/components/ServiceWorkerHealthIndicator', () => ({ ServiceWorkerHealthIndicator: () => null }));
 vi.mock('../src/components/StorageHealthIndicator', () => ({ StorageHealthIndicator: () => null }));

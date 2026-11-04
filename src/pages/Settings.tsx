@@ -38,8 +38,10 @@ import { auth, isFirebaseAvailable } from '../services/firebase';
 import { supabaseAuthVerifyPassword } from '../services/supabase';
 import { useLocation } from 'react-router-dom';
 import { renderOption } from '../utils/emoji';
-import { PRODUCT_LIMITS, productLimitMessage, assertDomainProofPayload } from '../utils/productSchema';
-import { addOrReactivateWarehouse, canonicalizeWarehouseSettings } from '../utils/warehouseSettings';
+import { PRODUCT_LIMITS, productLimitMessage } from '../utils/productSchema';
+import { getStorehouseByReference } from '../utils/warehouseDomain';
+import { importDate, importNumber, importTransactionId } from '../utils/importValidation';
+import type { Material, InventoryTransaction } from '../types';
 
 
 const APP_PERMISSIONS = [
@@ -471,9 +473,10 @@ export default function Settings() {
     }
     
     try {
-      await dataService.saveSettings(updated);
       if (oldValue && editDialog.type) {
-        await dataService.updateReferenceValues(editDialog.type, oldValue, trimmed);
+        await dataService.updateReferenceValues(editDialog.type, oldValue, trimmed, updated);
+      } else {
+        await dataService.saveSettings(updated);
       }
       setSettings(dataService.getSettings());
       setEditDialog({ ...editDialog, open: false });
@@ -719,27 +722,6 @@ export default function Settings() {
   const handleSelectAllPermissions = () => setUserPermissions(APP_PERMISSIONS.map(p => p.id));
   const handleClearAllPermissions = () => setUserPermissions([]);
 
-  const parseExcelDate = (val: any): string => {
-    if (!val && val !== 0) return new Date().toISOString().split('T')[0];
-    if (typeof val === 'number') {
-      const dateObj = new Date(Math.round((val - 25569) * 86400 * 1000));
-      if (!isNaN(dateObj.getTime())) {
-        return dateObj.toISOString().split('T')[0];
-      }
-    }
-    const str = String(val).trim();
-    if (!str) return new Date().toISOString().split('T')[0];
-    if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
-    const parts = str.split(/[\/\.-]/);
-    if (parts.length === 3) {
-      if (parts[0].length === 4) return `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
-      if (parts[2].length === 4) return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
-    }
-    const parsed = new Date(str);
-    if (!isNaN(parsed.getTime())) return parsed.toISOString().split('T')[0];
-    return new Date().toISOString().split('T')[0];
-  };
-
   const handleDownloadItemsTemplate = () => {
     const ws_data = [
       ["الكود", "الاسم", "التصنيف", "الوحدة", "حد الأمان", "الرصيد الافتتاحي", "موقع التخزين", "ملاحظات", "الشركة المصنعة", "تاريخ الإنتاج", "تاريخ الانتهاء", "درجة الخطورة"],
@@ -777,414 +759,96 @@ export default function Settings() {
     setSuccessMsg('تم تنزيل قالب إكسل للقيود والحركات بنجاح!');
   };
 
-  const handleImportItemsCSV = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    setIsImporting(true);
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      try {
-        const data = e.target?.result as ArrayBuffer;
-        const workbook = XLSX.read(data, { type: 'array' });
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
-        const rows = XLSX.utils.sheet_to_json<any[]>(worksheet, { header: 1, defval: "" });
-        if (rows.length < 2) {
-          setErrorMsg('الملف فارغ أو لا يحتوي على صفوف بيانات.');  setIsImporting(false); return;
-        }
-        let importedCount = 0; let updatedCount = 0; let skippedCount = 0; const errorLines: string[] = [];
-        let currentSettings = structuredClone(dataService.getSettings());
-        let settingsChanged = false;
-        const existingCategories = new Set(currentSettings.categories.map((c: any) => c.name));
-        const existingStorehouses = new Set(currentSettings.storehouses);
-        const existingUnits = new Set(currentSettings.units);
-
-        const existingMaterials = dataService.getMaterials();
-
-        // Preflight every settings value that the import could introduce before the first material
-        // or opening-balance mutation. Unsupported cardinality therefore cannot leave a partial
-        // import behind.
-        for (let i = 1; i < rows.length; i++) {
-          const row = rows[i];
-          if (!row || row.length < 2 || (!row[0] && !row[1]) || !String(row[1] || '').trim()) continue;
-          const category = String(row[2] || 'غير مصنف').trim();
-          const unit = String(row[3] || 'وحدة').trim();
-          const storageLocation = String(row[6] || 'المخزن الرئيسي').trim();
-          if (!existingCategories.has(category)) {
-            if (currentSettings.categories.length >= PRODUCT_LIMITS.categories) {
-              throw new Error(`تم بلوغ حد التصنيفات المعتمد (${PRODUCT_LIMITS.categories}) قبل بدء الاستيراد.`);
-            }
-            existingCategories.add(category);
-            currentSettings.categories.push({
-              name: category,
-              prefix: String(row[0] || '').toUpperCase().startsWith('PES') ? 'PES' : 'MAT',
-              startRange: 1000,
-              endRange: 1999,
-            });
-            settingsChanged = true;
-          }
-          if (!existingUnits.has(unit)) {
-            if (currentSettings.units.length >= PRODUCT_LIMITS.units) {
-              throw new Error(`تم بلوغ حد وحدات القياس المعتمد (${PRODUCT_LIMITS.units}) قبل بدء الاستيراد.`);
-            }
-            existingUnits.add(unit);
-            currentSettings.units.push(unit);
-            settingsChanged = true;
-          }
-          if (!existingStorehouses.has(storageLocation)) {
-            currentSettings = addOrReactivateWarehouse(currentSettings, storageLocation);
-            existingStorehouses.add(storageLocation);
-            settingsChanged = true;
-          }
-        }
-        currentSettings = canonicalizeWarehouseSettings(currentSettings);
-        assertDomainProofPayload('settings', currentSettings as unknown as Record<string, unknown>);
-
-        for (let i = 1; i < rows.length; i++) {
-          const row = rows[i];
-          if (!row || row.length < 2 || (!row[0] && !row[1])) { skippedCount++; continue; }
-          const code = String(row[0] || '').trim() || `MAT-${Math.floor(1000 + Math.random() * 9000)}`;
-          const name = String(row[1] || '').trim();
-          if (!name) { skippedCount++; errorLines.push(`السطر ${i + 1}: اسم الصنف مفقود`); continue; }
-
-          const category = String(row[2] || 'غير مصنف').trim();
-          const unit = String(row[3] || 'وحدة').trim();
-          const safeStockStr = String(row[4] || '0');
-          const safeStockLimit = parseFloat(safeStockStr) || 0;
-          const currentStockStr = String(row[5] || '0');
-          const currentStock = parseFloat(currentStockStr) || 0;
-          const storageLocation = String(row[6] || 'المخزن الرئيسي').trim();
-          const note = String(row[7] || "").trim();
-          const manufacturer = String(row[8] || "").trim();
-          const mfgDate = row[9] ? parseExcelDate(row[9]) : "";
-          const expDate = row[10] ? parseExcelDate(row[10]) : "";
-          const hazardLevel = String(row[11] || "").trim();
-          
-          const isPesticide = code.toUpperCase().startsWith('PES') || category.includes('مبيد') || name.includes('مبيد');
-          const itemType = isPesticide ? 'pesticide' : 'material';
-
-          if (!existingCategories.has(category)) { 
-            existingCategories.add(category); 
-            currentSettings.categories.push({ name: category, prefix: isPesticide ? "PES" : "MAT", startRange: 1000, endRange: 1999 }); 
-            settingsChanged = true; 
-          }
-          if (!existingStorehouses.has(storageLocation)) { 
-            existingStorehouses.add(storageLocation); 
-            currentSettings.storehouses.push(storageLocation); 
-            settingsChanged = true; 
-          }
-          if (!existingUnits.has(unit)) { 
-            existingUnits.add(unit); 
-            currentSettings.units.push(unit); 
-            settingsChanged = true; 
-          }
-
-          const existingItem = existingMaterials.find(m => m.code.toLowerCase() === code.toLowerCase() || m.name.toLowerCase() === name.toLowerCase());
-
-          const itemData: any = {
-            id: existingItem ? existingItem.id : ('mat-' + Math.random().toString(36).substr(2, 9)),
-            code, name, type: itemType, category, unit, minimumStock: safeStockLimit, currentStock: existingItem ? existingItem.currentStock : currentStock, storageLocation, notes: note,
-            createdAt: existingItem ? existingItem.createdAt : new Date().toISOString(), 
-            updatedAt: new Date().toISOString()
-          };
-
-          if (isPesticide) {
-            itemData.manufacturer = manufacturer; itemData.productionDate = mfgDate; itemData.expiryDate = expDate; itemData.hazardLevel = hazardLevel as any;
-          }
-
-          await dataService.saveMaterial(itemData);
-          
-          if (existingItem) {
-            updatedCount++;
-          } else {
-            importedCount++;
-            if (currentStock > 0) {
-              const txData = { 
-                id: 'tx-' + Math.random().toString(36).substr(2, 9), 
-                date: new Date().toISOString().split('T')[0], 
-                itemType: itemType, 
-                itemId: itemData.id, 
-                itemCode: itemData.code, 
-                itemName: itemData.name, 
-                itemCategory: itemData.category, 
-                storehouse: storageLocation, 
-                transactionType: 'افتتاحي' as any, 
-                quantity: currentStock, 
-                unit: itemData.unit, 
-                stockBefore: 0, 
-                stockAfter: currentStock, 
-                executedBy: dataService.getCurrentUser().fullName || 'استيراد إكسل', 
-                supplierOrReceiver: 'رصيد مخزني أولي (رصيد افتتاحي)', 
-                notes: 'تم توليده تلقائياً من القالب الجماعي كتمهيد رصيد افتتاحي', 
-                createdAt: new Date().toISOString(), 
-                updatedAt: new Date().toISOString() 
-              };
-              await dataService.saveTransaction(txData as any);
-            }
-          }
-        }
-
-        if (settingsChanged) await dataService.saveSettings(currentSettings);
-        await dataService.logAudit(
-          'استيراد إكسل جماعي للأصناف',
-          `تم استيراد ${importedCount} أصناف جديدة وتحديث ${updatedCount} أصناف وتخطي ${skippedCount} أسطر من ملف الإكسل.`,
-          'إعدادات'
-        );
-
-        let completionMsg = `تم تحليل واستيراد الأصناف الجماعية بنجاح! تم إضافة (${importedCount}) أصناف جديدة، وتحديث (${updatedCount}) أصناف، وتخطي (${skippedCount}) سطور.\n`;
-        if (errorLines.length > 0) completionMsg += `ملاحظات: ` + errorLines.slice(0, 3).join(' | ');
-        setSuccessMsg(completionMsg); if (errorLines.length > 0) setErrorMsg('تم تخطي بعض الأسطر لعدم استيفاء البيانات، يرجى مراجعتها.');
-        setTimeout(() => { setIsImporting(false); window.location.reload(); }, 1500);
-      } catch (err: any) { setIsImporting(false); setErrorMsg(`فشل استيراد الأصناف: ${productLimitMessage(err)}`);  }
-    };
-    reader.readAsArrayBuffer(file);
+  const readImportRows = async (file: File): Promise<unknown[][]> => {
+    if (file.size > 2 * 1024 * 1024) throw new Error('حجم الملف أكبر من 2 ميجابايت؛ قسّمه قبل الاستيراد.');
+    const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[workbook.SheetNames[0]], { header: 1, defval: '' });
+    if (rows.length < 2) throw new Error('الملف لا يحتوي على صفوف بيانات.');
+    if (rows.length > 451) throw new Error('الملف يتجاوز 450 صفًا؛ قسّمه قبل الاستيراد.');
+    return rows;
   };
 
-  const handleImportTransactionsCSV = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    setIsImportingTx(true);
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      try {
-        const data = e.target?.result as ArrayBuffer;
-        const workbook = XLSX.read(data, { type: 'array' });
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
-        const rows = XLSX.utils.sheet_to_json<any[]>(worksheet, { header: 1, defval: "" });
-        
-        if (rows.length < 2) {
-          setErrorMsg('الملف فارغ أو لا يحتوي على صفوف بيانات.');
-          
-          setIsImportingTx(false);
-          return;
-        }
-
-        let importedCount = 0;
-        let skippedCount = 0;
-        const errorLines: string[] = [];
-
-        let currentSettings = structuredClone(dataService.getSettings());
-        const existingUnits = new Set(currentSettings.units);
-        const existingStorehouses = new Set(currentSettings.storehouses);
-        const existingCategories = new Set(currentSettings.categories.map((c: any) => c.name));
-        let settingsChanged = false;
-
-        const materialsForPreflight = dataService.getMaterials();
-        for (let i = 1; i < rows.length; i++) {
-          const row = rows[i];
-          if (!row || row.length < 3) continue;
-          const itemCode = String(row[0] || '').trim();
-          const type = String(row[1] || '').trim().toLowerCase();
-          const quantity = Number.parseFloat(String(row[2] || '0'));
-          const knownType = ['وارد', 'ادخال', 'إدخال', 'تزويد', 'صادر', 'اخراج', 'إخراج', 'صرف',
-            'توزيع', 'مستهلك', 'اتلاف', 'إتلاف', 'استهلاك', 'تحويل', 'تسوية', 'افتتاحي', 'أولي', 'اولية']
-            .some(value => type.includes(value.toLowerCase()));
-          if (!itemCode || !knownType || !Number.isFinite(quantity) || quantity <= 0) continue;
-          const targetItem = materialsForPreflight.find(material =>
-            material.code.toLowerCase() === itemCode.toLowerCase()
-            || material.name.toLowerCase() === itemCode.toLowerCase()
-            || material.id === itemCode
-          );
-          if (!targetItem) continue;
-          const storehouse = String(row[3] || targetItem.storageLocation || 'المخزن الرئيسي').trim();
-          if (targetItem.unit && !existingUnits.has(targetItem.unit)) {
-            if (currentSettings.units.length >= PRODUCT_LIMITS.units) {
-              throw new Error(`تم بلوغ حد وحدات القياس المعتمد (${PRODUCT_LIMITS.units}) قبل بدء الاستيراد.`);
-            }
-            existingUnits.add(targetItem.unit);
-            currentSettings.units.push(targetItem.unit);
-            settingsChanged = true;
-          }
-          if (storehouse && !existingStorehouses.has(storehouse)) {
-            currentSettings = addOrReactivateWarehouse(currentSettings, storehouse);
-            existingStorehouses.add(storehouse);
-            settingsChanged = true;
-          }
-          if (targetItem.category && !existingCategories.has(targetItem.category)) {
-            if (currentSettings.categories.length >= PRODUCT_LIMITS.categories) {
-              throw new Error(`تم بلوغ حد التصنيفات المعتمد (${PRODUCT_LIMITS.categories}) قبل بدء الاستيراد.`);
-            }
-            existingCategories.add(targetItem.category);
-            currentSettings.categories.push({
-              name: targetItem.category,
-              prefix: targetItem.type === 'pesticide' ? 'PES' : 'MAT',
-              startRange: 1000,
-              endRange: 1999,
-            });
-            settingsChanged = true;
-          }
-          const partnerName = String(row[4] || '').trim();
-          const genericPartner = !partnerName
-            || partnerName === 'جهة موردة'
-            || partnerName === 'جهة مستلمة'
-            || partnerName === 'رصيد مخزني أولي (رصيد افتتاحي)'
-            || partnerName.includes('جرد');
-          if (!genericPartner && !currentSettings.partners.some(partner => partner.name === partnerName)) {
-            if (currentSettings.partners.length >= PRODUCT_LIMITS.partners) {
-              throw new Error(`تم بلوغ حد الجهات الشريكة المعتمد (${PRODUCT_LIMITS.partners}) قبل بدء الاستيراد.`);
-            }
-            currentSettings.partners.push({
-              id: `partner-import-${i}`,
-              name: partnerName,
-              type: type.includes('وارد') ? 'مورد' : 'جهة مستلمة',
-            });
-            settingsChanged = true;
-          }
-        }
-        currentSettings = canonicalizeWarehouseSettings(currentSettings);
-        assertDomainProofPayload('settings', currentSettings as unknown as Record<string, unknown>);
-
-        for (let i = 1; i < rows.length; i++) {
-          const row = rows[i];
-          if (!row || row.length < 3 || (!row[0] && !row[1] && !row[2])) {
-            skippedCount++;
-            continue;
-          }
-
-          const itemCode = String(row[0] || '').trim();
-          let txTypeRaw = String(row[1] || '').trim(); 
-          const qtyValue = parseFloat(String(row[2])) || 0;
-          
-          if (!itemCode) {
-            skippedCount++;
-            errorLines.push(`السطر ${i + 1}: كود الصنف مفقود`);
-            continue;
-          }
-
-          const existingMaterials = dataService.getMaterials();
-          const targetItem = existingMaterials.find(m => m.code.toLowerCase() === itemCode.toLowerCase() || m.name.toLowerCase() === itemCode.toLowerCase() || m.id === itemCode);
-          if (!targetItem) {
-            skippedCount++;
-            errorLines.push(`السطر ${i + 1}: الصنف/الكود (${itemCode}) غير مسجل بالأصناف!`);
-            continue;
-          }
-
-          // Normalize transaction type
-          let txTypeStr: any = 'وارد';
-          const lowerType = txTypeRaw.toLowerCase();
-          if (lowerType.includes('وارد') || lowerType.includes('ادخال') || lowerType.includes('إدخال') || lowerType.includes('تزويد')) {
-            txTypeStr = 'وارد';
-          } else if (lowerType.includes('صادر') || lowerType.includes('اخراج') || lowerType.includes('إخراج') || lowerType.includes('صرف') || lowerType.includes('توزيع')) {
-            txTypeStr = 'صادر';
-          } else if (lowerType.includes('مستهلك') || lowerType.includes('اتلاف') || lowerType.includes('إتلاف') || lowerType.includes('استهلاك')) {
-            txTypeStr = 'مستهلك';
-          } else if (lowerType.includes('تحويل')) {
-            txTypeStr = 'تحويل';
-          } else if (lowerType.includes('تسوية')) {
-            txTypeStr = 'تسوية';
-          } else if (lowerType.includes('افتتاحي') || lowerType.includes('أولي') || lowerType.includes('اولية')) {
-            txTypeStr = 'افتتاحي';
-          } else {
-            skippedCount++;
-            errorLines.push(`السطر ${i + 1}: نوع الحركة (${txTypeRaw}) غير معروف`);
-            continue;
-          }
-
-          if (qtyValue <= 0) {
-            skippedCount++;
-            errorLines.push(`السطر ${i + 1}: الكمية (${qtyValue}) سالبة أو صفر!`);
-            continue;
-          }
-
-          const storehouse = String(row[3] || targetItem.storageLocation || "المخزن الرئيسي").trim();
-          const supplierOrReceiver = String(row[4] || "").trim() || (txTypeStr === 'وارد' ? 'جهة موردة' : 'جهة مستلمة');
-          const dateStr = row[5] ? parseExcelDate(row[5]) : new Date().toISOString().split("T")[0];
-          const notesValue = String(row[6] || "").trim() || "استيراد حركة إكسل جماعي";
-          
-          if (targetItem.unit && !existingUnits.has(targetItem.unit)) {
-             existingUnits.add(targetItem.unit);
-             currentSettings.units.push(targetItem.unit);
-             settingsChanged = true;
-          }
-          if (storehouse && !existingStorehouses.has(storehouse)) {
-             existingStorehouses.add(storehouse);
-             currentSettings.storehouses.push(storehouse);
-             settingsChanged = true;
-          }
-          if (targetItem.category && !existingCategories.has(targetItem.category)) {
-             existingCategories.add(targetItem.category);
-             currentSettings.categories.push({ name: targetItem.category, prefix: targetItem.type === 'pesticide' ? "PES" : "MAT", startRange: 1000, endRange: 1999 });
-             settingsChanged = true;
-          }
-
-          if (supplierOrReceiver && supplierOrReceiver !== 'جهة موردة' && supplierOrReceiver !== 'جهة مستلمة' && supplierOrReceiver !== 'رصيد مخزني أولي (رصيد افتتاحي)' && !supplierOrReceiver.includes('جرد')) {
-             if (!currentSettings.partners.some(p => p.name === supplierOrReceiver)) {
-                currentSettings.partners.push({
-                   id: 'partner-' + Math.random().toString(36).substr(2, 9),
-                   name: supplierOrReceiver,
-                   type: txTypeStr === 'وارد' ? 'مورد' : 'جهة مستلمة'
-                });
-                settingsChanged = true;
-             }
-          }
-
-          const id = 'tx-imported-' + Math.random().toString(36).substr(2, 9);
-          const nowStr = new Date().toISOString();
-
-          const txData = {
-            id,
-            date: dateStr,
-            itemType: targetItem.type,
-            itemId: targetItem.id,
-            itemCode: targetItem.code,
-            itemName: targetItem.name,
-            itemCategory: targetItem.category,
-            storehouse: storehouse,
-            transactionType: txTypeStr,
-            quantity: qtyValue,
-            unit: targetItem.unit,
-            executedBy: dataService.getCurrentUser().fullName || 'استيراد إكسل',
-            supplierOrReceiver,
-            notes: notesValue,
-            createdAt: nowStr,
-            updatedAt: nowStr
-          };
-
-          const res = await dataService.saveTransaction(txData as any);
-          if (res.success) {
-            importedCount++;
-          } else {
-            skippedCount++;
-            errorLines.push(`السطر ${i + 1}: ${presentResultMessage(res.message, 'import')}`);
-          }
-        }
-        
-        if (settingsChanged) {
-          await dataService.saveSettings(currentSettings);
-        }
-
-        await dataService.logAudit(
-          'استيراد إكسل جماعي للحركات',
-          `تم استيراد ${importedCount} حركات جديدة وتخطي ${skippedCount} أسطر من ملف الإكسل.`,
-          'إعدادات'
-        );
-
-        let completionMsg = `تحليل واستيراد المعاملات الجماعية تم بنجاح! تم رصد وتسجيل (${importedCount}) حركات جديدة وتخطي (${skippedCount}) سطور.\n`;
-        if (errorLines.length > 0) {
-          completionMsg += `أخطاء: ` + errorLines.slice(0, 3).join(' | ');
-        }
-
-        setSuccessMsg(completionMsg);
-        if (errorLines.length > 0) {
-          setErrorMsg('تم تخطي بعض الأسطر لعدم تطابق القيود، يرجى مراجعتها.');
-        } else {
-          
-        }
-
-        setTimeout(() => {
-          setIsImportingTx(false);
-          window.location.reload();
-        }, 1500);
-
-      } catch (err: any) {
-        setIsImportingTx(false);
-        setErrorMsg(`فشل استيراد الحركات: ${productLimitMessage(err) || 'يرجى مراجعة الصياغة والتأكد من أنه ملف إكسل صحيح.'}`);
-        
+  const handleImportItemsCSV = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]; event.target.value = ''; if (!file) return;
+    setIsImporting(true); setErrorMsg(null); setSuccessMsg(null);
+    try {
+      const rows = await readImportRows(file);
+      const cfg = dataService.getSettings(); const existing = dataService.getMaterials();
+      const items: Material[] = []; const openings: InventoryTransaction[] = []; const codes = new Set<string>();
+      let added = 0; let updated = 0;
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i]; if (!row.some(v => String(v).trim())) continue;
+        try {
+          const cell = (n: number) => String(row[n] ?? '').trim();
+          const code = cell(0); const name = cell(1); const category = cell(2); const unit = cell(3);
+          if (!code || !name) throw new Error('كود الصنف واسمه مطلوبان.');
+          const key = code.toLowerCase(); if (codes.has(key)) throw new Error('كود الصنف مكرر داخل الملف.'); codes.add(key);
+          const warehouse = getStorehouseByReference(cfg, cell(6), false);
+          if (!warehouse || !cfg.units.includes(unit) || !cfg.categories.some(c => c.name === category)) throw new Error('عرّف التصنيف والوحدة والمستودع الفعال في الإعدادات قبل الاستيراد.');
+          const minimumStock = importNumber(row[4], 'حد الأمان'); const opening = importNumber(row[5], 'الرصيد الافتتاحي');
+          const old = existing.find(m => m.code.trim().toLowerCase() === key);
+          if (old && opening !== 0) throw new Error('تحديث صنف موجود يتطلب صفرًا في خانة الرصيد الافتتاحي؛ استخدم تسوية الجرد لتعديل الرصيد.');
+          const now = new Date().toISOString();
+          const type = old?.type || (code.toUpperCase().startsWith('PES') || category.includes('مبيد') ? 'pesticide' : 'material');
+          const item = { ...old, id: old?.id || `mat-${crypto.randomUUID()}`, code, name, category, unit, type, minimumStock,
+            initialStock: old?.initialStock || 0, currentStock: old?.currentStock || 0,
+            primaryStorehouseId: warehouse.id, storageLocation: warehouse.name, notes: cell(7),
+            createdAt: old?.createdAt || now, updatedAt: now,
+            ...(type === 'pesticide' ? { manufacturer: cell(8), productionDate: cell(9) ? importDate(row[9]) : '', expiryDate: cell(10) ? importDate(row[10]) : '', hazardLevel: cell(11) } : {}),
+          } as Material;
+          items.push(item); if (old) updated++; else added++;
+          if (opening > 0) openings.push({ id: `tx-${crypto.randomUUID()}`, date: now.slice(0, 10), itemId: item.id,
+            itemType: item.type, itemCode: code, itemName: name, itemCategory: category, unit, quantity: opening,
+            transactionType: 'افتتاحي', storehouseId: warehouse.id, storehouse: warehouse.name, stockBefore: 0, stockAfter: opening,
+            executedBy: dataService.getCurrentUser().fullName, supplierOrReceiver: 'رصيد افتتاحي من استيراد الأصناف',
+            notes: 'استيراد Excel ذري', createdAt: now, updatedAt: now });
+        } catch (e) { throw new Error(`السطر ${i + 1}: ${e instanceof Error ? e.message : 'بيانات غير صالحة'}`); }
       }
-    };
-    reader.readAsArrayBuffer(file);
+      await dataService.importMaterialsBatch(items, openings);
+      setSuccessMsg(`اعتمد الخادم الدفعة كاملة: ${added} صنف جديد و${updated} تحديث و${openings.length} رصيد افتتاحي.`);
+      setSettings(dataService.getSettings());
+    } catch (e) { setErrorMsg(`استيراد الأصناف: ${productLimitMessage(e)}`); }
+    finally { setIsImporting(false); }
+  };
+
+  const handleImportTransactionsCSV = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]; event.target.value = ''; if (!file) return;
+    setIsImportingTx(true); setErrorMsg(null); setSuccessMsg(null);
+    try {
+      const rows = await readImportRows(file); const cfg = dataService.getSettings();
+      const materials = dataService.getMaterials(); const existing = new Map(dataService.getTransactions().map(t => [t.id, t]));
+      const transactions: InventoryTransaction[] = []; const occurrences = new Map<string, number>(); let repeated = 0;
+      const types: Record<string, InventoryTransaction['transactionType']> = { 'وارد': 'وارد', 'إدخال': 'وارد', 'ادخال': 'وارد', 'تزويد': 'وارد', 'صادر': 'صادر', 'إخراج': 'صادر', 'اخراج': 'صادر', 'صرف': 'صادر', 'توزيع': 'صادر', 'مستهلك': 'مستهلك', 'إتلاف': 'مستهلك', 'اتلاف': 'مستهلك', 'استهلاك': 'مستهلك', 'افتتاحي': 'افتتاحي' };
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i]; if (!row.some(v => String(v).trim())) continue;
+        try {
+          const cell = (n: number) => String(row[n] ?? '').trim();
+          const item = materials.find(m => m.code.trim().toLowerCase() === cell(0).toLowerCase());
+          if (!item) throw new Error('كود الصنف غير مسجل.');
+          const type = types[cell(1)]; if (!type) throw new Error('نوع الحركة غير مدعوم في هذا القالب؛ استخدم المسار المخصص للتحويل والتسوية.');
+          const quantity = importNumber(row[2], 'الكمية'); if (quantity <= 0) throw new Error('الكمية يجب أن تكون أكبر من صفر.');
+          const warehouse = getStorehouseByReference(cfg, cell(3), false); if (!warehouse) throw new Error('المستودع غير موجود أو معطل.');
+          const date = importDate(row[5]); const supplierOrReceiver = cell(4); const notes = cell(6);
+          const fields = [item.id, type, quantity, warehouse.id, supplierOrReceiver, date, notes];
+          const key = JSON.stringify(fields); const occurrence = occurrences.get(key) || 0; occurrences.set(key, occurrence + 1);
+          const id = await importTransactionId(fields, occurrence);
+          if (existing.has(id)) { repeated++; continue; }
+          const now = new Date().toISOString();
+          transactions.push({ id, date, itemId: item.id, itemType: item.type, itemCode: item.code, itemName: item.name,
+            itemCategory: item.category, unit: item.unit, transactionType: type, quantity, storehouseId: warehouse.id,
+            storehouse: warehouse.name, stockBefore: 0, stockAfter: 0, executedBy: dataService.getCurrentUser().fullName,
+            supplierOrReceiver, notes, createdAt: now, updatedAt: now });
+        } catch (e) { throw new Error(`السطر ${i + 1}: ${e instanceof Error ? e.message : 'بيانات غير صالحة'}`); }
+      }
+      if (transactions.length) {
+        if (transactions.length > 449) throw new Error('الحد 449 حركة في دفعة واحدة؛ قسّم الملف قبل الاستيراد.');
+        const result = await dataService.saveTransactionBatch(transactions);
+        if (!result.success) throw new Error(presentResultMessage(result.message, 'import'));
+      } else if (!repeated) throw new Error('لا توجد حركات صالحة في الملف.');
+      setSuccessMsg(`اعتمدت ${transactions.length} حركة في دفعة واحدة؛ ${repeated} حركة من استيراد مطابق سبق تسجيله.`);
+      setSettings(dataService.getSettings());
+    } catch (e) { setErrorMsg(`استيراد الحركات: ${productLimitMessage(e)}`); }
+    finally { setIsImportingTx(false); }
   };
 
   // Local JSON Backup Export v2.0
@@ -1212,9 +876,12 @@ export default function Settings() {
         const check = await validateBackup(JSON.parse(String(e.target?.result || '')));
         if (!check.success || !check.backup) { setErrorMsg(`تم رفض النسخة: ${check.errors.join(' ')}`); return; }
         const m = check.backup.manifest;
-        const ok = window.confirm(`معاينة النسخة الاحتياطية\nالتاريخ: ${new Date(m.exportedAt).toLocaleString('ar-EG')}\nالأصناف: ${m.counts.materials}\nالحركات: ${m.counts.transactions}\nالمستخدمون: ${m.counts.users}\nالمستودعات: ${m.counts.storehouses}\nالمستودع المركزي: ${m.selectedStorehouse === 'all' ? 'جميع المستودعات' : m.selectedStorehouse}\n\nهل تريد متابعة الاستعادة الآمنة؟`);
+        const preview = await dataService.previewBackupRestore(check.backup);
+        const labels: Record<string, string> = { materials: 'الأصناف', transactions: 'الحركات', users: 'ملفات المستخدمين', generator_logs: 'قراءات المولد' };
+        const differences = Object.entries(preview.diffs).map(([key, diff]) => `${labels[key] || key}: إضافة ${diff.added}، إزالة ${diff.removed}، اختلاف ${diff.changed}`).join('\n');
+        const ok = window.confirm(`معاينة الاستعادة مقابل الخادم\nالتاريخ: ${new Date(m.exportedAt).toLocaleString('ar-EG')}\n${differences}\nسيُستبدل مخزون التطبيق وإعداداته وملفات مستخدميه بالكامل بعد التحقق. تبقى حسابات المصادقة وكلمات المرور وسجل التدقيق الحالي. الدخول بعدها بالحساب نفسه وكلمة مروره الحالية. هل تعتمد الاستعادة؟`);
         if (!ok) return;
-        const result = await dataService.restoreBackupData(check.backup);
+        const result = await dataService.restoreBackupData(check.backup, preview);
         if (!result.success) { setErrorMsg(presentResultMessage(result.message, 'user-management')); return; }
         setSuccessMsg(result.message + ' سيتم إعادة تحميل الصفحة.'); setTimeout(() => window.location.reload(), 1500);
       } catch (err: any) { setErrorMsg(`تعذر قراءة النسخة: ${safeUserMessage(err, 'import', { allowAppText: true, fallback: 'الملف ليس JSON صالحاً أو تعذرت معالجته.' })}`); }
@@ -1601,8 +1268,8 @@ export default function Settings() {
       setDriveStep(5);
       dataService.recordGoogleDriveBackupTime();
       await dataService.logAudit(
-        'نسخ احتياطي سحابي حقيقي',
-        'تمت مزامنة وحفظ نسخة كاملة من بيانات النظام في قاعدة بيانات Supabase السحابية بنجاح',
+        'دمج بيانات الجهاز بالسحابة',
+        'اعتُمد دمج السجلات التشغيلية والإعدادات في Supabase. هذا الإجراء ليس نسخة احتياطية مستقلة ولا استعادة كاملة.',
         'إعدادات'
       );
     } catch (err: any) {
@@ -3348,7 +3015,7 @@ export default function Settings() {
                     مسح البيانات المحلية على هذا الجهاز (دون كتابة سحابية)
                   </Typography>
                   <Typography variant="body2" sx={{ color: '#7c2d12', mt: 0.5, fontFamily: '"Cairo", sans-serif' }}>
-                    يمسح هذا الخيار جميع السجلات المحلية وطابور المزامنة والملفات المؤقتة على هذا الجهاز فقط ويعيد التوجيه لشاشة تسجيل الدخول، دون إرسال أو حذف أي بيانات في السحابة.
+                    يمسح هذا الخيار السجلات المحلية والملفات المؤقتة على هذا الجهاز فقط بعد التأكد من خلو المزامنة من الأعمال المعلقة ويعيد التوجيه لشاشة تسجيل الدخول، دون إرسال أو حذف أي بيانات في السحابة.
                   </Typography>
                 </Box>
               </Box>
@@ -3555,7 +3222,7 @@ export default function Settings() {
         </DialogTitle>
         <DialogContent sx={{ textAlign: 'start' }}>
           <DialogContentText sx={{ fontFamily: '"Cairo", sans-serif', color: '#475569', fontSize: '0.9rem', mb: 2, mt: 1, lineHeight: 1.7 }}>
-            سيؤدي هذا الإجراء إلى حذف جميع البيانات المخزنة محلياً على هذا الجهاز فقط (السجلات المحلية، طابور المزامنة، والملفات المؤقتة) وإعادة التوجيه لشاشة تسجيل الدخول دون إرسال أو حذف أي بيانات في السحابة.
+            سيؤدي هذا الإجراء إلى حذف بيانات هذا الجهاز المحلية فقط بعد التأكد من خلو المزامنة من الأعمال المعلقة. يُمنع المسح عند وجود عمل معلق، ثم تعود إلى شاشة الدخول دون حذف أي بيانات سحابية.
           </DialogContentText>
           <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 1, color: '#334155', fontFamily: '"Cairo", sans-serif' }}>
             الرجاء كتابة كلمة "مسح" في الحقل أدناه لتأكيد العملية:
@@ -3616,6 +3283,7 @@ export default function Settings() {
           ⚠️ تأكيد إعادة ضبط هذا الجهاز محلياً فقط
         </DialogTitle>
         <DialogContent sx={{ textAlign: 'start' }}>
+          {resetDialogOpen && <Alert severity="warning" sx={{ mb: 2 }}>معاينة الجهاز: {dataService.getMaterials().length} صنف، {dataService.getTransactions().length} حركة، {dataService.getGeneratorLogs().length} قراءة مولد. يُمنع الإجراء عند وجود عمل معلق. الدخول بعده بالحساب نفسه وكلمة مروره الحالية.</Alert>}
           <DialogContentText sx={{ fontFamily: '"Cairo", sans-serif', color: '#475569', fontSize: '0.9rem', mb: 3, mt: 1, lineHeight: 1.7 }}>
             أنت على وشك تنفيذ عملية <strong>محلية على هذا الجهاز</strong> ولا يمكن التراجع عنها محلياً. هذه العملية <strong>لا تمسح البيانات السحابية</strong> الخاصة بالمستأجر.
             <br />
@@ -3853,6 +3521,7 @@ export default function Settings() {
           تأكيد الترحيل الفعلي
         </DialogTitle>
         <DialogContent>
+          {resetDialogOpen && <Alert severity="warning" sx={{ mb: 2 }}>معاينة الجهاز: {dataService.getMaterials().length} صنف، {dataService.getTransactions().length} حركة، {dataService.getGeneratorLogs().length} قراءة مولد. السحابة وحساب الدخول يبقيان كما هما، ويُمنع الإجراء عند وجود عمل معلق.</Alert>}
           <Typography variant="body2" sx={{ mb: 2, fontFamily: '"Cairo", sans-serif', color: '#475569', lineHeight: 1.8 }}>
             أنت على وشك ترحيل البيانات إلى قاعدة البيانات السحابية. لا يمكن التراجع عن هذه الخطوة.
           </Typography>

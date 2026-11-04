@@ -1,14 +1,18 @@
 import type { DurableSyncMutation } from './syncCoordinator';
 
-export interface SyncQueueStore {
-  insert(mutation: DurableSyncMutation): Promise<boolean>;
-  put(mutation: DurableSyncMutation): Promise<void>;
-  get(id: string): Promise<DurableSyncMutation | undefined>;
+// The existing object store holds transport-tagged records; its ordering and leases
+// do not depend on a transport's collection union. No database version change.
+type QueueRecord = Omit<DurableSyncMutation, 'operations'> & { operations: unknown[] };
+
+export interface SyncQueueStore<T extends QueueRecord = DurableSyncMutation> {
+  insert(mutation: T): Promise<boolean>;
+  put(mutation: T): Promise<void>;
+  get(id: string): Promise<T | undefined>;
   delete(id: string): Promise<void>;
-  listForUser(userId: string): Promise<DurableSyncMutation[]>;
+  listForUser(userId: string): Promise<T[]>;
   clearForUser(userId: string): Promise<number>;
-  claimNext(userId: string, now: number, ownerId: string, leaseMs: number): Promise<DurableSyncMutation | undefined>;
-  updateClaimed(mutation: DurableSyncMutation, ownerId: string): Promise<boolean>;
+  claimNext(userId: string, now: number, ownerId: string, leaseMs: number): Promise<T | undefined>;
+  updateClaimed(mutation: T, ownerId: string): Promise<boolean>;
   deleteClaimed(id: string, ownerId: string): Promise<boolean>;
 }
 
@@ -29,7 +33,7 @@ const transactionDone = (transaction: IDBTransaction): Promise<void> =>
     transaction.onerror = () => reject(transaction.error ?? new Error('INDEXEDDB_TRANSACTION_FAILED'));
   });
 
-export class IndexedDbSyncQueueStore implements SyncQueueStore {
+export class IndexedDbSyncQueueStore<T extends QueueRecord = DurableSyncMutation> implements SyncQueueStore<T> {
   private dbPromise: Promise<IDBDatabase> | null = null;
 
   constructor(private readonly indexedDb: IDBFactory | undefined = globalThis.indexedDB) {}
@@ -64,7 +68,7 @@ export class IndexedDbSyncQueueStore implements SyncQueueStore {
     return this.dbPromise;
   }
 
-  async insert(mutation: DurableSyncMutation): Promise<boolean> {
+  async insert(mutation: T): Promise<boolean> {
     const db = await this.open();
     return new Promise((resolve, reject) => {
       const transaction = db.transaction(MUTATIONS_STORE, 'readwrite');
@@ -83,19 +87,19 @@ export class IndexedDbSyncQueueStore implements SyncQueueStore {
     });
   }
 
-  async put(mutation: DurableSyncMutation): Promise<void> {
+  async put(mutation: T): Promise<void> {
     const db = await this.open();
     const transaction = db.transaction(MUTATIONS_STORE, 'readwrite');
     transaction.objectStore(MUTATIONS_STORE).put(mutation);
     await transactionDone(transaction);
   }
 
-  async get(id: string): Promise<DurableSyncMutation | undefined> {
+  async get(id: string): Promise<T | undefined> {
     const db = await this.open();
     const transaction = db.transaction(MUTATIONS_STORE, 'readonly');
     const result = await requestAsPromise(transaction.objectStore(MUTATIONS_STORE).get(id));
     await transactionDone(transaction);
-    return result as DurableSyncMutation | undefined;
+    return result as T | undefined;
   }
 
   async delete(id: string): Promise<void> {
@@ -105,13 +109,21 @@ export class IndexedDbSyncQueueStore implements SyncQueueStore {
     await transactionDone(transaction);
   }
 
-  async listForUser(userId: string): Promise<DurableSyncMutation[]> {
+  async countAll(): Promise<number> {
+    const db = await this.open();
+    const transaction = db.transaction(MUTATIONS_STORE, 'readonly');
+    const count = await requestAsPromise(transaction.objectStore(MUTATIONS_STORE).count());
+    await transactionDone(transaction);
+    return count;
+  }
+
+  async listForUser(userId: string): Promise<T[]> {
     const db = await this.open();
     const transaction = db.transaction(MUTATIONS_STORE, 'readonly');
     const index = transaction.objectStore(MUTATIONS_STORE).index('by_user');
     const result = await requestAsPromise(index.getAll(IDBKeyRange.only(userId)));
     await transactionDone(transaction);
-    return (result as DurableSyncMutation[]).sort(compareMutations);
+    return (result as T[]).sort(compareMutations);
   }
 
   async clearForUser(userId: string): Promise<number> {
@@ -134,15 +146,15 @@ export class IndexedDbSyncQueueStore implements SyncQueueStore {
     });
   }
 
-  async claimNext(userId: string, now: number, ownerId: string, leaseMs: number): Promise<DurableSyncMutation | undefined> {
+  async claimNext(userId: string, now: number, ownerId: string, leaseMs: number): Promise<T | undefined> {
     const db = await this.open();
     return new Promise((resolve, reject) => {
       const transaction = db.transaction(MUTATIONS_STORE, 'readwrite');
       const store = transaction.objectStore(MUTATIONS_STORE);
       const request = store.index('by_user').getAll(IDBKeyRange.only(userId));
-      let claimed: DurableSyncMutation | undefined;
+      let claimed: T | undefined;
       request.onsuccess = () => {
-        const candidates = (request.result as DurableSyncMutation[])
+        const candidates = (request.result as T[])
           .filter(mutation => mutation.status === 'pending' || mutation.status === 'retrying' || mutation.status === 'processing')
           .sort(compareMutations);
         const next = candidates[0];
@@ -165,7 +177,7 @@ export class IndexedDbSyncQueueStore implements SyncQueueStore {
     });
   }
 
-  async updateClaimed(mutation: DurableSyncMutation, ownerId: string): Promise<boolean> {
+  async updateClaimed(mutation: T, ownerId: string): Promise<boolean> {
     const db = await this.open();
     return new Promise((resolve, reject) => {
       const transaction = db.transaction(MUTATIONS_STORE, 'readwrite');
@@ -173,7 +185,7 @@ export class IndexedDbSyncQueueStore implements SyncQueueStore {
       const request = store.get(mutation.id);
       let updated = false;
       request.onsuccess = () => {
-        const current = request.result as DurableSyncMutation | undefined;
+        const current = request.result as T | undefined;
         if (!current || current.leaseOwner !== ownerId) return;
         store.put(mutation);
         updated = true;
@@ -193,7 +205,7 @@ export class IndexedDbSyncQueueStore implements SyncQueueStore {
       const request = store.get(id);
       let deleted = false;
       request.onsuccess = () => {
-        const current = request.result as DurableSyncMutation | undefined;
+        const current = request.result as T | undefined;
         if (!current || current.leaseOwner !== ownerId) return;
         store.delete(id);
         deleted = true;
@@ -206,5 +218,5 @@ export class IndexedDbSyncQueueStore implements SyncQueueStore {
   }
 }
 
-export const compareMutations = (left: DurableSyncMutation, right: DurableSyncMutation): number =>
+export const compareMutations = (left: QueueRecord, right: QueueRecord): number =>
   left.createdAt - right.createdAt || left.id.localeCompare(right.id);

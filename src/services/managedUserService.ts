@@ -1,3 +1,5 @@
+import { enqueueInventoryMutation, InventoryPendingError, listInventoryOutbox } from './supabaseOutbox';
+import { fingerprintDocument } from '../utils/syncProtocol';
 import { SystemUser } from '../types';
 import { safeResultMessage } from './safeUserMessage';
 import { buildAuditLog } from '../utils/auditPolicy';
@@ -112,7 +114,18 @@ const writeSecurityAudit = async (targetUid: string, details: string): Promise<v
       templateId: 'security_change',
     },
   });
-  await supabaseDb.upsertDoc('audit_logs', audit.id, audit as unknown as Record<string, unknown>).catch(() => {});
+  await supabaseDb.appendAuditLogs([{ id: audit.id, payload: audit as unknown as Record<string, unknown> }]).catch(() => {});
+};
+
+const persistManagedProfile = async (profile: SystemUser, ownerUid: string, label: string): Promise<void> => {
+  if (getCurrentAuthUser()?.uid !== ownerUid) throw new Error('INVENTORY_SESSION_CHANGED');
+  if ((await listInventoryOutbox()).length) throw new Error('INVENTORY_RESTORE_PENDING_WORK');
+  const previous = await supabaseDb.getDoc<Record<string, unknown>>('users', profile.id);
+  if (getCurrentAuthUser()?.uid !== ownerUid) throw new Error('INVENTORY_SESSION_CHANGED');
+  await enqueueInventoryMutation([{kind:'set',collection:'users',docId:profile.id,
+    value:profile as unknown as Record<string,unknown>, expected:previous
+      ? {kind:'present',fingerprint:fingerprintDocument(previous),exactLegacyPayload:previous} : {kind:'missing'},
+  }], label, `managed-user-${crypto.randomUUID()}`, () => {});
 };
 
 export const inspectManagedRecoveryReviews = async (): Promise<DurableManagedUserMutation[]> => {
@@ -140,6 +153,8 @@ export const createManagedFirebaseUser = async (
   if (!initialPassword || initialPassword.length < 8) {
     return { success: false, message: 'كلمة المرور المؤقتة يجب ألا تقل عن 8 أحرف.' };
   }
+  const ownerUid = getCurrentAuthUser()!.uid;
+  if ((await listInventoryOutbox()).length) return {success:false,message:'عالج الطلبات المحفوظة في لوحة المزامنة قبل إنشاء حساب آخر.'};
   try {
     const email = normalizeEmail(profile.username);
     const createdAuth = await supabaseAdminCreateAuthUser(email, initialPassword, profile.fullName);
@@ -157,14 +172,14 @@ export const createManagedFirebaseUser = async (
     if ('reason' in validation) {
       return { success: false, message: `بيانات المستخدم غير صالحة: ${validation.reason}` };
     }
-    await supabaseDb.upsertDoc('users', createdAuth.uid, validation.user as unknown as Record<string, unknown>);
-    await writeSecurityAudit(createdAuth.uid, `تم إنشاء حساب مستخدم جديد: ${validation.user.fullName} (${validation.user.username})`);
+    await persistManagedProfile(validation.user, ownerUid, 'تثبيت حساب المستخدم وصلاحياته');
     return {
       success: true,
       user: validation.user,
       message: 'تم إنشاء حساب المستخدم وتثبيت صلاحياته في السحابة بنجاح.',
     };
   } catch (error: any) {
+    if (error instanceof InventoryPendingError) return {success:false,message:'أُنشئت هوية الدخول وحُفظ طلب تثبيت الصلاحيات على هذا الجهاز. لا تعد إنشاء الحساب؛ راجع لوحة المزامنة.',pendingConfirmation:true};
     const code = String(error?.code || '');
     if (code === 'auth/email-already-in-use') {
       return { success: false, message: 'البريد الإلكتروني مستخدم بالفعل.' };
@@ -183,6 +198,7 @@ export const updateManagedFirebaseUserProfile = async (
   if (!isSupabaseConfigured() || !getCurrentAuthUser()) {
     return { success: false, message: 'خدمة السحابة غير متاحة حالياً.' };
   }
+  const ownerUid = getCurrentAuthUser()!.uid;
   const targetUid = existing.authUid || existing.id;
   if (!targetUid) {
     return { success: false, message: 'معرف المستخدم السحابي غير متوفر.' };
@@ -202,14 +218,14 @@ export const updateManagedFirebaseUserProfile = async (
     if ('reason' in validation) {
       return { success: false, message: `بيانات المستخدم غير صالحة: ${validation.reason}` };
     }
-    await supabaseDb.upsertDoc('users', targetUid, validation.user as unknown as Record<string, unknown>);
-    await writeSecurityAudit(targetUid, `تم تحديث بيانات وصلاحيات المستخدم: ${validation.user.fullName}`);
+    await persistManagedProfile(validation.user, ownerUid, 'تحديث بيانات المستخدم وصلاحياته');
     return {
       success: true,
       user: validation.user,
       message: 'تم تحديث ملف المستخدم وصلاحياته في السحابة بنجاح.',
     };
   } catch (error) {
+    if (error instanceof InventoryPendingError) return {success:false,message:error.message,pendingConfirmation:true};
     return { success: false, message: safeResultMessage(error, 'user-management') };
   }
 };
@@ -244,6 +260,7 @@ export const sendManagedUserPasswordReset = async (
       message: `تم إرسال رابط إعادة تعيين كلمة المرور إلى ${user.username} بنجاح.`,
     };
   } catch (error) {
+    if (error instanceof InventoryPendingError) return {success:false,message:error.message,pendingConfirmation:true};
     return { success: false, message: safeResultMessage(error, 'user-management') };
   }
 };

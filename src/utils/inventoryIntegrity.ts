@@ -11,6 +11,7 @@ export type InventoryIntegrityCode =
   | 'MATERIAL_REFERENCE_UNKNOWN'
   | 'WAREHOUSE_REFERENCE_REQUIRED'
   | 'WAREHOUSE_REFERENCE_UNKNOWN'
+  | 'INVALID_DATE'
   | 'INVALID_QUANTITY'
   | 'INVALID_TRANSACTION_TYPE'
   | 'INVALID_TRANSFER_DIRECTION'
@@ -51,6 +52,14 @@ export interface InventoryIntegrityContext {
 const VALID_TRANSACTION_TYPES = new Set(['وارد', 'صادر', 'مستهلك', 'تحويل', 'تسوية', 'افتتاحي']);
 
 const clean = (value: unknown): string => typeof value === 'string' ? value.trim() : '';
+
+export const isValidInventoryDate = (value: unknown): boolean => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  if (year < 1 || month < 1 || month > 12 || day < 1) return false;
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  return day <= [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+};
 
 const numericTimestamp = (value: string | undefined): number => {
   if (!value) return 0;
@@ -186,6 +195,8 @@ const validateIdentityAndReferences = (
 
     if (!storehouseId) push(errors, 'WAREHOUSE_REFERENCE_REQUIRED', 'مرجع المستودع مطلوب للحركة.', tx);
     else if (!storehouseIds.has(storehouseId)) push(errors, 'WAREHOUSE_REFERENCE_UNKNOWN', `الحركة مرتبطة بمستودع غير معروف: ${storehouseId}.`, tx);
+
+    if (!isValidInventoryDate(tx.date)) push(errors, 'INVALID_DATE', 'تاريخ الحركة غير صالح تقويميًا؛ استخدم YYYY-MM-DD.', tx);
 
     if (!Number.isFinite(Number(tx.quantity)) || Number(tx.quantity) <= 0) {
       push(errors, 'INVALID_QUANTITY', 'كمية الحركة يجب أن تكون رقمًا موجبًا محدودًا.', tx);
