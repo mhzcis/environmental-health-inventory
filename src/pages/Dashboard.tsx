@@ -21,6 +21,7 @@ import { Material, InventoryTransaction } from '../types';
 import { buildMaterialWarehouseView, buildTransactionLedger } from '../utils/inventoryLogic';
 import { useStorehouse } from '../context/StorehouseContext';
 import { renderOption } from '../utils/emoji';
+import { localDateString, localMonthString } from '../utils/localDate';
 
 
 export default function Dashboard() {
@@ -52,8 +53,8 @@ export default function Dashboard() {
   const lowStockCount = lowStockItems.length;
 
   // Daily & Monthly transactions
-  const todayStr = new Date().toISOString().split('T')[0];
-  const thisMonthStr = new Date().toISOString().slice(0, 7); // YYYY-MM
+  const todayStr = localDateString();
+  const thisMonthStr = localMonthString(); // YYYY-MM
 
   const ledgerTx = buildTransactionLedger(transactions, selectedStorehouse, settings.storehouses, materials);
 

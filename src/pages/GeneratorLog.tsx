@@ -36,6 +36,7 @@ import { dataService } from '../services/dataService';
 import { GeneratorLogEntry, GeneratorLogSimulationResult } from '../types';
 import { exportToExcel } from '../utils/exportExcel';
 import { exportToPDF } from '../utils/printHtml';
+import { localDateString } from '../utils/localDate';
 
 const ARABIC_DAYS = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
 
@@ -115,7 +116,7 @@ export default function GeneratorLog() {
     // Last 30 days
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const thirtyDaysAgoStr = thirtyDaysAgo.toISOString().split('T')[0];
+    const thirtyDaysAgoStr = localDateString(thirtyDaysAgo);
 
     const logsLast30Days = sortedLogs.filter((item) => item.date >= thirtyDaysAgoStr);
     const maxHoursLast30Days = logsLast30Days.reduce((max, item) => Math.max(max, item.operatingHours), 0);
@@ -138,7 +139,7 @@ export default function GeneratorLog() {
   const lineChartData = useMemo(() => {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const thirtyDaysAgoStr = thirtyDaysAgo.toISOString().split('T')[0];
+    const thirtyDaysAgoStr = localDateString(thirtyDaysAgo);
 
     return logs
       .filter((item) => item.date >= thirtyDaysAgoStr)
@@ -188,7 +189,7 @@ export default function GeneratorLog() {
 
   // Handle open add modal
   const handleOpenAdd = () => {
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = localDateString();
     const latest = dataService.getLatestGeneratorLog();
     const prevReading = latest ? latest.currentReading : 0;
 
@@ -273,7 +274,7 @@ export default function GeneratorLog() {
     }
 
     // Future date check
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = localDateString();
     if (formDate > todayStr && !ignoreFutureCheck) {
       setFutureDateWarningOpen(true);
       return;
@@ -368,7 +369,7 @@ export default function GeneratorLog() {
         title: 'سجل تشغيل ومتابعة عداد المولد',
         organizationName: settings.organizationName,
         departmentName: settings.departmentName,
-        filename: `generator_log_${new Date().toISOString().split('T')[0]}.xlsx`,
+        filename: `generator_log_${localDateString()}.xlsx`,
         metaFields: [
           { label: 'عدد السجلات المشمولة:', value: `${filteredLogs.length} سجل` },
           { label: 'إجمالي ساعات التشغيل المعروضة:', value: `${filteredLogs.reduce((s, i) => s + i.operatingHours, 0).toFixed(2)} ساعة` },
@@ -386,7 +387,7 @@ export default function GeneratorLog() {
   // Handle PDF Export
   const handleExportPDF = async () => {
     try {
-      const stampStr = new Date().toISOString().split('T')[0];
+      const stampStr = localDateString();
       const headers = ['التاريخ', 'اليوم', 'القراءة السابقة', 'القراءة الحالية', 'ساعات التشغيل', 'الملاحظات', 'المُدخل'];
       const rows = filteredLogs.map((item) => [
         item.date,

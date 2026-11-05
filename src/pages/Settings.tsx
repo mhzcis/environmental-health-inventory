@@ -42,6 +42,7 @@ import { PRODUCT_LIMITS, productLimitMessage } from '../utils/productSchema';
 import { getStorehouseByReference } from '../utils/warehouseDomain';
 import { importDate, importNumber, importTransactionId } from '../utils/importValidation';
 import type { Material, InventoryTransaction } from '../types';
+import { localDateString } from '../utils/localDate';
 
 
 const APP_PERMISSIONS = [
@@ -3178,7 +3179,7 @@ export default function Settings() {
                 <Typography variant="caption" sx={{ color: '#64748b', display: 'block', mb: 2, fontFamily: '"Cairo", sans-serif' }}>
                   {driveStep < 5 
                     ? 'يرجى عدم إغلاق هذه النافذة ريثما تكتمل جميع خطوات الرفع والتأمين السحابي...' 
-                    : `تم حفظ وتأمين ملفات البيانات والتقارير بنجاح باسم: ${settings.organizationName || 'backup'}_${new Date().toISOString().split('T')[0]}.xlsx / .json`}
+                    : `تم حفظ وتأمين ملفات البيانات والتقارير بنجاح باسم: ${settings.organizationName || 'backup'}_${localDateString()}.xlsx / .json`}
                 </Typography>
               </>
             )}

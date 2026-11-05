@@ -33,6 +33,7 @@ import { exportToPDF } from '../utils/printHtml';
 import { exportToExcel } from '../utils/exportExcel';
 import { requireStableStringPart } from '../utils/printHtml';
 import { renderOption } from '../utils/emoji';
+import { localDateString } from '../utils/localDate';
 
 
 interface StocktakeRow {
@@ -250,7 +251,7 @@ export default function Materials() {
       if (diff !== 0) {
         const reconTx: InventoryTransaction = {
           id: `tr-recon-${Date.now()}-${row.materialId}-${Math.random().toString(36).substring(2, 6)}`,
-          date: new Date().toISOString().split('T')[0],
+          date: localDateString(),
           itemType: 'مادة',
           itemCategory: '',
           itemId: row.materialId,
@@ -460,7 +461,7 @@ export default function Materials() {
           if (isNew && data.initialStock > 0) {
             const initTx: import('../types').InventoryTransaction = {
               id: `tr-init-${itemId}`,
-              date: new Date().toISOString().split('T')[0],
+              date: localDateString(),
               itemType: (data.category?.includes('مبيد') || data.category?.includes('مبيدات')) ? 'مبيد' : 'مادة',
               itemCategory: data.category,
               itemId,
@@ -546,7 +547,7 @@ const handleOpenDeleteDialog = (item: Material) => {
       const selectedItems = filteredMaterials.filter(m => selectedMaterialIds.includes(m.id));
       
       const titleHeader = 'كشف جرد الأصناف المنتقاة والمحددة مسبقاً';
-      const filename = `كشف_الأصناف_المحددة_${new Date().toISOString().split('T')[0]}.pdf`;
+      const filename = `كشف_الأصناف_المحددة_${localDateString()}.pdf`;
       const headers = ['كود الصنف', 'اسم ومواصفات الصنف', 'التصنيف', 'الوحدة', 'الحد الأدنى الأمان', 'الرصيد الفعلي الحالي', 'مستودع التخزين والترتيب'];
       
       const rows = selectedItems.map(item => [
@@ -615,7 +616,7 @@ const handleOpenDeleteDialog = (item: Material) => {
       const selectedItems = filteredMaterials.filter(m => selectedMaterialIds.includes(m.id));
       
       const titleHeader = 'كشف جرد الأصناف المنتقاة والمحددة مسبقاً';
-      const filename = `كشف_الأصناف_المحددة_${new Date().toISOString().split('T')[0]}.xlsx`;
+      const filename = `كشف_الأصناف_المحددة_${localDateString()}.xlsx`;
       const headers = ['كود الصنف', 'اسم ومواصفات الصنف', 'التصنيف', 'الوحدة', 'الحد الأدنى الأمان', 'الرصيد الفعلي الحالي', 'مستودع التخزين والترتيب'];
       
       const rows = selectedItems.map(item => [

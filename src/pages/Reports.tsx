@@ -29,6 +29,7 @@ import { InventoryTransaction } from '../types';
 import { renderOption } from '../utils/emoji';
 import { PRODUCT_LIMITS } from '../utils/productSchema';
 import { openingAttachmentMatrixKey } from '../utils/settingsNormalization';
+import { localDateString } from '../utils/localDate';
 
 
 type ReportType = 'inventory' | 'low_stock' | 'expiry_warning' | 'transactions' | 'category_summary' | 'opening_stock' | 'generator_log';
@@ -360,7 +361,7 @@ export default function Reports() {
     if (!authorizeOutput('reports_export')) return;
     try {
       const fontName = 'Segoe UI';
-      const stampStr = new Date().toISOString().split('T')[0];
+      const stampStr = localDateString();
       let filename = 'report.xlsx';
       let titleHeader = 'المستند الفني للجرد والأرصدة';
 
@@ -688,7 +689,7 @@ export default function Reports() {
     if (!authorizeOutput('reports_print')) return;
     try {
       setExportingPDF(true);
-      const stampStr = new Date().toISOString().split('T')[0];
+      const stampStr = localDateString();
       let filename = 'report.pdf';
       let titleHeader = 'المستند الفني للجرد والأرصدة';
 
