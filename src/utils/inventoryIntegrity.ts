@@ -47,6 +47,12 @@ export interface IntegrityTransaction extends InventoryTransaction {
 export interface InventoryIntegrityContext {
   materials: Array<Pick<Material, 'id' | 'initialStock' | 'primaryStorehouseId'>>;
   storehouses: Array<Pick<Storehouse, 'id' | 'name' | 'active'>>;
+  /**
+   * True when the current account may read transactions but not materials (RLS returns no material rows).
+   * Material references then cannot be checked on the client; the server (inventory_commit / validate_inventory)
+   * remains authoritative for referential integrity. QA-20261106 RBAC-01/RBAC-04.
+   */
+  materialReferencesUnreadable?: boolean;
 }
 
 const VALID_TRANSACTION_TYPES = new Set(['وارد', 'صادر', 'مستهلك', 'تحويل', 'تسوية', 'افتتاحي']);
@@ -191,7 +197,7 @@ const validateIdentityAndReferences = (
     else numbers.add(transactionNumber);
 
     if (!itemId) push(errors, 'MATERIAL_REFERENCE_REQUIRED', 'مرجع الصنف مطلوب للحركة.', tx);
-    else if (!materialIds.has(itemId)) push(errors, 'MATERIAL_REFERENCE_UNKNOWN', `الحركة مرتبطة بصنف غير موجود: ${itemId}.`, tx);
+    else if (!context.materialReferencesUnreadable && !materialIds.has(itemId)) push(errors, 'MATERIAL_REFERENCE_UNKNOWN', `الحركة مرتبطة بصنف غير موجود: ${itemId}.`, tx);
 
     if (!storehouseId) push(errors, 'WAREHOUSE_REFERENCE_REQUIRED', 'مرجع المستودع مطلوب للحركة.', tx);
     else if (!storehouseIds.has(storehouseId)) push(errors, 'WAREHOUSE_REFERENCE_UNKNOWN', `الحركة مرتبطة بمستودع غير معروف: ${storehouseId}.`, tx);
