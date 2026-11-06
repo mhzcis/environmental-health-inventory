@@ -1,4 +1,5 @@
 import { requireStableStringPart } from '../utils/printHtml';
+import { buildTotalStockIndex, isLowStockByTotal } from '../utils/lowStock';
 import { safeErrorDetail, safeUserMessage } from '../services/safeUserMessage';
 import { exportToPDF } from '../utils/printHtml';
 import { Fragment, useState, useEffect, useMemo } from 'react';
@@ -166,6 +167,7 @@ export default function Reports() {
   };
 
   // Create or use one warehouse-scoped computed dataset as the source of truth for both the summary cards and the inventory table.
+  const totalStockIndex = useMemo(() => buildTotalStockIndex(materials), [materials]);
   const baseView = useMemo(() => {
     return buildMaterialWarehouseView(materials, selectedStorehouse, settings.storehouses);
   }, [materials, selectedStorehouse, settings.storehouses]);
@@ -198,11 +200,11 @@ export default function Reports() {
           (categoryFilter === 'all' || item.category === categoryFilter) &&
           (itemIdFilter === 'all' || item._originalId === itemIdFilter);
         if (selectedStorehouse !== 'all') {
-          return baseView.filter((item) => matchesBaseFilters(item) && item.currentStock <= item.minimumStock);
+          return baseView.filter((item) => matchesBaseFilters(item) && isLowStockByTotal(item, totalStockIndex));
         }
         const lowStockGroupIds = new Set(
           baseView
-            .filter((item) => matchesBaseFilters(item) && item.currentStock <= item.minimumStock)
+            .filter((item) => matchesBaseFilters(item) && !item.isSubRow && isLowStockByTotal(item, totalStockIndex))
             .map((item) => item._originalId || item.id)
         );
         return baseView.filter((item) => matchesBaseFilters(item) && lowStockGroupIds.has(item._originalId || item.id));
@@ -290,7 +292,7 @@ export default function Reports() {
           }
           summaryMap[key].totalItems += 1;
           summaryMap[key].totalQty += item.currentStock;
-          if (item.currentStock <= item.minimumStock) {
+          if (isLowStockByTotal(item, totalStockIndex)) {
              summaryMap[key].lowStockCount += 1;
           }
         });
@@ -975,7 +977,7 @@ export default function Reports() {
     warehouseScopedInventory.forEach(m => {
       totalItems++;
       sumQtys += m.currentStock;
-      if (m.currentStock <= m.minimumStock) {
+      if (isLowStockByTotal(m, totalStockIndex)) {
         criticalItems++;
       }
     });
@@ -1786,7 +1788,7 @@ export default function Reports() {
               {paginatedData.length > 0 ? (
                 paginatedData.map((row: any, idx) => {
                   if (reportType === 'inventory') {
-                    const isLow = row.currentStock <= row.minimumStock;
+                    const isLow = isLowStockByTotal(row, totalStockIndex);
                     return (
                       <TableRow key={`${row.id}-${idx}`} sx={{ '&:nth-of-type(even)': { bgcolor: '#f8fafc' }, '&:hover': { bgcolor: '#f1f5f9' }, transition: 'background-color 0.15s ease' }}>
                         <TableCell align="center" sx={{ fontFamily: 'monospace', fontWeight: 'bold', color: row.isSubRow ? '#64748b' : '#007ab7', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>
