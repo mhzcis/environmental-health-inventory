@@ -29,7 +29,7 @@ import { InventoryTransaction } from '../types';
 import { renderOption } from '../utils/emoji';
 import { PRODUCT_LIMITS } from '../utils/productSchema';
 import { openingAttachmentMatrixKey } from '../utils/settingsNormalization';
-import { localDateString } from '../utils/localDate';
+import { daysUntilLocalDate, parseLocalDate, localDateString } from '../utils/localDate';
 
 
 type ReportType = 'inventory' | 'low_stock' | 'expiry_warning' | 'transactions' | 'category_summary' | 'opening_stock' | 'generator_log';
@@ -217,8 +217,7 @@ export default function Reports() {
           (itemIdFilter === 'all' || item._originalId === itemIdFilter);
         const qualifies = (item: any) => {
           if (!item.expiryDate) return false;
-          const exp = new Date(item.expiryDate);
-          const diffDays = Math.ceil((exp.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+          const diffDays = daysUntilLocalDate(item.expiryDate);
           return diffDays <= thresholdDays && item.currentStock > 0;
         };
         if (selectedStorehouse !== 'all') {
@@ -417,10 +416,7 @@ export default function Reports() {
       } else if (reportType === 'expiry_warning') {
         headers = ['كود الصنف', 'الاسم الفني التجاري', 'تاريخ الإنتاج', 'تاريخ الانتهاء', 'الأيام المتبقية', 'درجة الخطورة', 'الرصيد الحالي', 'مكان الحفظ'];
         rows = currentReportData.map((row: any) => {
-          const exp = row.expiryDate ? new Date(row.expiryDate) : null;
-          const today = new Date();
-          today.setHours(0,0,0,0);
-          const diffDays = exp ? Math.ceil((exp.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)) : 0;
+          const diffDays = row.expiryDate ? daysUntilLocalDate(row.expiryDate) : 0;
           return [
             row.code,
             row.name,
@@ -773,10 +769,7 @@ export default function Reports() {
         headers = ['الكود', 'الاسم التجاري', 'تاريخ الانتهاء', 'الأيام المتبقية', 'درجة الخطورة', 'الرصيد', 'الموقع'];
         alignments = ['center', 'center', 'center', 'center', 'center', 'center', 'center'];
         rows = currentReportData.map((row: any) => {
-          const exp = row.expiryDate ? new Date(row.expiryDate) : null;
-          const today = new Date();
-          today.setHours(0,0,0,0);
-          const diffDays = exp ? Math.ceil((exp.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)) : 0;
+          const diffDays = row.expiryDate ? daysUntilLocalDate(row.expiryDate) : 0;
           const textDiff = diffDays <= 0 ? `منتهى منذ ${Math.abs(diffDays)} يوم` : `متبقي ${diffDays} يوم`;
           
           let diffCell = textDiff;
@@ -986,7 +979,7 @@ export default function Reports() {
     now.setHours(0,0,0,0);
     const expiredCount = itemsWithExpiry.filter(p => {
       if (!p.expiryDate) return false;
-      return new Date(p.expiryDate) <= now;
+      return parseLocalDate(p.expiryDate) <= now;
     }).length;
 
     return { totalItems, sumQtys, criticalItems, expiredCount };
@@ -1826,10 +1819,7 @@ export default function Reports() {
                   }
 
                   if (reportType === 'expiry_warning') {
-                    const exp = row.expiryDate ? new Date(row.expiryDate) : null;
-                    const today = new Date();
-                    today.setHours(0,0,0,0);
-                    const diffDays = exp ? Math.ceil((exp.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)) : 0;
+                    const diffDays = row.expiryDate ? daysUntilLocalDate(row.expiryDate) : 0;
                     const isExpired = diffDays <= 0;
                     
                     return (
