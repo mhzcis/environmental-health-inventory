@@ -194,7 +194,7 @@ BEGIN
        IF NOT EXISTS(SELECT 1 FROM jsonb_array_elements(cfg->'storehouseEntities') w WHERE w->>'id'=CASE col WHEN 'materials' THEN val->>'primaryStorehouseId' ELSE val->>'storehouseId' END AND w->'active'='true'::jsonb)
        THEN RAISE EXCEPTION 'INVENTORY_WAREHOUSE_INACTIVE' USING ERRCODE='23514'; END IF;
      END IF;
-     IF col='materials' AND old IS NOT NULL AND (val->'initialStock' IS DISTINCT FROM old->'initialStock' OR (val->>'primaryStorehouseId' IS DISTINCT FROM old->>'primaryStorehouseId' AND coalesce((old->>'initialStock')::numeric,0)<>0))
+     IF col='materials' AND kind='set' AND old IS NOT NULL AND (val->'initialStock' IS DISTINCT FROM old->'initialStock' OR (val->>'primaryStorehouseId' IS DISTINCT FROM old->>'primaryStorehouseId' AND coalesce((old->>'initialStock')::numeric,0)<>0))
         AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(ops) x WHERE x->>'collection'='transactions' AND (x->'value'->>'itemId'=doc OR x->'expected'->'data'->>'itemId'=doc))
      THEN RAISE EXCEPTION 'INVENTORY_OPENING_LEDGER_REQUIRED' USING ERRCODE='23514'; END IF;
    END IF;
