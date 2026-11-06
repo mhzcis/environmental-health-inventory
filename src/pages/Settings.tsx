@@ -798,7 +798,7 @@ export default function Settings() {
             ...(type === 'pesticide' ? { manufacturer: cell(8), productionDate: cell(9) ? importDate(row[9]) : '', expiryDate: cell(10) ? importDate(row[10]) : '', hazardLevel: cell(11) } : {}),
           } as Material;
           items.push(item); if (old) updated++; else added++;
-          if (opening > 0) openings.push({ id: `tx-${crypto.randomUUID()}`, date: now.slice(0, 10), itemId: item.id,
+          if (opening > 0) openings.push({ id: `tx-${crypto.randomUUID()}`, date: localDateString(), itemId: item.id,
             itemType: item.type, itemCode: code, itemName: name, itemCategory: category, unit, quantity: opening,
             transactionType: 'افتتاحي', storehouseId: warehouse.id, storehouse: warehouse.name, stockBefore: 0, stockAfter: opening,
             executedBy: dataService.getCurrentUser().fullName, supplierOrReceiver: 'رصيد افتتاحي من استيراد الأصناف',
