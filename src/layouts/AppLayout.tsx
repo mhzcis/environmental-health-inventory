@@ -1,4 +1,5 @@
 import InventorySyncPanel from '../components/InventorySyncPanel';
+import { buildTotalStockIndex, isLowStockByTotal } from '../utils/lowStock';
 import React, { useRef, useState } from 'react';
 import { 
   Box, CssBaseline, AppBar, Toolbar, Typography, Drawer, List, ListItem, 
@@ -239,7 +240,8 @@ export default function AppLayout({ children }: Props) {
   // Calculate some quick critical warning counts using active selected storehouse
   const rawMaterials = dataService.getMaterials();
   const materials = buildMaterialWarehouseView(rawMaterials, selectedStorehouse, activeStorehouses.map((warehouse) => warehouse.name)).filter(m => !m.isSubRow);
-  const lowStockCount = materials.filter(m => m.currentStock <= m.minimumStock).length;
+  const totalStockIndex = buildTotalStockIndex(rawMaterials);
+  const lowStockCount = materials.filter(m => isLowStockByTotal(m, totalStockIndex)).length;
 
   const expiredOrWarningMaterials = materials.filter(m => {
     if (!m.expiryDate) return false;
@@ -252,7 +254,7 @@ export default function AppLayout({ children }: Props) {
   // Compile specific detailed alerts for notifications
   const activeAlerts: { id: string; title: string; desc: string; type: 'stock' | 'expiry' }[] = [];
 
-  materials.filter(m => m.currentStock <= m.minimumStock).forEach(m => {
+  materials.filter(m => isLowStockByTotal(m, totalStockIndex)).forEach(m => {
     activeAlerts.push({
       id: `stock-${m.id}`,
       title: `رصيد حرج: ${m.name}`,

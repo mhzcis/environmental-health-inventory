@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { buildTotalStockIndex, isLowStockByTotal } from '../utils/lowStock';
 import EmptyState from '../components/EmptyState';
 import { 
   Typography, Container, Grid, Paper, Box, Button, Table, TableBody, TableCell, TableRow, TableHead,
@@ -48,7 +49,8 @@ export default function Dashboard() {
   
 
   // Low stock
-  const lowStockItems = dashboardMaterials.filter(item => item.currentStock <= item.minimumStock);
+  const totalStockIndex = buildTotalStockIndex(materials);
+  const lowStockItems = dashboardMaterials.filter(item => isLowStockByTotal(item, totalStockIndex));
   const lowStockCount = lowStockItems.length;
 
   // Daily & Monthly transactions
