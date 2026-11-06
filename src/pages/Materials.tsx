@@ -47,13 +47,13 @@ interface StocktakeRow {
 
 // Zod Validation Schema matching exactly the 7 requested fields with strict positive quantity and non-reversed date checks
 const materialSchema = zod.object({
-  category: zod.string().min(1, { message: 'يرجى اختيار تصنيف صالح' }),
+  category: zod.string().trim().min(1, { message: 'يرجى اختيار تصنيف صالح' }),
   code: zod.string().optional(),
-  name: zod.string().min(3, { message: 'الاسم يجب أن يكون 3 حروف على الأقل' }),
+  name: zod.string().trim().min(3, { message: 'الاسم يجب أن يكون 3 حروف على الأقل' }),
   initialStock: zod.coerce.number({ message: 'الرصيد الابتدائي يجب أن يكون رقماً' }),
   minimumStock: zod.coerce.number({ message: 'الحد الأدنى يجب أن يكون رقماً' }).min(0, { message: 'الحد الأدنى يجب أن يكون صفر أو أكثر' }),
-  storageLocation: zod.string().min(1, { message: 'يرجى تحديد المستودع' }),
-  unit: zod.string().min(1, { message: 'يرجى تحديد وحدة القياس' }),
+  storageLocation: zod.string().trim().min(1, { message: 'يرجى تحديد المستودع' }),
+  unit: zod.string().trim().min(1, { message: 'يرجى تحديد وحدة القياس' }),
   notes: zod.string().optional(),
   productionDate: zod.string().optional(),
   expiryDate: zod.string().optional(),
