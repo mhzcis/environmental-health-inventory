@@ -36,6 +36,7 @@ import { useStorehouse } from '../context/StorehouseContext';
 
 import { InventoryTransaction, Material } from '../types';
 import { renderOption } from '../utils/emoji';
+import { localDateString } from '../utils/localDate';
 
 
 // Zod form validation for transaction
@@ -77,7 +78,7 @@ export default function Transactions() {
 
   const handleSmartDateChange = (range: string) => {
     setSmartDateRange(range);
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = localDateString();
     
     if (range === 'all') {
       setDateFrom('');
@@ -88,19 +89,19 @@ export default function Transactions() {
     } else if (range === 'yesterday') {
       const yesterday = new Date();
       yesterday.setDate(yesterday.getDate() - 1);
-      const yesterdayStr = yesterday.toISOString().split('T')[0];
+      const yesterdayStr = localDateString(yesterday);
       setDateFrom(yesterdayStr);
       setDateTo(yesterdayStr);
     } else if (range === 'last7') {
       const last7 = new Date();
       last7.setDate(last7.getDate() - 7);
-      const last7Str = last7.toISOString().split('T')[0];
+      const last7Str = localDateString(last7);
       setDateFrom(last7Str);
       setDateTo(todayStr);
     } else if (range === 'last30') {
       const last30 = new Date();
       last30.setDate(last30.getDate() - 30);
-      const last30Str = last30.toISOString().split('T')[0];
+      const last30Str = localDateString(last30);
       setDateFrom(last30Str);
       setDateTo(todayStr);
     } else if (range === 'currentMonth') {
@@ -201,7 +202,7 @@ export default function Transactions() {
       const selectedItems = ledgerTransactions.filter(t => selectedTransactionIds.includes(t.id));
       
       const titleHeader = 'كشف وسجل الحركات المخزنية المحددة جماعياً';
-      const filename = `كشف_حركات_المواد_المحددة_${new Date().toISOString().split('T')[0]}.pdf`;
+      const filename = `كشف_حركات_المواد_المحددة_${localDateString()}.pdf`;
       const headers = ['رقم السند', 'تاريخ العمل', 'المستودع', 'اسم وصنف المادة', 'كود الصنف', 'نظام الحركة', 'الكمية', 'الرصيد قبل', 'الرصيد بعد', 'جهة التعامل / المورد / المستلم'];
       
       const rows = selectedItems.flatMap(t => {
@@ -296,7 +297,7 @@ export default function Transactions() {
       const selectedItems = ledgerTransactions.filter(t => selectedTransactionIds.includes(t.id));
       
       const titleHeader = 'كشف وسجل الحركات المخزنية المحددة جماعياً';
-      const filename = `كشف_حركات_المواد_المحددة_${new Date().toISOString().split('T')[0]}.xlsx`;
+      const filename = `كشف_حركات_المواد_المحددة_${localDateString()}.xlsx`;
       const headers = ['رقم السند', 'تاريخ العمل', 'المستودع', 'اسم وصنف المادة', 'كود الصنف', 'نظام الحركة', 'الكمية', 'الرصيد قبل', 'الرصيد بعد', 'جهة التعامل / المورد / المستلم'];
       
       const rows = selectedItems.flatMap(t => {

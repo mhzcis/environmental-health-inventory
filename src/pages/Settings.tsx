@@ -42,6 +42,7 @@ import { PRODUCT_LIMITS, productLimitMessage } from '../utils/productSchema';
 import { getStorehouseByReference } from '../utils/warehouseDomain';
 import { importDate, importNumber, importTransactionId } from '../utils/importValidation';
 import type { Material, InventoryTransaction } from '../types';
+import { localDateString } from '../utils/localDate';
 
 
 const APP_PERMISSIONS = [
@@ -797,7 +798,7 @@ export default function Settings() {
             ...(type === 'pesticide' ? { manufacturer: cell(8), productionDate: cell(9) ? importDate(row[9]) : '', expiryDate: cell(10) ? importDate(row[10]) : '', hazardLevel: cell(11) } : {}),
           } as Material;
           items.push(item); if (old) updated++; else added++;
-          if (opening > 0) openings.push({ id: `tx-${crypto.randomUUID()}`, date: now.slice(0, 10), itemId: item.id,
+          if (opening > 0) openings.push({ id: `tx-${crypto.randomUUID()}`, date: localDateString(), itemId: item.id,
             itemType: item.type, itemCode: code, itemName: name, itemCategory: category, unit, quantity: opening,
             transactionType: 'افتتاحي', storehouseId: warehouse.id, storehouse: warehouse.name, stockBefore: 0, stockAfter: opening,
             executedBy: dataService.getCurrentUser().fullName, supplierOrReceiver: 'رصيد افتتاحي من استيراد الأصناف',
@@ -3178,7 +3179,7 @@ export default function Settings() {
                 <Typography variant="caption" sx={{ color: '#64748b', display: 'block', mb: 2, fontFamily: '"Cairo", sans-serif' }}>
                   {driveStep < 5 
                     ? 'يرجى عدم إغلاق هذه النافذة ريثما تكتمل جميع خطوات الرفع والتأمين السحابي...' 
-                    : `تم حفظ وتأمين ملفات البيانات والتقارير بنجاح باسم: ${settings.organizationName || 'backup'}_${new Date().toISOString().split('T')[0]}.xlsx / .json`}
+                    : `تم حفظ وتأمين ملفات البيانات والتقارير بنجاح باسم: ${settings.organizationName || 'backup'}_${localDateString()}.xlsx / .json`}
                 </Typography>
               </>
             )}
