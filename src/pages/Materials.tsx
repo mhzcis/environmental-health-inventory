@@ -333,6 +333,14 @@ export default function Materials() {
     setSelectedMaterialIds([]);
   }, [selectedStorehouse]);
 
+  // QA 2026-11-06 TAB-04/TAB-05: a filter change must return to the first page (otherwise matches sit on an
+  // out-of-range page behind an empty-table message) and must drop the selection so a bulk action can never
+  // act on rows the user can no longer see.
+  useEffect(() => {
+    setPage(0);
+    setSelectedMaterialIds([]);
+  }, [searchQuery, categoryFilter, stockStatusFilter]);
+
   const handleOpenAddDialog = () => {
     setSelectedMaterial(null);
     const defaultCat = settings.categories[0]?.name || '';
