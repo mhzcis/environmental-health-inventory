@@ -1,4 +1,4 @@
-import { type InventorySyncOperation, runInventoryDeviceReset, getInventoryOutboxCounts, subscribeInventoryOutbox, cancelRejectedInventoryOutbox, enqueueInventoryMutation, enqueueInventoryRestore, InventoryPendingError, listInventoryOutbox, resumeInventoryProjection, retryInventoryOutbox } from './supabaseOutbox';
+import { registerInventoryAckPublisher, startInventoryOutboxAutoResume, type InventorySyncOperation, runInventoryDeviceReset, getInventoryOutboxCounts, subscribeInventoryOutbox, cancelRejectedInventoryOutbox, enqueueInventoryMutation, enqueueInventoryRestore, InventoryPendingError, listInventoryOutbox, resumeInventoryProjection, retryInventoryOutbox } from './supabaseOutbox';
 import { IndexedDbSyncQueueStore } from './syncQueueStore';
 import { composeSupabaseAppSettings } from './supabaseSettings';
 import { Material, InventoryTransaction, AuditLog, AppSettings, SystemUser, GeneratorLogEntry, GeneratorLogSimulationResult, type AuditEventContext } from '../types';
@@ -3860,3 +3860,18 @@ export async function initCloudSync() {
 
 // A local queue change refreshes health without a network request or timer.
 subscribeInventoryOutbox(() => dataService.notify());
+
+// QA-20261108 SYNC-03: queued requests resume automatically (reconnect, focus,
+// sign-in/app reopen, backoff). Acks from any drain update the local audit view;
+// when the queue becomes empty the canonical server snapshot is reloaded.
+registerInventoryAckPublisher(ack => { try { publishInventoryAck(ack); } catch { /* ack already recorded server-side */ } });
+startInventoryOutboxAutoResume(result => {
+  if (!result.sent) return;
+  lastCloudWriteError = null; lastCloudWriteErrorPersistence = 'unknown';
+  dataService.notify();
+  void listInventoryOutbox().then(async rows => {
+    const current = dataService.getCurrentUser();
+    if (!rows.length && current) await dataService.bootstrapFreshDeviceData(current);
+    dataService.notify();
+  }).catch(() => undefined);
+});
