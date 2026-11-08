@@ -133,7 +133,7 @@ const LABELS_AR: Record<string, string> = {
   'create-material': 'إضافة صنف', 'update-material': 'تعديل صنف', 'delete-material-with-ledger': 'حذف صنف',
   'create-material-with-opening-stock': 'إضافة صنف برصيد افتتاحي', 'save-transaction-batch': 'تسجيل حركة',
   'delete-transaction-batch': 'حذف حركة', 'save-settings-atomic': 'حفظ الإعدادات',
-  'rename-reference-and-linked-records': 'إعادة تسمية مرجع', 'import-materials-with-opening-balances': 'استيراد أصناف',
+  'rename-reference-and-linked-records': 'إعادة تسمية مرجع', 'correct-transaction': 'تصحيح حركة (إلغاء وبديل)', 'import-materials-with-opening-balances': 'استيراد أصناف',
 };
 export const inventoryRequestLabelAr = (row: { label?: string; rpcLabel?: string }): string =>
   LABELS_AR[row.rpcLabel || row.label || ''] || (/[\u0600-\u06FF]/.test(row.rpcLabel || row.label || '') ? (row.rpcLabel || row.label)! : 'طلب محفوظ');

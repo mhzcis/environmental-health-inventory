@@ -62,11 +62,27 @@ export interface InventoryTransaction {
   supplierOrReceiver: string;
   notes?: string;
   attachment?: string;
+  /** QA-20261108 TX-03: set on a replacement entry; the server checks it against the entry cancelled in the same atomic request. */
+  correctionOf?: TransactionCorrectionRef;
   createdAt: string;
   updatedAt: string;
 }
 
+export interface TransactionCorrectionRef {
+  id: string;
+  transactionNumber?: string;
+  transactionType: TransactionType;
+  quantity: number;
+  date: string;
+  itemId: string;
+  itemCode: string;
+  storehouseId?: string;
+  reason: string;
+}
+
+export interface AuditCorrectionLink { originalNumber: string; originalQuantity?: number; replacementNumber: string; replacementQuantity?: number; reason: string }
 export interface AuditLog {
+  corrections?: AuditCorrectionLink[];
   id: string;
   timestamp: string;
   user: string;

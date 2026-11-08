@@ -1928,6 +1928,96 @@ export const dataService = {
     return { success: true, message: deleteIds.size === 1 ? 'تم حذف الحركة بنجاح' : `تم حذف ${deleteIds.size} حركة مترابطة بنجاح`, deletedIds: Array.from(deleteIds) };
   },
 
+  /**
+   * QA-20261108 TX-03: correct a ledger entry by cancelling it and recording a replacement with a NEW voucher number,
+   * in ONE atomic server request (no window where the cancel is committed but the replacement is not).
+   * The server receipt keeps the original values and links the cancel to the replacement.
+   */
+  correctTransaction: async (
+    originalId: string,
+    changes: { quantity: number; date: string; notes?: string; supplierOrReceiver?: string; reason: string },
+  ): Promise<{ success: boolean; pending?: boolean; message: string; replacementId?: string; replacementNumber?: string }> => {
+    if (!dataService.hasPermission('transactions_delete') || !dataService.hasPermission('transactions_create')) {
+      return { success: false, message: 'تصحيح الحركة يتطلب صلاحيتي إلغاء الحركات وإنشائها.' };
+    }
+    const reason = (changes.reason || '').trim();
+    if (reason.length < 3) return { success: false, message: 'اكتب سبب التصحيح (3 أحرف على الأقل).' };
+    const quantity = Number(changes.quantity);
+    if (!Number.isFinite(quantity) || quantity <= 0) return { success: false, message: 'يجب أن تكون الكمية أكبر من صفر.' };
+    if (!/^\d{4}-\d{2}-\d{2}/.test(changes.date || '')) return { success: false, message: 'تاريخ الحركة البديلة غير صالح.' };
+    const transactions = dataService.getTransactions() as IntegrityTransaction[];
+    const original = transactions.find((tx) => tx.id === originalId);
+    if (!original) return { success: false, message: 'الحركة الأصلية غير موجودة.' };
+    if (original.transactionType === 'تحويل' || original.transactionType === 'افتتاحي' || original.id.startsWith('tr-init')) {
+      return { success: false, message: 'تصحيح التحويل أو الرصيد الافتتاحي غير متاح من هنا؛ استخدم المسار المخصص.' };
+    }
+    const settings = dataService.getSettings();
+    const previousSettings = JSON.parse(JSON.stringify(settings)) as AppSettings;
+    const counters = { inbound: 0, outbound: 0, consumed: 0, transfer: 0, adjustment: 0, opening: 0, ...(settings.transactionCounters || {}) };
+    const config = original.transactionType === 'وارد' ? ['inbound', 'W'] as const
+      : original.transactionType === 'صادر' ? ['outbound', 'O'] as const
+      : original.transactionType === 'مستهلك' ? ['consumed', 'C'] as const
+      : ['adjustment', 'A'] as const;
+    const usedNumbers = new Set(transactions.map((tx) => tx.transactionNumber?.trim()).filter(Boolean));
+    let replacementNumber = '';
+    do { counters[config[0]] += 1; replacementNumber = `${config[1]}-${String(counters[config[0]]).padStart(4, '0')}`; } while (usedNumbers.has(replacementNumber));
+    const direction = getInventoryTransactionDirection(original);
+    if (!direction) return { success: false, message: 'اتجاه الحركة غير صالح.' };
+    const originalEffect = direction === 'in' ? Number(original.quantity) : -Number(original.quantity);
+    const before = dataService.getItemStockByStorehouse(original.itemId, original.storehouseId || '') - originalEffect;
+    const now = new Date().toISOString();
+    const replacement: IntegrityTransaction = {
+      ...original,
+      id: `tr-${crypto.randomUUID()}`,
+      transactionNumber: replacementNumber,
+      quantity,
+      date: changes.date,
+      notes: changes.notes ?? original.notes,
+      supplierOrReceiver: changes.supplierOrReceiver ?? original.supplierOrReceiver,
+      stockBefore: before,
+      stockAfter: before + (direction === 'in' ? quantity : -quantity),
+      executedBy: dataService.getCurrentUser()?.fullName || original.executedBy,
+      correctionOf: {
+        id: original.id, transactionNumber: original.transactionNumber, transactionType: original.transactionType,
+        quantity: Number(original.quantity), date: original.date, itemId: original.itemId, itemCode: original.itemCode,
+        storehouseId: original.storehouseId, reason: reason.slice(0, 500),
+      },
+      createdAt: now,
+      updatedAt: now,
+    };
+    const next = [...transactions.filter((tx) => tx.id !== original.id), replacement];
+    const integrity = validateInventoryDataset(next, { materials: dataService.getMaterials(), storehouses: getStorehouseEntities(settings) });
+    const legacyTransferIds = new Set(next.filter((tx) => tx.transactionType === 'تحويل' && !tx.operationId && !tx.pairedTransactionId).map((tx) => tx.id));
+    const blocking = integrity.errors.filter((error) => !(error.code === 'TRANSFER_OPERATION_REQUIRED' && !!error.transactionId && legacyTransferIds.has(error.transactionId)));
+    if (blocking.length) {
+      return { success: false, message: blocking[0].code === 'NEGATIVE_RUNNING_BALANCE' ? 'التصحيح يجعل رصيد الصنف سالبًا في تاريخ لاحق؛ راجع الكمية أو التاريخ.' : 'تعذر التصحيح لأن السجل الناتج غير متسق.' };
+    }
+    settings.transactionCounters = counters;
+    const previousTransactionsRaw = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
+    const previousSettingsRaw = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+    const summary = `ألغيت الحركة ${original.transactionNumber || original.id} (${original.transactionType}، الكمية ${original.quantity} ${original.unit || ''}، تاريخ ${original.date}) وسُجّل بديلها ${replacementNumber} (الكمية ${quantity}، تاريخ ${changes.date}). السبب: ${reason.slice(0, 200)}`;
+    try {
+      await queueCloudMutation([
+        settingsRootSyncOp(settings, previousSettings),
+        createSyncDeleteOperation('transactions', original.id, original),
+        createSyncSetOperation('transactions', replacement.id, replacement as unknown as Record<string, unknown>, undefined),
+      ], 'correct-transaction');
+    } catch (error) {
+      if (error instanceof InventoryPendingError) {
+        return { success: false, pending: true, replacementId: replacement.id, replacementNumber,
+          message: `التصحيح محفوظ على هذا الجهاز ولم يؤكده الخادم بعد: الحركة ${original.transactionNumber} ما زالت معتمدة على الخادم، والبديل ${replacementNumber} معلّق وسيُرسل تلقائيًا (الإلغاء والبديل يُعتمدان معًا أو لا يُعتمد أي منهما).` };
+      }
+      if (!shouldRestoreLocalProjection(error)) throw error;
+      if (previousTransactionsRaw === null) localStorage.removeItem(STORAGE_KEYS.TRANSACTIONS); else localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, previousTransactionsRaw);
+      if (previousSettingsRaw === null) localStorage.removeItem(STORAGE_KEYS.SETTINGS); else localStorage.setItem(STORAGE_KEYS.SETTINGS, previousSettingsRaw);
+      return { success: false, message: safeResultMessage(error, 'generic') };
+    }
+    await dataService.logAudit('تصحيح حركة مخزنية (إلغاء وبديل)', summary, 'حركة');
+    dataService.recordLocalWrite();
+    dataService.notify();
+    return { success: true, replacementId: replacement.id, replacementNumber, message: `تم التصحيح: أُلغيت ${original.transactionNumber} وسُجّل البديل ${replacementNumber}.` };
+  },
+
   deleteTransaction: async (id: string): Promise<{ success: boolean; message: string }> => {
     const result = await dataService.deleteTransactions([id]);
     return { success: result.success, message: result.message };
@@ -2212,6 +2302,10 @@ export const dataService = {
         if (pending.some(row => row.userId !== authUser.uid)) throw new Error('INVENTORY_SESSION_CHANGED');
         await resumeInventoryProjection(applyInventoryProjection);
         return { success: true, status: 'pending-local', message: 'توجد طلبات محفوظة على الجهاز تنتظر الإقرار؛ راجع لوحة المزامنة.' };
+      }
+      // QA-20261108 SES-06: requests queued by ANOTHER account stay with their owner (never sent as, nor deletable by, this account).
+      if (await new IndexedDbSyncQueueStore().countAll() > 0) {
+        throw new Error('على هذا الجهاز طلبات محفوظة لحساب آخر لم يؤكدها الخادم بعد. لن تُرسل باسمك ولن تُحذف. اطلب من صاحب تلك الطلبات تسجيل الدخول على هذا الجهاز لإرسالها، ثم سجّل دخولك.');
       }
       await assertNoOutstandingSyncWork(false);
       let materials: Material[] = [];
