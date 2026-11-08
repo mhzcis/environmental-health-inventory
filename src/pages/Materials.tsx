@@ -1342,6 +1342,7 @@ const handleOpenDeleteDialog = (item: Material) => {
                   placeholder="مثال: 100"
                   disabled={!!selectedMaterial}
                   {...register('initialStock')}
+                  slotProps={{ htmlInput: { step: 'any' } }}
                   onFocus={(e) => e.target.select()}
                   error={!!errors.initialStock}
                   helperText={selectedMaterial ? "الرصيد الابتدائي مسجل مسبقاً" : errors.initialStock?.message || "سيقوم النظام بتوريد رصيد بداية أوتوماتيكي"}
@@ -1372,6 +1373,7 @@ const handleOpenDeleteDialog = (item: Material) => {
                   label="حد الأمان الأدنى"
                   placeholder="مثال: 10"
                   {...register('minimumStock', { valueAsNumber: true })}
+                  slotProps={{ htmlInput: { step: 'any' } }}
                   onFocus={(e) => e.target.select()}
                   error={!!errors.minimumStock}
                   helperText={errors.minimumStock?.message || "كمية التنبيه للاستنفاد"}
