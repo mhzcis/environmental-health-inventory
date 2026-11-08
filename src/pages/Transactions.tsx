@@ -1662,7 +1662,7 @@ export default function Transactions() {
                 ||||| | |||| || ||| | ||| |||| | | | {transactionToPrint.transactionNumber || transactionToPrint.id}
               </Typography>
               <Typography sx={{ fontFamily: 'monospace', color: '#000', fontSize: '11px', fontWeight: 'bold' }}>
-                سند رسمي مشفر ومؤرشف إلكترونياً - رقم {transactionToPrint.transactionNumber || transactionToPrint.id}
+                سند صادر من نظام إدارة المخزون - رقم {transactionToPrint.transactionNumber || transactionToPrint.id}
               </Typography>
             </Box>
           </Box>
