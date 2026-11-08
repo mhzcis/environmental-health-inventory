@@ -1425,16 +1425,17 @@ export default function Settings() {
           '& .Mui-selected': { color: '#007ab7 !important' }
         }}
       >
-        <Tab icon={<BusinessIcon sx={{ fontSize: 20 }} />} iconPosition="start" label="الهوية المؤسسية والتوقيعات" />
-        <Tab icon={<LayersIcon sx={{ fontSize: 20 }} />} iconPosition="start" label="خيارات تهيئة المستودعات والأصناف" />
-        <Tab icon={<PeopleIcon sx={{ fontSize: 20 }} />} iconPosition="start" label="الجهات والموردين" />
-        <Tab icon={<SecurityIcon sx={{ fontSize: 20 }} />} iconPosition="start" label="الحسابات والصلاحيات" />
-        <Tab icon={<BackupIcon sx={{ fontSize: 20 }} />} iconPosition="start" label="النسخ الاحتياطي والاستعادة" />
+        <Tab id="settings-tab-0" aria-controls="settings-tabpanel-0" icon={<BusinessIcon sx={{ fontSize: 20 }} />} iconPosition="start" label="الهوية المؤسسية والتوقيعات" />
+        <Tab id="settings-tab-1" aria-controls="settings-tabpanel-1" icon={<LayersIcon sx={{ fontSize: 20 }} />} iconPosition="start" label="خيارات تهيئة المستودعات والأصناف" />
+        <Tab id="settings-tab-2" aria-controls="settings-tabpanel-2" icon={<PeopleIcon sx={{ fontSize: 20 }} />} iconPosition="start" label="الجهات والموردين" />
+        <Tab id="settings-tab-3" aria-controls="settings-tabpanel-3" icon={<SecurityIcon sx={{ fontSize: 20 }} />} iconPosition="start" label="الحسابات والصلاحيات" />
+        <Tab id="settings-tab-4" aria-controls="settings-tabpanel-4" icon={<BackupIcon sx={{ fontSize: 20 }} />} iconPosition="start" label="النسخ الاحتياطي والاستعادة" />
       </Tabs>
 
       {/* Info messages */}
       
 
+      <Box role="tabpanel" id={`settings-tabpanel-${activeTab}`} aria-labelledby={`settings-tab-${activeTab}`}>
       {/* Tab 0: Core Reference Settings */}
       {activeTab === 0 && (
         <Grid container spacing={3} sx={{ pt: 1 }}>
@@ -3120,6 +3121,7 @@ export default function Settings() {
           )}
         </Grid>
       )}
+      </Box>
 
       {/* Google Drive Status Dialog */}
       <Dialog 

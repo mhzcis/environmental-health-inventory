@@ -293,6 +293,12 @@ export const getDesignTokens = (mode: 'light' | 'dark'): ThemeOptions => ({
         },
       },
     },
+    // QA-20261108 UI-02: helper text under a read-only (disabled) field explains why it is locked; keep it readable (axe color-contrast 2.56:1 before).
+    MuiFormHelperText: {
+      styleOverrides: {
+        root: ({ theme }) => ({ '&.Mui-disabled': { color: theme.palette.text.secondary } }),
+      },
+    },
     MuiTablePagination: {
       defaultProps: {
         // QA-20261108 A11Y-02: Arabic accessible names for the page buttons.
