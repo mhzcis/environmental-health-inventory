@@ -14,6 +14,8 @@ import AddIcon from '@mui/icons-material/Add';
 import FilterAltOffIcon from "@mui/icons-material/FilterAltOff";
 import SearchIcon from '@mui/icons-material/Search';
 import DeleteIcon from '@mui/icons-material/Delete';
+import EditNoteIcon from '@mui/icons-material/EditNote';
+import { subscribeInventoryOutbox } from '../services/supabaseOutbox';
 import PrintIcon from '@mui/icons-material/Print';
 import AttachFileIcon from '@mui/icons-material/AttachFile';
 import CreateTransactionModal from '../components/CreateTransactionModal';
@@ -46,6 +48,28 @@ export default function Transactions() {
   const linkedTransactionId = routeFilters.get('transactionId');
   const [transactions, setTransactions] = useState<InventoryTransaction[]>([]);
   const [materials, setMaterials] = useState<Material[]>([]);
+  // QA-20261108 TX-03: correction = cancel + replacement with a new voucher number, one atomic request.
+  const [correcting, setCorrecting] = useState<InventoryTransaction | null>(null);
+  const [correction, setCorrection] = useState({ quantity: '', date: '', notes: '', reason: '' });
+  const [correctionBusy, setCorrectionBusy] = useState(false);
+  const [pendingTxIds, setPendingTxIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    let active = true;
+    const refresh = () => { void dataService.listPendingInventoryMutations().then(rows => {
+      if (active) setPendingTxIds(new Set(rows.flatMap(row => row.operations.filter(op => op.collection === 'transactions' && op.kind === 'set').map(op => op.docId))));
+    }).catch(() => {}); };
+    refresh(); const stop = subscribeInventoryOutbox(refresh); return () => { active = false; stop(); };
+  }, []);
+  const openCorrection = (tx: InventoryTransaction) => { setCorrecting(tx); setCorrection({ quantity: String(tx.quantity), date: tx.date, notes: tx.notes || '', reason: '' }); };
+  const submitCorrection = async () => {
+    if (!correcting) return; setCorrectionBusy(true);
+    try {
+      const r = await dataService.correctTransaction(correcting.id, { quantity: Number(correction.quantity), date: correction.date, notes: correction.notes, reason: correction.reason });
+      if (r.success) { setSuccessMessage(r.message); setCorrecting(null); }
+      else if (r.pending) { setErrorMessage(r.message); setCorrecting(null); }
+      else setErrorMessage(r.message);
+    } finally { setCorrectionBusy(false); }
+  };
   const [settings, setSettings] = useState(dataService.getSettings());
 
   // Filters State
@@ -649,6 +673,22 @@ export default function Transactions() {
 
       {/* Alert toast banners */}
       <NotificationToast open={!!successMessage} message={successMessage} severity="success" onClose={() => setSuccessMessage('')} />
+      <Dialog open={!!correcting} onClose={() => !correctionBusy && setCorrecting(null)} aria-labelledby="tx-correction-title" maxWidth="sm" fullWidth>
+        <DialogTitle id="tx-correction-title">تصحيح الحركة {correcting?.transactionNumber} (إلغاء وبديل)</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mb: 2, color: '#334155' }}>
+            ستُلغى الحركة الأصلية ({correcting?.transactionType}، {correcting?.itemCode}، الكمية {correcting?.quantity}، تاريخ {correcting?.date}) وتُسجَّل حركة بديلة برقم سند جديد في طلب واحد: يُعتمدان معًا أو لا يُعتمد أي منهما. يحفظ سجل التدقيق القيم الأصلية والربط بينهما.
+          </Typography>
+          <TextField label="الكمية الصحيحة" type="number" fullWidth sx={{ mb: 2 }} value={correction.quantity} onChange={e => setCorrection(c => ({ ...c, quantity: e.target.value }))} slotProps={{ htmlInput: { min: 0, step: 'any', name: 'correction-quantity' } }} />
+          <TextField label="التاريخ الصحيح" type="date" fullWidth sx={{ mb: 2 }} value={correction.date} onChange={e => setCorrection(c => ({ ...c, date: e.target.value }))} slotProps={{ inputLabel: { shrink: true }, htmlInput: { name: 'correction-date' } }} />
+          <TextField label="ملاحظات الحركة البديلة" fullWidth sx={{ mb: 2 }} value={correction.notes} onChange={e => setCorrection(c => ({ ...c, notes: e.target.value }))} slotProps={{ htmlInput: { name: 'correction-notes' } }} />
+          <TextField label="سبب التصحيح (إلزامي)" fullWidth required value={correction.reason} onChange={e => setCorrection(c => ({ ...c, reason: e.target.value }))} slotProps={{ htmlInput: { name: 'correction-reason' } }} />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCorrecting(null)} disabled={correctionBusy}>إلغاء</Button>
+          <Button variant="contained" onClick={() => void submitCorrection()} disabled={correctionBusy}>تأكيد التصحيح</Button>
+        </DialogActions>
+      </Dialog>
       <NotificationToast open={!!errorMessage} message={errorMessage} severity="error" onClose={() => setErrorMessage('')} />
 
       {/* Filters Toolbar */}
@@ -1010,7 +1050,11 @@ export default function Transactions() {
                         }}
                       />
                     </TableCell>
-                    <TableCell sx={{ fontFamily: 'monospace', fontWeight: 'bold', color: '#006da3' }}><span dir="ltr">{tx.transactionNumber || '---'}</span></TableCell>
+                    <TableCell sx={{ fontFamily: 'monospace', fontWeight: 'bold', color: '#006da3' }}>
+                      <span dir="ltr">{tx.transactionNumber || '---'}</span>
+                      {tx.correctionOf && <Chip size="small" label={`تصحيح لـ ${tx.correctionOf.transactionNumber || ''}`} sx={{ ml: 0.5, height: 20, fontSize: '10px', bgcolor: '#e0f2fe', color: '#075985', fontWeight: 'bold' }} />}
+                      {pendingTxIds.has(tx.id) && <Chip size="small" data-pending-tx={tx.id} label="بانتظار تأكيد الخادم" sx={{ ml: 0.5, height: 20, fontSize: '10px', bgcolor: '#fef3c7', color: '#92400e', fontWeight: 'bold' }} />}
+                    </TableCell>
                     <TableCell sx={{ fontFamily: 'monospace' }}>{tx.date}</TableCell>
                     <TableCell sx={{ color: '#475569', fontSize: '0.85rem', fontWeight: selectedStorehouse === 'all' ? 'bold' : 'normal' }}>
                       {selectedStorehouse === 'all' ? 'جميع المستودعات (الإجمالي)' : (tx.storehouse || '')}
@@ -1065,6 +1109,13 @@ export default function Transactions() {
 
                         {/* Slot 3: Delete / Archive (Width: 72px) */}
                         <Box sx={{ width: 72, display: 'flex', justifyContent: 'center' }}>
+                          {dataService.hasPermission('transactions_delete') && dataService.hasPermission('transactions_create') && tx.transactionType !== 'تحويل' && tx.transactionType !== 'افتتاحي' && (
+                            <Tooltip title="تصحيح الحركة (إلغاء وبديل)">
+                              <IconButton size="small" aria-label="تصحيح الحركة (إلغاء وبديل)" sx={{ color: '#075985' }} onClick={() => openCorrection(tx)}>
+                                <EditNoteIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
                           {dataService.hasPermission('transactions_delete') ? (
                             <Tooltip title="تراجع وإلغاء الحركة">
                               <IconButton size="small" color="error" onClick={() => handleOpenDelete(tx)}>

@@ -185,9 +185,19 @@ export const normalizeAuditLog = (value: unknown, documentId?: string): AuditLog
   const action = sanitizeAuditText(record.action);
   const details = sanitizeAuditText(record.details);
   if (!action || !details) return null;
+  // QA-20261108 TX-03: server receipt link "original cancelled → replacement" (sanitized, display only).
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+  const corrections = (Array.isArray(record.corrections) ? record.corrections : []).slice(0, 20)
+    .filter((c): c is Record<string, unknown> => !!c && typeof c === 'object' && !Array.isArray(c))
+    .map(c => ({
+      originalNumber: sanitizeAuditText(c.originalNumber).slice(0, 64), originalQuantity: num(c.originalQuantity),
+      replacementNumber: sanitizeAuditText(c.replacementNumber).slice(0, 64), replacementQuantity: num(c.replacementQuantity),
+      reason: sanitizeAuditText(c.reason).slice(0, 500),
+    }));
   return {
     id, timestamp, user, action, details, actorUserId, operationType,
     ...(affected.length ? { affectedEntities: encodeAffectedEntities(affected) } : {}),
     ...(typeof record.itemType === 'string' ? { itemType: sanitizeAuditText(record.itemType).slice(0, 64) } : {}),
+    ...(corrections.length ? { corrections } : {}),
   };
 };
