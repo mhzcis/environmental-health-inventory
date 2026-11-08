@@ -64,7 +64,7 @@ export default function AuditLogs() {
 
   const getLogChipStyle = (type?: string) => {
     if (type === 'مادة') return { bg: '#e0f2fe', text: '#0369a1', label: 'المواد 📦' };
-    if (type === 'مبيد') return { bg: '#fef3c7', text: '#d97706', label: 'المبيدات 🧪' };
+    if (type === 'مبيد') return { bg: '#fef3c7', text: '#b45309', label: 'المبيدات 🧪' };
     if (type === 'حركة') return { bg: '#dcfce7', text: '#166534', label: 'حركة مخزن 🔄' };
     if (type === 'إعدادات') return { bg: '#f1f5f9', text: '#475569', label: 'النظام ⚙️' };
     return { bg: '#f3e8ff', text: '#6b21a8', label: 'عام 👤' };

@@ -436,7 +436,7 @@ export default function Dashboard() {
             </TableHead>
             <TableBody>
               {recentTransactions.map((tx, idx) => {
-                let colorClass = { bg: '#e0f2fe', text: '#007ab7' };
+                let colorClass = { bg: '#e0f2fe', text: '#006da3' };
                 if (tx.transactionType === 'افتتاحي') colorClass = { bg: '#dcfce7', text: '#15803d' };
                 if (tx.transactionType === 'صادر') colorClass = { bg: '#fee2e2', text: '#b91c1c' };
                 if (tx.transactionType === 'مستهلك') colorClass = { bg: '#fffbeb', text: '#b45309' };

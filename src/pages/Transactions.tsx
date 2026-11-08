@@ -208,7 +208,7 @@ export default function Transactions() {
       const rows = selectedItems.flatMap(t => {
         let badgeColor = { bg: '#e2e8f0', text: '#334155' };
         if (t.transactionType === 'افتتاحي') badgeColor = { bg: '#dcfce7', text: '#15803d' };
-        else if (t.transactionType === 'وارد') badgeColor = { bg: '#e0f2fe', text: '#007ab7' };
+        else if (t.transactionType === 'وارد') badgeColor = { bg: '#e0f2fe', text: '#006da3' };
         else if (t.transactionType === 'صادر') badgeColor = { bg: '#fee2e2', text: '#b91c1c' };
         else if (t.transactionType === 'مستهلك') badgeColor = { bg: '#fffbeb', text: '#b45309' };
         else if (t.transactionType === 'تحويل') badgeColor = { bg: '#f3e8ff', text: '#6b21a8' };
@@ -976,7 +976,7 @@ export default function Transactions() {
                 if (tx.transactionType === 'افتتاحي') {
                   badgeColor = { bg: '#dcfce7', text: '#15803d' };
                 } else if (tx.transactionType === 'وارد') {
-                  badgeColor = { bg: '#e0f2fe', text: '#007ab7' };
+                  badgeColor = { bg: '#e0f2fe', text: '#006da3' };
                 } else if (tx.transactionType === 'صادر') {
                   badgeColor = { bg: '#fee2e2', text: '#b91c1c' };
                 } else if (tx.transactionType === 'مستهلك') {
@@ -1089,7 +1089,7 @@ export default function Transactions() {
                         <TableCell sx={{ color: '#566375' }}>↳ تفصيل رصيد {tx.itemName}</TableCell>
                         <TableCell />
                         <TableCell align="center"><Chip label="تفصيل" size="small" variant="outlined" /></TableCell>
-                        <TableCell align="center" sx={{ color: warehouse === tx.storehouse ? (isInbound ? '#15803d' : '#ef4444') : '#94a3b8' }}>
+                        <TableCell align="center" sx={{ color: warehouse === tx.storehouse ? (isInbound ? '#15803d' : '#c81e1e') : '#566375' }}>
                           {warehouse === tx.storehouse ? <><span dir="ltr">{isInbound ? '+' : '-'}{tx.quantity}</span> {tx.unit || 'وحدة'}</> : '—'}
                         </TableCell>
                         <TableCell align="center" sx={{ color: '#566375' }}>{tx.displayWarehouseStockBefore?.[warehouse] ?? 0}</TableCell>
