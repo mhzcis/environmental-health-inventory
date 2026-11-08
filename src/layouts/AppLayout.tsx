@@ -172,6 +172,9 @@ export default function AppLayout({ children }: Props) {
 
   const handleLogoutAttempt = async () => {
     if (logoutInFlightRef.current) return;
+    // QA-20261108 SES-06: warn before leaving requests that the server has not confirmed yet.
+    const queued = await dataService.listPendingInventoryMutations().catch(() => []);
+    if (queued.length && !window.confirm(`لديك ${queued.length} طلبًا محفوظًا على هذا الجهاز لم يؤكده الخادم بعد. إذا خرجت الآن سيبقى محفوظًا باسمك ويُرسل تلقائيًا عند دخولك مجددًا، ولن يتمكن حساب آخر من الدخول على هذا الجهاز قبل ذلك. هل تريد الخروج؟`)) return;
     if (dataService.hasUnbackedUpChanges()) {
       setLogoutDialogOpen(true);
     } else {
