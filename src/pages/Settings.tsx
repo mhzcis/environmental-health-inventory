@@ -118,7 +118,6 @@ export default function Settings() {
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const [resetConfirmText, setResetConfirmText] = useState('');
   const [resetAdminPassword, setResetAdminPassword] = useState('');
-  const [driveBackupDialogOpen, setDriveBackupDialogOpen] = useState(false);
   const [dryRunResult, setDryRunResult] = useState<MigrationLog | null>(null);
   const [isDryRunning, setIsDryRunning] = useState(false);
   const [validatedBackupData, setValidatedBackupData] = useState<any | null>(null);
@@ -126,7 +125,6 @@ export default function Settings() {
   const [executeResult, setExecuteResult] = useState<MigrationLog | null>(null);
   const [migrationConfirmDialogOpen, setMigrationConfirmDialogOpen] = useState(false);
   const [migrationConfirmText, setMigrationConfirmText] = useState('');
-  const [driveStep, setDriveStep] = useState(0);
   const [isTestingRbac, setIsTestingRbac] = useState(false);
   const [rbacReport, setRbacReport] = useState<RbacTestReport | null>(null);
   const [isComparing, setIsComparing] = useState(false);
@@ -135,7 +133,6 @@ export default function Settings() {
   const [auditSyncResult, setAuditSyncResult] = useState<AuditLogSyncResult | null>(null);
   const [isAuditSyncing, setIsAuditSyncing] = useState(false);
   const [isAuditDryRunning, setIsAuditDryRunning] = useState(false);
-  const [driveError, setDriveError] = useState<string | null>(null);
     const [isFactoryResetting, setIsFactoryResetting] = useState(false);
   const [localDeviceClearDialogOpen, setLocalDeviceClearDialogOpen] = useState(false);
   const [localDeviceClearConfirmText, setLocalDeviceClearConfirmText] = useState('');
@@ -156,10 +153,6 @@ export default function Settings() {
   };
   const [isImporting, setIsImporting] = useState(false);
   const [isImportingTx, setIsImportingTx] = useState(false);
-  const [_googleClientIdSetting, _setGoogleClientIdSetting] = useState(() => {
-    return localStorage.getItem('google_drive_client_id_setting') || '';
-  });
-
   // Partners (Suppliers & Receivers) States
   const [partnerFormOpen, setPartnerFormOpen] = useState(false);
   const [partnerEditMode, setPartnerEditMode] = useState(false);
@@ -1032,285 +1025,9 @@ export default function Settings() {
     }
   };
 
-  // Real Google Drive Backup Flow (JSON & Excel sheets)
-  const proceedWithDriveUpload = async (accessToken: string) => {
-    setDriveStep(2); // Generating files
-    try {
-      // 1. Gather and verify the canonical backup
-      const backupData = await createBackup();
-      const verification = await validateBackup(backupData);
-      if (!verification.success) throw new Error(verification.errors.join(' '));
-      const { materials, transactions, auditLogs, generatorLogs } = backupData;
-      const fileContent = JSON.stringify(backupData, null, 2);
-      
-      // 2. Generate Excel Buffer
-      const workbook = new ExcelJS.Workbook();
-      const fontName = 'Cairo';
+  // QA-20261108 RTL-04/UI-04: the Google Drive backup flow was never wired (no OAuth; its button actually ran
+  // «دمج بيانات الجهاز» into Supabase). Card, dialog and dead upload code removed; see owner decision.
 
-      // Sheet 1: Materials
-      const matSheet = workbook.addWorksheet('الأصناف والمواد', {
-        views: [{ showGridLines: true, rightToLeft: true }]
-      });
-      matSheet.addRow([settings.organizationName || 'الأونروا - وكالة الغوث']).font = { name: fontName, size: 12, bold: true, color: { argb: '007AB7' } };
-      matSheet.addRow(['سجل الجرد الفعلي الكلي للأصناف والمواد الكيميائية بالمستودعات']).font = { name: fontName, size: 14, bold: true, color: { argb: '0F172A' } };
-      matSheet.addRow([`تاريخ الإصدار والنسخ السحابي: ${new Date().toLocaleDateString('ar-EG')} ${new Date().toLocaleTimeString('ar-EG')}`]).font = { name: fontName, size: 10, color: { argb: '475569' } };
-      matSheet.addRow([]);
-
-      const matHeaders = ['المعرف', 'رمز الصنف', 'اسم الصنف', 'التصنيف', 'الوحدة', 'الرصيد الحالي', 'حد الأمان', 'المستودع', 'ملاحظات'];
-      const matHeaderRow = matSheet.addRow(matHeaders);
-      matHeaderRow.height = 26;
-      matHeaderRow.eachCell((cell) => {
-        cell.font = { name: fontName, size: 11, bold: true, color: { argb: 'FFFFFF' } };
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '007AB7' } };
-        cell.alignment = { horizontal: 'center', vertical: 'middle' };
-      });
-
-      materials.forEach((m: any) => {
-        const row = matSheet.addRow([
-          m.id || '',
-          m.code || '',
-          m.name || '',
-          m.category || '',
-          m.unit || '',
-          Number(m.currentStock) || 0,
-          Number(m.minimumStock) || 0,
-          m.storageLocation || '',
-          m.notes || ''
-        ]);
-        row.height = 22;
-      });
-
-      // Sheet 2: Transactions
-      const txSheet = workbook.addWorksheet('حركات المخزون', {
-        views: [{ showGridLines: true, rightToLeft: true }]
-      });
-      txSheet.addRow([settings.organizationName || 'الأونروا - وكالة الغوث']).font = { name: fontName, size: 12, bold: true, color: { argb: '007AB7' } };
-      txSheet.addRow(['سجل حركات المخزون - معاملات التوريد والصرف السنوية الكلية']).font = { name: fontName, size: 14, bold: true, color: { argb: '0F172A' } };
-      txSheet.addRow([`تاريخ الإصدار والنسخ السحابي: ${new Date().toLocaleDateString('ar-EG')} ${new Date().toLocaleTimeString('ar-EG')}`]).font = { name: fontName, size: 10, color: { argb: '475569' } };
-      txSheet.addRow([]);
-
-      const txHeaders = ['رقم الحركة', 'رمز الصنف', 'اسم الصنف', 'نوع الحركة', 'الكمية', 'التاريخ', 'رقم المستند', 'الجهة المستلمة / جهة التوريد', 'بواسطة'];
-      const txHeaderRow = txSheet.addRow(txHeaders);
-      txHeaderRow.height = 26;
-      txHeaderRow.eachCell((cell) => {
-        cell.font = { name: fontName, size: 11, bold: true, color: { argb: 'FFFFFF' } };
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '1E293B' } };
-        cell.alignment = { horizontal: 'center', vertical: 'middle' };
-      });
-
-      transactions.forEach((t: any) => {
-        const row = txSheet.addRow([
-          t.id || '',
-          t.itemCode || '',
-          t.itemName || '',
-          t.transactionType === 'وارد' ? 'توريد (+)' : t.transactionType === 'صادر' ? 'صرف (-)' : 'استهلاك (-)',
-          Number(t.quantity) || 0,
-          t.date || '',
-          t.transactionNumber || '',
-          t.supplierOrReceiver || '',
-          t.executedBy || ''
-        ]);
-        row.height = 22;
-      });
-
-      // Sheet 3: Audit Logs
-      const auditSheet = workbook.addWorksheet('سجل التدقيق والمراقبة', {
-        views: [{ showGridLines: true, rightToLeft: true }]
-      });
-      auditSheet.addRow([settings.organizationName || 'الأونروا - وكالة الغوث']).font = { name: fontName, size: 12, bold: true, color: { argb: '007AB7' } };
-      auditSheet.addRow(['سجل التدقيق التاريخي للعمليات وحركات النظام بالثانية']).font = { name: fontName, size: 14, bold: true, color: { argb: '0F172A' } };
-      auditSheet.addRow([`تاريخ الإصدار والنسخ السحابي: ${new Date().toLocaleDateString('ar-EG')} ${new Date().toLocaleTimeString('ar-EG')}`]).font = { name: fontName, size: 10, color: { argb: '475569' } };
-      auditSheet.addRow([]);
-
-      const auditHeaders = ['الوقت والتاريخ', 'المستخدم', 'الإجراء الرئيسي', 'التفاصيل والعملية الجارية', 'العنوان والملقم'];
-      const auditHeaderRow = auditSheet.addRow(auditHeaders);
-      auditHeaderRow.height = 26;
-      auditHeaderRow.eachCell((cell) => {
-        cell.font = { name: fontName, size: 11, bold: true, color: { argb: 'FFFFFF' } };
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '475569' } };
-        cell.alignment = { horizontal: 'center', vertical: 'middle' };
-      });
-
-      auditLogs.forEach((a: any) => {
-        const row = auditSheet.addRow([
-          a.timestamp || '',
-          a.user || '',
-          a.action || '',
-          a.details || '',
-          a.ipAddress || ''
-        ]);
-        row.height = 22;
-      });
-
-      // Sheet 4: Generator Logs
-      const genSheet = workbook.addWorksheet('سجل تشغيل المولد', {
-        views: [{ showGridLines: true, rightToLeft: true }]
-      });
-      genSheet.addRow([settings.organizationName || 'الأونروا - وكالة الغوث']).font = { name: fontName, size: 12, bold: true, color: { argb: '007AB7' } };
-      genSheet.addRow(['سجل قراءات وساعات تشغيل العداد التراكمي للمولد']).font = { name: fontName, size: 14, bold: true, color: { argb: '0F172A' } };
-      genSheet.addRow([`تاريخ الإصدار والنسخ السحابي: ${new Date().toLocaleDateString('ar-EG')} ${new Date().toLocaleTimeString('ar-EG')}`]).font = { name: fontName, size: 10, color: { argb: '475569' } };
-      genSheet.addRow([]);
-
-      const genHeaders = ['التاريخ', 'اليوم', 'القراءة السابقة', 'القراءة الحالية', 'ساعات التشغيل', 'الملاحظات', 'المُدخل'];
-      const genHeaderRow = genSheet.addRow(genHeaders);
-      genHeaderRow.height = 26;
-      genHeaderRow.eachCell((cell) => {
-        cell.font = { name: fontName, size: 11, bold: true, color: { argb: 'FFFFFF' } };
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0284C7' } };
-        cell.alignment = { horizontal: 'center', vertical: 'middle' };
-      });
-
-      generatorLogs.forEach((g: any) => {
-        const row = genSheet.addRow([
-          g.date || '',
-          g.dayName || '',
-          Number(g.previousReading) || 0,
-          Number(g.currentReading) || 0,
-          Number(g.operatingHours) || 0,
-          g.notes || '-',
-          g.createdBy || ''
-        ]);
-        row.height = 22;
-      });
-
-      // Auto-fit Column Widths across worksheets
-      [matSheet, txSheet, auditSheet, genSheet].forEach((ws) => {
-        ws.columns.forEach((column: any) => {
-          let maxLen = 12;
-          column.eachCell({ includeEmpty: true }, (cell: any) => {
-            if (cell.value) {
-              const strLen = cell.value.toString().length;
-              if (strLen > maxLen) {
-                maxLen = strLen;
-              }
-            }
-          });
-          column.width = Math.min(Math.max(maxLen + 4, 13), 42);
-        });
-      });
-
-      const excelBuffer = await workbook.xlsx.writeBuffer();
-
-      // 3. Start JSON upload
-      setDriveStep(3);
-      const sanitizeName = (str: string) => str.replace(/[\/\\?%*:|"<>\s]+/g, '_');
-      const orgPart = sanitizeName(settings.organizationName || 'organization');
-      const deptPart = sanitizeName(settings.departmentName || 'department');
-      const dateStr = new Date().toISOString().replace(/[:.]/g, '-');
-      
-      const jsonFileName = `${orgPart}_${deptPart}_backup_v2_${dateStr}.json`;
-      const excelFileName = `${orgPart}_${deptPart}_backup_${dateStr}.xlsx`;
-
-      // Upload JSON File
-      const jsonMetadata = {
-        name: jsonFileName,
-        mimeType: 'application/json'
-      };
-      const jsonMetadataBlob = new Blob([JSON.stringify(jsonMetadata)], { type: 'application/json' });
-      const jsonMediaBlob = new Blob([fileContent], { type: 'application/json' });
-
-      const jsonFormData = new FormData();
-      jsonFormData.append('metadata', jsonMetadataBlob);
-      jsonFormData.append('file', jsonMediaBlob);
-
-      const jsonResponse = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${accessToken}`
-        },
-        body: jsonFormData
-      });
-
-      if (!jsonResponse.ok) {
-        // Never read or surface the Drive response body (may echo request/identity details): status only.
-        throw Object.assign(new Error('DRIVE_UPLOAD_JSON_FAILED'), { httpStatus: jsonResponse.status });
-      }
-
-      // 4. Start Excel upload
-      setDriveStep(4);
-
-      const excelMetadata = {
-        name: excelFileName,
-        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      };
-      const excelMetadataBlob = new Blob([JSON.stringify(excelMetadata)], { type: 'application/json' });
-      const excelMediaBlob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-
-      const excelFormData = new FormData();
-      excelFormData.append('metadata', excelMetadataBlob);
-      excelFormData.append('file', excelMediaBlob);
-
-      const excelResponse = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${accessToken}`
-        },
-        body: excelFormData
-      });
-
-      if (!excelResponse.ok) {
-        throw Object.assign(new Error('DRIVE_UPLOAD_EXCEL_FAILED'), { httpStatus: excelResponse.status });
-      }
-
-      // 5. Completion!
-      setDriveStep(5);
-      dataService.recordGoogleDriveBackupTime();
-      
-      // Log audit
-      await dataService.logAudit(
-        'نسخ احتياطي سحابي حقيقي', 
-        `تم بنجاح تصدير وتأمين وحفظ ملفين (JSON و Excel للتقرير الكلي) في حساب Google Drive الخاص بالمستخدم`, 
-        'إعدادات'
-      );
-
-    } catch (err: any) {
-
-      console.error('Drive backup failed:', safeErrorDetail(err));
-      setDriveError(safeUserMessage(err, 'drive', { allowAppText: true, fallback: 'حدث خطأ غير متوقع أثناء توليد أو رفع كشوف النسخ السحابي.' }));
-    }
-  };
-
-  const handleGoogleDriveBackup = async () => {
-    setDriveBackupDialogOpen(true);
-    setDriveStep(1);
-    setDriveError(null);
-
-    try {
-      if (!isFirebaseAvailable || !auth) {
-        throw new Error('خدمة المزامنة السحابية غير متوفرة حالياً.');
-      }
-
-      const uploadRes = await dataService.uploadAllLocalDataToCloud();
-      if (!uploadRes.success) {
-        throw new Error(uploadRes.message);
-      }
-      setDriveStep(5);
-      dataService.recordGoogleDriveBackupTime();
-      await dataService.logAudit(
-        'دمج بيانات الجهاز بالسحابة',
-        'اعتُمد دمج السجلات التشغيلية والإعدادات في Supabase. هذا الإجراء ليس نسخة احتياطية مستقلة ولا استعادة كاملة.',
-        'إعدادات'
-      );
-    } catch (err: any) {
-
-      console.error('Google Drive sign-in failed:', safeErrorDetail(err));
-      setDriveError(safeUserMessage(err, 'drive', { allowAppText: true, fallback: 'حدث خطأ غير متوقع أثناء الاتصال بـ Google.' }));
-    }
-  };
-
-  const location = useLocation();
-
-  useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    if (params.get('triggerBackup') === 'true') {
-      // Trigger backup
-      handleGoogleDriveBackup();
-      // Remove query param to prevent re-triggering
-      window.history.replaceState(null, '', window.location.pathname);
-    }
-  }, [location.search]);
-
-  
   // Factory reset trigger
   const handlePerformFactoryReset = async () => {
     const cleanStr = resetConfirmText.trim().toLowerCase();
@@ -2502,57 +2219,6 @@ export default function Settings() {
             </Paper>
           </Grid>
 
-          {/* Card 2: Google Drive Cloud Backup */}
-          <Grid size={{ xs: 12, md: 6 }}>
-            <Paper sx={{ p: 4, borderRadius: '20px', display: 'flex', flexDirection: 'column', height: '100%' }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 3 }}>
-                <Box sx={{ p: 1, bgcolor: '#f0fdf4', borderRadius: '12px', display: 'flex', alignItems: 'center' }}>
-                  <AutorenewIcon sx={{ color: '#15803d' }} />
-                </Box>
-                <Box sx={{ textAlign: 'start' }}>
-                  <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
-                    مُزامنة التخزين السحابي (Google Drive)
-                  </Typography>
-                  <Typography variant="caption" sx={{ color: '#566375', fontFamily: '"Cairo", sans-serif' }}>
-                    تأمين الأرصدة عبر الرفع المباشر لسجل الجرد إلى حساب غوغل درايف
-                  </Typography>
-                </Box>
-              </Box>
-
-              <Divider sx={{ mb: 3 }} />
-
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, flexGrow: 1, textAlign: 'start' }}>
-                <Typography variant="body2" sx={{ color: '#475569', lineHeight: 1.6, fontFamily: '"Cairo", sans-serif' }}>
-                  تتيح لك هذه الميزة تسجيل الدخول المباشر والآمن بحساب Google Drive الخاص بك (أو أي حساب ترغب بالرفع إليه) لرفع وحفظ كشوف الحركات والأصناف تلقائياً؛ كإجراء وقائي ضد تلف الأجهزة المحلية. يقوم النظام برفع ملفين معاً بضغطة زر واحدة: نسخة قاعدة البيانات الشاملة لغرض الاسترجاع (JSON)، وتقرير الجرد السنوي الكلي المنسق كجدول إلكتروني (Excel).
-                </Typography>
-
-
-
-                <Box sx={{ mt: 'auto', pt: 2, display: 'flex', width: '100%' }}>
-                  <Button
-                    variant="contained"
-                    onClick={handleGoogleDriveBackup}
-                    startIcon={<CloudUploadIcon sx={{ ml: 1, mr: -0.5 }} />}
-                    sx={{ 
-                      bgcolor: '#16a34a', 
-                      fontWeight: 'bold', 
-                      color: 'white',
-                      fontFamily: '"Cairo", sans-serif', 
-                      borderRadius: '12px', 
-                      px: 3, 
-                      py: 1.5, 
-                      width: '100%',
-                      '&:hover': { bgcolor: '#15803d' },
-                      boxShadow: '0 4px 12px rgba(22, 163, 74, 0.15)'
-                    }}
-                  >
-                    تصدير ومزامنة لـ Google Drive السحابي
-                  </Button>
-                </Box>
-              </Box>
-            </Paper>
-          </Grid>
-
           {/* Card 2.5: Dry Run Migration */}
           <Grid size={{ xs: 12, md: 12 }}>
             <Paper sx={{ p: 4, borderRadius: '20px', display: 'flex', flexDirection: 'column', bgcolor: 'white' }}>
@@ -3122,107 +2788,6 @@ export default function Settings() {
         </Grid>
       )}
       </Box>
-
-      {/* Google Drive Status Dialog */}
-      <Dialog 
-        open={driveBackupDialogOpen} 
-        onClose={() => {
-          if (driveStep === 5 || driveError) {
-            setDriveBackupDialogOpen(false);
-          }
-        }}
-        sx={{
-          '& .MuiDialog-paper': {
-            borderRadius: '20px',
-            p: 1,
-            maxWidth: '460px',
-            width: '100%',
-            direction: 'rtl'
-          }
-        }}
-      >
-        <DialogTitle sx={{ fontFamily: '"Cairo", sans-serif', fontWeight: 'bold', textAlign: 'center', color: driveError ? '#c81e1e' : '#15803d' }}>
-          {driveError ? '⚠️ فشل الاتصال أو الرفع السحابي' : '📤 تصدير ومزامنة البيانات سحابياً'}
-        </DialogTitle>
-        <DialogContent sx={{ textAlign: 'center' }}>
-          <Box sx={{ my: 2, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-            <Box sx={{ position: 'relative', display: 'inline-flex', justifyContent: 'center', mb: 3 }}>
-              {driveError ? (
-                <Box 
-                  sx={{ 
-                    width: 64, 
-                    height: 64, 
-                    borderRadius: '50%', 
-                    bgcolor: '#fef2f2', 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    justifyContent: 'center',
-                    border: '3px solid #ef4444'
-                  }}
-                >
-                  <Typography variant="h4" sx={{ color: '#c81e1e' }}>✕</Typography>
-                </Box>
-              ) : driveStep < 5 ? (
-                <LoadingSpinner message="جاري تجهيز النسخة الاحتياطية..." />
-              ) : (
-                <Box 
-                  sx={{ 
-                    width: 64, 
-                    height: 64, 
-                    borderRadius: '50%', 
-                    bgcolor: '#f0fdf4', 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    justifyContent: 'center',
-                    border: '3px solid #16a34a'
-                  }}
-                >
-                  <Typography variant="h4" sx={{ color: '#15803d' }}>✓</Typography>
-                </Box>
-              )}
-            </Box>
-
-            {driveError ? (
-              <Alert severity="error" sx={{ width: '100%', fontFamily: '"Cairo", sans-serif', textAlign: 'start', borderRadius: '12px', mb: 2 }}>
-                {driveError}
-              </Alert>
-            ) : (
-              <>
-                <Typography variant="body2" sx={{ fontWeight: 'bold', color: '#334155', mb: 1, fontFamily: '"Cairo", sans-serif' }}>
-                  {driveStep === 1 && 'جاري التحقق من الهوية وفتح نافذة تسجيل الدخول من Google...'}
-                  {driveStep === 2 && 'جاري توليد ملفات النسخ الاحتياطي (JSON و Excel)...'}
-                  {driveStep === 3 && 'جاري رفع ملف البيانات الشامل (JSON) إلى Google Drive...'}
-                  {driveStep === 4 && 'جاري رفع تقرير الجرد المنسق (Excel) إلى Google Drive...'}
-                  {driveStep === 5 && 'اكتمل النسخ السحابي بنجاح وتأمين الكشوفات! 🎉'}
-                </Typography>
-
-                <Typography variant="caption" sx={{ color: '#566375', display: 'block', mb: 2, fontFamily: '"Cairo", sans-serif' }}>
-                  {driveStep < 5 
-                    ? 'يرجى عدم إغلاق هذه النافذة ريثما تكتمل جميع خطوات الرفع والتأمين السحابي...' 
-                    : `تم حفظ وتأمين ملفات البيانات والتقارير بنجاح باسم: ${settings.organizationName || 'backup'}_${localDateString()}.xlsx / .json`}
-                </Typography>
-              </>
-            )}
-          </Box>
-        </DialogContent>
-        <DialogActions sx={{ justifyContent: 'center', pb: 3 }}>
-          <Button 
-            onClick={() => setDriveBackupDialogOpen(false)} 
-            variant="contained"
-            disabled={driveStep < 5 && !driveError}
-            sx={{ 
-              bgcolor: driveError ? '#ef4444' : '#16a34a', 
-              fontWeight: 'bold', 
-              fontFamily: '"Cairo", sans-serif', 
-              borderRadius: '10px', 
-              px: 4, 
-              '&:hover': { bgcolor: driveError ? '#dc2626' : '#15803d' } 
-            }}
-          >
-            إغلاق النافذة
-          </Button>
-        </DialogActions>
-      </Dialog>
 
       {/* Pure Local Device Clear Confirm Dialog */}
       <Dialog
