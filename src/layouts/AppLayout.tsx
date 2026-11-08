@@ -175,22 +175,14 @@ export default function AppLayout({ children }: Props) {
     // QA-20261108 SES-06: warn before leaving requests that the server has not confirmed yet.
     const queued = await dataService.listPendingInventoryMutations().catch(() => []);
     if (queued.length && !window.confirm(`لديك ${queued.length} طلبًا محفوظًا على هذا الجهاز لم يؤكده الخادم بعد. إذا خرجت الآن سيبقى محفوظًا باسمك ويُرسل تلقائيًا عند دخولك مجددًا، ولن يتمكن حساب آخر من الدخول على هذا الجهاز قبل ذلك. هل تريد الخروج؟`)) return;
-    if (dataService.hasUnbackedUpChanges()) {
-      setLogoutDialogOpen(true);
-    } else {
-      await performLogout();
-    }
+    // QA-20261108 RTL-04/UI-04: no «Google Drive» backup prompt — that integration does not exist (data is already on the server).
+    await performLogout();
   };
 
   const handleConfirmLogoutOnly = async () => {
     if (logoutInFlightRef.current) return;
     setLogoutDialogOpen(false);
     await performLogout();
-  };
-
-  const handleConfirmBackupAndLogout = () => {
-    setLogoutDialogOpen(false);
-    navigate('/settings?triggerBackup=true');
   };
 
   const handleDrawerToggle = () => {
@@ -997,48 +989,6 @@ export default function AppLayout({ children }: Props) {
           )}
         </Box>
       </Box>
-
-      {/* Logout Cloud Backup Confirmation Dialog */}
-      <Dialog
-        open={logoutDialogOpen}
-        onClose={() => setLogoutDialogOpen(false)}
-        aria-labelledby="logout-backup-dialog-title"
-        aria-describedby="logout-backup-dialog-description"
-        sx={{ '& .MuiDialog-paper': { borderRadius: '16px', p: 1, direction: 'rtl' } }}
-      >
-        <DialogTitle id="logout-backup-dialog-title" sx={{ fontFamily: '"Cairo", sans-serif', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: 1, color: '#eab308' }}>
-          ⚠️ تنبيه: تغييرات غير محفوظة سحابياً
-        </DialogTitle>
-        <DialogContent>
-          <DialogContentText id="logout-backup-dialog-description" sx={{ fontFamily: '"Cairo", sans-serif', color: 'text.primary', fontSize: '0.95rem', lineHeight: 1.6 }}>
-            هناك تعديلات جديدة جرت على البيانات (المواد، الحركات، أو الإعدادات) منذ آخر نسخة احتياطية سحابية قمت برفعها. هل ترغب في إجراء نسخ احتياطي سحابي سريع إلى Google Drive قبل تسجيل الخروج لتأمين بياناتك؟
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2, gap: 1, justifyContent: 'flex-start' }}>
-          <Button 
-            onClick={handleConfirmBackupAndLogout} 
-            variant="contained" 
-            sx={{ fontFamily: '"Cairo", sans-serif', fontWeight: 'bold', bgcolor: '#eab308', color: '#000000', '&:hover': { bgcolor: '#ca8a04' } }}
-          >
-            📤 نعم، نسخ احتياطي الآن
-          </Button>
-          <Button 
-            onClick={handleConfirmLogoutOnly} 
-            variant="outlined" 
-            color="error"
-            disabled={logoutTimer > 0}
-            sx={{ fontFamily: '"Cairo", sans-serif', fontWeight: 'bold' }}
-          >
-            {logoutTimer > 0 ? `⏰ لاحقاً (${logoutTimer}ث)` : '⏰ لاحقاً (تسجيل الخروج)'}
-          </Button>
-          <Button 
-            onClick={() => setLogoutDialogOpen(false)} 
-            sx={{ fontFamily: '"Cairo", sans-serif', color: 'text.secondary' }}
-          >
-            إلغاء
-          </Button>
-        </DialogActions>
-      </Dialog>
 
       {/* Modern Secure Animated Full-Screen Loading Overlay */}
       {isLoggingOut && (
