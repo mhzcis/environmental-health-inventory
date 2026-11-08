@@ -142,7 +142,8 @@ const materialRefOf = (op: InventorySyncOperation): string | undefined => {
   if (op.collection !== 'transactions') return undefined;
   const value = (op.kind === 'set' ? op.value : undefined) as Record<string, unknown> | undefined;
   const before = op.expected.kind === 'present' ? op.expected.exactLegacyPayload as Record<string, unknown> | undefined : undefined;
-  const ref = value?.materialId ?? before?.materialId;
+  // Transactions reference their material as `itemId` (legacy rows may carry `materialId`).
+  const ref = value?.itemId ?? value?.materialId ?? before?.itemId ?? before?.materialId;
   return typeof ref === 'string' && ref ? ref : undefined;
 };
 export const inventoryDependencyKeys = (row: Pick<Queued, 'operations' | 'transport'>): string[] => {

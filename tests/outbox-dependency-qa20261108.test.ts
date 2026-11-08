@@ -22,7 +22,7 @@ import { enqueueInventoryMutation, InventoryPendingError, listInventoryOutbox, c
 const mat = (id: string) => [{ kind: 'set', collection: 'materials', docId: id, value: { id, name: 'x' }, expected: { kind: 'missing' } }] as any;
 const tx = (id: string, materialId: string, settingsBefore?: any) => [
   ...(settingsBefore ? [{ kind: 'set', collection: 'settings', docId: 'app_config', value: { c: settingsBefore.c + 1 }, expected: { kind: 'present', exactLegacyPayload: settingsBefore } }] : []),
-  { kind: 'set', collection: 'transactions', docId: id, value: { id, materialId }, expected: { kind: 'missing' } }] as any;
+  { kind: 'set', collection: 'transactions', docId: id, value: { id, itemId: materialId }, expected: { kind: 'missing' } }] as any;
 const enqueue = (ops: any, id: string) => enqueueInventoryMutation(ops, ops[0].collection === 'materials' ? 'create-material' : 'save-transaction-batch', id, () => {});
 beforeEach(async () => {
   fake.reject.clear(); fake.offline = false; fake.server.clear(); fake.calls.length = 0;
