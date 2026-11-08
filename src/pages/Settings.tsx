@@ -40,7 +40,9 @@ import { useLocation } from 'react-router-dom';
 import { renderOption } from '../utils/emoji';
 import { PRODUCT_LIMITS, productLimitMessage } from '../utils/productSchema';
 import { getStorehouseByReference } from '../utils/warehouseDomain';
-import { importDate, importNumber, importTransactionId } from '../utils/importValidation';
+import { importDate, importNumber, importTransactionId, ImportRowError, ImportValidationError } from '../utils/importValidation';
+import { validateInventoryDataset } from '../utils/inventoryIntegrity';
+import { getStorehouseEntities } from '../utils/warehouseDomain';
 import type { Material, InventoryTransaction } from '../types';
 import { localDateString } from '../utils/localDate';
 
@@ -760,12 +762,19 @@ export default function Settings() {
     setSuccessMsg('تم تنزيل قالب إكسل للقيود والحركات بنجاح!');
   };
 
+  // QA-20261108 IMP-02: show the spreadsheet row and an Arabic reason instead of a masked internal error.
+  const rowReason = (e: unknown): string => e instanceof ImportValidationError ? e.message : 'بيانات غير صالحة في هذا السطر.';
+  const importMessage = (e: unknown): string => (e instanceof ImportRowError || e instanceof ImportValidationError) ? e.message : productLimitMessage(e);
+  const fail = (message: string): never => { throw new ImportValidationError(message); };
   const readImportRows = async (file: File): Promise<unknown[][]> => {
-    if (file.size > 2 * 1024 * 1024) throw new Error('حجم الملف أكبر من 2 ميجابايت؛ قسّمه قبل الاستيراد.');
-    const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
-    const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[workbook.SheetNames[0]], { header: 1, defval: '' });
-    if (rows.length < 2) throw new Error('الملف لا يحتوي على صفوف بيانات.');
-    if (rows.length > 451) throw new Error('الملف يتجاوز 450 صفًا؛ قسّمه قبل الاستيراد.');
+    if (file.size > 2 * 1024 * 1024) fail('حجم الملف أكبر من 2 ميجابايت؛ قسّمه قبل الاستيراد.');
+    let rows: unknown[][];
+    try {
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+      rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[workbook.SheetNames[0]], { header: 1, defval: '' });
+    } catch { throw new ImportValidationError('تعذر قراءة الملف؛ تأكد أنه ملف إكسل سليم غير تالف ثم أعد المحاولة.'); }
+    if (rows.length < 2) fail('الملف لا يحتوي على صفوف بيانات.');
+    if (rows.length > 451) fail('الملف يتجاوز 450 صفًا؛ قسّمه قبل الاستيراد.');
     return rows;
   };
 
@@ -782,13 +791,13 @@ export default function Settings() {
         try {
           const cell = (n: number) => String(row[n] ?? '').trim();
           const code = cell(0); const name = cell(1); const category = cell(2); const unit = cell(3);
-          if (!code || !name) throw new Error('كود الصنف واسمه مطلوبان.');
-          const key = code.toLowerCase(); if (codes.has(key)) throw new Error('كود الصنف مكرر داخل الملف.'); codes.add(key);
+          if (!code || !name) fail('كود الصنف واسمه مطلوبان.');
+          const key = code.toLowerCase(); if (codes.has(key)) fail('كود الصنف مكرر داخل الملف.'); codes.add(key);
           const warehouse = getStorehouseByReference(cfg, cell(6), false);
-          if (!warehouse || !cfg.units.includes(unit) || !cfg.categories.some(c => c.name === category)) throw new Error('عرّف التصنيف والوحدة والمستودع الفعال في الإعدادات قبل الاستيراد.');
+          if (!warehouse || !cfg.units.includes(unit) || !cfg.categories.some(c => c.name === category)) fail('عرّف التصنيف والوحدة والمستودع الفعال في الإعدادات قبل الاستيراد.');
           const minimumStock = importNumber(row[4], 'حد الأمان'); const opening = importNumber(row[5], 'الرصيد الافتتاحي');
           const old = existing.find(m => m.code.trim().toLowerCase() === key);
-          if (old && opening !== 0) throw new Error('تحديث صنف موجود يتطلب صفرًا في خانة الرصيد الافتتاحي؛ استخدم تسوية الجرد لتعديل الرصيد.');
+          if (old && opening !== 0) fail('تحديث صنف موجود يتطلب صفرًا في خانة الرصيد الافتتاحي؛ استخدم تسوية الجرد لتعديل الرصيد.');
           const now = new Date().toISOString();
           const type = old?.type || (code.toUpperCase().startsWith('PES') || category.includes('مبيد') ? 'pesticide' : 'material');
           const item = { ...old, id: old?.id || `mat-${crypto.randomUUID()}`, code, name, category, unit, type, minimumStock,
@@ -803,12 +812,12 @@ export default function Settings() {
             transactionType: 'افتتاحي', storehouseId: warehouse.id, storehouse: warehouse.name, stockBefore: 0, stockAfter: opening,
             executedBy: dataService.getCurrentUser().fullName, supplierOrReceiver: 'رصيد افتتاحي من استيراد الأصناف',
             notes: 'استيراد Excel ذري', createdAt: now, updatedAt: now });
-        } catch (e) { throw new Error(`السطر ${i + 1}، ${e instanceof Error ? e.message : 'بيانات غير صالحة'}`); }
+        } catch (e) { throw new ImportRowError(i + 1, rowReason(e)); }
       }
       await dataService.importMaterialsBatch(items, openings);
       setSuccessMsg(`اعتمد الخادم الدفعة كاملة: ${added} صنف جديد و${updated} تحديث و${openings.length} رصيد افتتاحي.`);
       setSettings(dataService.getSettings());
-    } catch (e) { setErrorMsg(`استيراد الأصناف: ${productLimitMessage(e)}`); }
+    } catch (e) { setErrorMsg(`استيراد الأصناف: ${importMessage(e)}`); }
     finally { setIsImporting(false); }
   };
 
@@ -818,37 +827,46 @@ export default function Settings() {
     try {
       const rows = await readImportRows(file); const cfg = dataService.getSettings();
       const materials = dataService.getMaterials(); const existing = new Map(dataService.getTransactions().map(t => [t.id, t]));
-      const transactions: InventoryTransaction[] = []; const occurrences = new Map<string, number>(); let repeated = 0;
+      const transactions: InventoryTransaction[] = []; const occurrences = new Map<string, number>(); let repeated = 0; const rowOf = new Map<string, number>();
       const types: Record<string, InventoryTransaction['transactionType']> = { 'وارد': 'وارد', 'إدخال': 'وارد', 'ادخال': 'وارد', 'تزويد': 'وارد', 'صادر': 'صادر', 'إخراج': 'صادر', 'اخراج': 'صادر', 'صرف': 'صادر', 'توزيع': 'صادر', 'مستهلك': 'مستهلك', 'إتلاف': 'مستهلك', 'اتلاف': 'مستهلك', 'استهلاك': 'مستهلك', 'افتتاحي': 'افتتاحي' };
       for (let i = 1; i < rows.length; i++) {
         const row = rows[i]; if (!row.some(v => String(v).trim())) continue;
         try {
           const cell = (n: number) => String(row[n] ?? '').trim();
           const item = materials.find(m => m.code.trim().toLowerCase() === cell(0).toLowerCase());
-          if (!item) throw new Error('كود الصنف غير مسجل.');
-          const type = types[cell(1)]; if (!type) throw new Error('نوع الحركة غير مدعوم في هذا القالب؛ استخدم المسار المخصص للتحويل والتسوية.');
-          const quantity = importNumber(row[2], 'الكمية'); if (quantity <= 0) throw new Error('الكمية يجب أن تكون أكبر من صفر.');
-          const warehouse = getStorehouseByReference(cfg, cell(3), false); if (!warehouse) throw new Error('المستودع غير موجود أو معطل.');
+          if (!item) fail('كود الصنف غير مسجل.');
+          const type = types[cell(1)]; if (!type) fail('نوع الحركة غير مدعوم في هذا القالب؛ استخدم المسار المخصص للتحويل والتسوية.');
+          const quantity = importNumber(row[2], 'الكمية'); if (quantity <= 0) fail('الكمية يجب أن تكون أكبر من صفر.');
+          const warehouse = getStorehouseByReference(cfg, cell(3), false); if (!warehouse) fail('المستودع غير موجود أو معطل.');
           const date = importDate(row[5]); const supplierOrReceiver = cell(4); const notes = cell(6);
           const fields = [item.id, type, quantity, warehouse.id, supplierOrReceiver, date, notes];
           const key = JSON.stringify(fields); const occurrence = occurrences.get(key) || 0; occurrences.set(key, occurrence + 1);
           const id = await importTransactionId(fields, occurrence);
           if (existing.has(id)) { repeated++; continue; }
           const now = new Date().toISOString();
+          rowOf.set(id, i + 1);
           transactions.push({ id, date, itemId: item.id, itemType: item.type, itemCode: item.code, itemName: item.name,
             itemCategory: item.category, unit: item.unit, transactionType: type, quantity, storehouseId: warehouse.id,
             storehouse: warehouse.name, stockBefore: 0, stockAfter: 0, executedBy: dataService.getCurrentUser().fullName,
             supplierOrReceiver, notes, createdAt: now, updatedAt: now });
-        } catch (e) { throw new Error(`السطر ${i + 1}، ${e instanceof Error ? e.message : 'بيانات غير صالحة'}`); }
+        } catch (e) { throw new ImportRowError(i + 1, rowReason(e)); }
       }
       if (transactions.length) {
-        if (transactions.length > 449) throw new Error('الحد 449 حركة في دفعة واحدة؛ قسّم الملف قبل الاستيراد.');
+        if (transactions.length > 449) fail('الحد 449 حركة في دفعة واحدة؛ قسّم الملف قبل الاستيراد.');
+        const check = validateInventoryDataset([...existing.values(), ...transactions], { materials, storehouses: getStorehouseEntities(cfg) });
+        const issue = check.errors.find(err => err.transactionId && rowOf.has(err.transactionId) && ['NEGATIVE_RUNNING_BALANCE', 'INVALID_DATE', 'INVALID_QUANTITY'].includes(err.code));
+        if (issue) {
+          const tx = transactions.find(t => t.id === issue.transactionId)!;
+          throw new ImportRowError(rowOf.get(issue.transactionId!)!, issue.code === 'NEGATIVE_RUNNING_BALANCE'
+            ? `هذه الحركة تجعل رصيد الصنف «${tx.itemCode}» في «${tx.storehouse}» سالبًا بتاريخ ${tx.date}. تحقق من الكمية أو التاريخ؛ الحركات المؤرخة قبل الرصيد الافتتاحي أو قبل وارد يغطيها تُرفض.`
+            : 'تعارض هذا السطر مع سجل الحركات (تاريخ أو مرجع أو كمية غير صالحة).');
+        }
         const result = await dataService.saveTransactionBatch(transactions);
         if (!result.success) throw new Error(presentResultMessage(result.message, 'import'));
-      } else if (!repeated) throw new Error('لا توجد حركات صالحة في الملف.');
+      } else if (!repeated) fail('لا توجد حركات صالحة في الملف.');
       setSuccessMsg(`اعتمدت ${transactions.length} حركة في دفعة واحدة؛ ${repeated} حركة من استيراد مطابق سبق تسجيله.`);
       setSettings(dataService.getSettings());
-    } catch (e) { setErrorMsg(`استيراد الحركات: ${productLimitMessage(e)}`); }
+    } catch (e) { setErrorMsg(`استيراد الحركات: ${importMessage(e)}`); }
     finally { setIsImportingTx(false); }
   };
 
