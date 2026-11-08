@@ -1888,7 +1888,7 @@ export const dataService = {
     }
 
     const warehouseEntities = getStorehouseEntities(dataService.getSettings());
-    const integrity = validateInventoryDataset(nextTransactions, { materials: rawMaterials, storehouses: warehouseEntities });
+    const integrity = validateInventoryDataset(nextTransactions, { materials: rawMaterials, storehouses: warehouseEntities, materialReferencesUnreadable: !dataService.hasPermission('materials_view') });
     const legacyTransferIds = new Set(nextTransactions.filter((tx) => tx.transactionType === 'تحويل' && !tx.operationId && !tx.pairedTransactionId).map((tx) => tx.id));
     const blockingErrors = integrity.errors.filter((error) =>
       !(error.code === 'TRANSFER_OPERATION_REQUIRED' && !!error.transactionId && legacyTransferIds.has(error.transactionId))
@@ -2281,6 +2281,7 @@ export const dataService = {
           const integrity = validateInventoryDataset(transactions as IntegrityTransaction[], {
             materials,
             storehouses: getStorehouseEntities(settings),
+            materialReferencesUnreadable: !user.permissions.includes('materials_view'),
           });
           if (!integrity.valid) {
             return {
@@ -2300,20 +2301,29 @@ export const dataService = {
 
       await assertNoOutstandingSyncWork(false);
       if (getCurrentAuthUser()?.uid !== authUser.uid) throw new Error('INVENTORY_SESSION_CHANGED');
+      // QA-20261106 SES-03: never leave a previous account's cache for a collection this account may not read.
       if (user.permissions.includes('materials_view')) {
         localStorage.setItem(STORAGE_KEYS.MATERIALS, JSON.stringify(materials));
+      } else {
+        localStorage.removeItem(STORAGE_KEYS.MATERIALS);
       }
       if (user.permissions.includes('transactions_view')) {
         localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
+      } else {
+        localStorage.removeItem(STORAGE_KEYS.TRANSACTIONS);
       }
       if (settings) {
         localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
       }
       if (user.permissions.includes('audit_view')) {
         localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify(auditLogs));
+      } else {
+        localStorage.removeItem(STORAGE_KEYS.AUDIT_LOGS);
       }
       if (user.permissions.includes('generator_log')) {
         localStorage.setItem(STORAGE_KEYS.GENERATOR_LOGS, JSON.stringify(generatorLogs));
+      } else {
+        localStorage.removeItem(STORAGE_KEYS.GENERATOR_LOGS);
       }
       localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
 
@@ -2379,6 +2389,12 @@ export const dataService = {
       try {
         sessionStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
         localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
+        // QA-20261106 SES-03: do not leave the signed-out account's business data readable on a shared device.
+        // Pending writes live in the IndexedDB outbox (not these keys) and are untouched.
+        for (const key of [STORAGE_KEYS.MATERIALS, STORAGE_KEYS.PESTICIDES, STORAGE_KEYS.TRANSACTIONS,
+          STORAGE_KEYS.AUDIT_LOGS, STORAGE_KEYS.USERS, STORAGE_KEYS.GENERATOR_LOGS]) {
+          localStorage.removeItem(key);
+        }
       } catch {
         // Ignore storage errors
       }
