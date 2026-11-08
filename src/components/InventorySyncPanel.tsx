@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Alert, Box, Button, Typography } from '@mui/material';
 import { dataService } from '../services/dataService';
-import { InventoryPendingError, subscribeInventoryOutbox } from '../services/supabaseOutbox';
+import { InventoryPendingError, rollbackSafeRejectedGroup, subscribeInventoryOutbox } from '../services/supabaseOutbox';
 import { safeUserMessage } from '../services/safeUserMessage';
 
 type Pending = Awaited<ReturnType<typeof dataService.listPendingInventoryMutations>>;
@@ -16,10 +16,10 @@ export default function InventorySyncPanel() {
     return () => { active = false; stop(); };
   }, []);
   const run = async (cancel: boolean) => {
-    if (cancel && !window.confirm(`أول طلب مرفوض ولم يُعتمد على الخادم. سيُتراجع محليًا عن ${rows.length} طلبًا مرتبطًا به. هل توافق؟`)) return;
+    if (cancel && !window.confirm(`طلب مرفوض ولم يُعتمد على الخادم. سيُتراجع محليًا عن ${rollbackSafeRejectedGroup(rows).length} طلبًا (المرفوض وما يمس السجلات نفسها فقط)؛ تبقى الطلبات المستقلة. هل توافق؟`)) return;
     setBusy(true); setError('');
     try {
-      if (cancel) await dataService.cancelRejectedInventoryMutations();
+      if (cancel) { await dataService.cancelRejectedInventoryMutations(); await dataService.retryPendingInventoryMutations().catch(() => 0); }
       else await dataService.retryPendingInventoryMutations();
       const current = dataService.getCurrentUser();
       const boot = await dataService.bootstrapFreshDeviceData(current);
@@ -41,7 +41,7 @@ export default function InventorySyncPanel() {
     {error && <Typography role="status" variant="body2">{error}</Typography>}
     <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 1 }}>
       <Button disabled={busy || !rows.length} onClick={() => void run(false)}>إعادة إرسال الطلبات المحفوظة</Button>
-      {rows[0]?.status === 'blocked' && <Button color="error" disabled={busy} onClick={() => void run(true)}>التراجع عن الطلب المرفوض وما بعده</Button>}
+      {rows.some(r => r.status === 'blocked') && <Button color="error" disabled={busy} onClick={() => void run(true)}>التراجع عن الطلب المرفوض وما يعتمد عليه</Button>}
     </Box>
   </Alert>;
 }

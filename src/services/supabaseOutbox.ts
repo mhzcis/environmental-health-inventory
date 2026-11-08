@@ -113,6 +113,32 @@ const once = async (row: Queued): Promise<InventoryRpcAck> => {
     throw new InventoryPendingError(row.id, row.status === 'blocked');
   }
 };
+// QA-20261108 rollback-safe patch (minimal, on top of 35861b7): a rejected request holds back only the
+// requests that touch the same records; independent requests are still sent and undo never discards them.
+const materialRefOf = (op: InventorySyncOperation): string | undefined => {
+  if (op.collection === 'materials') return op.docId;
+  if (op.collection !== 'transactions') return undefined;
+  const value = (op.kind === 'set' ? op.value : undefined) as Record<string, unknown> | undefined;
+  const before = op.expected.kind === 'present' ? op.expected.exactLegacyPayload as Record<string, unknown> | undefined : undefined;
+  const ref = value?.itemId ?? value?.materialId ?? before?.itemId ?? before?.materialId;
+  return typeof ref === 'string' && ref ? ref : undefined;
+};
+const dependencyKeys = (row: Queued): string[] => {
+  if (row.transport === 'supabase-restore-v1') return ['*'];
+  const keys = new Set<string>();
+  for (const op of row.operations) { keys.add(`${op.collection}/${op.docId}`); const ref = materialRefOf(op); if (ref) keys.add(`material-ref/${ref}`); }
+  return [...keys];
+};
+const isRejected = (row: Queued) => row.status === 'blocked' || row.status === 'conflict' || row.status === 'quarantined';
+const touches = (held: Set<string>, row: Queued) => held.has('*') || (row.transport === 'supabase-restore-v1' && held.size > 0) || dependencyKeys(row).some(k => held.has(k));
+const rejectedGroupOf = (rows: Queued[]): Queued[] => {
+  const index = rows.findIndex(row => row.status === 'blocked' || row.status === 'conflict');
+  if (index < 0) return [];
+  const held = new Set(dependencyKeys(rows[index])); const group = [rows[index]];
+  for (const row of rows.slice(index + 1)) if (touches(held, row)) { group.push(row); dependencyKeys(row).forEach(k => held.add(k)); }
+  return group;
+};
+export const rollbackSafeRejectedGroup = (rows: Queued[]) => rejectedGroupOf(rows);
 export async function enqueueInventoryMutation(
   operations: InventorySyncOperation[], label: string, mutationId: string,
   applyProjection: (operations: InventorySyncOperation[]) => void,
@@ -145,7 +171,10 @@ export async function enqueueInventoryMutation(
       await store.put(row); emit(); throw new InventoryPendingError(row.id, true);
     }
     emit();
-    if (previous.length && previous[0].id !== row.id) throw new InventoryPendingError(row.id, previous[0].status === 'blocked');
+    const earlier = previous.filter(r => r.id !== row.id);
+    if (earlier.some(r => !isRejected(r))) throw new InventoryPendingError(row.id, false);
+    const held = new Set(earlier.flatMap(dependencyKeys));
+    if (earlier.length && touches(held, row)) throw new InventoryPendingError(row.id, true);
     return once(row);
   });
 }
@@ -167,16 +196,27 @@ export async function retryInventoryOutbox(onAck: (ack: InventoryRpcAck) => void
   const uid = owner();
   return exclusive(uid, async () => {
     let count = 0;
-    for (const row of await listInventoryOutbox()) { assertOwner(uid); onAck(await once(row)); count++; }
+    const held = new Set<string>(); let firstError: unknown;
+    for (const row of await listInventoryOutbox()) {
+      assertOwner(uid);
+      if (touches(held, row)) { dependencyKeys(row).forEach(k => held.add(k)); continue; }
+      try { onAck(await once(row)); count++; }
+      catch (error) {
+        firstError ??= error; dependencyKeys(row).forEach(k => held.add(k));
+        if (!(error instanceof InventoryPendingError && error.blocked)) break; // uncertain transport: keep order, stop
+      }
+    }
+    if (firstError && !count) throw firstError;
     return count;
   });
 }
 export async function cancelRejectedInventoryOutbox(applyProjection: (operations: InventorySyncOperation[]) => void): Promise<number> {
   const uid = owner();
   return exclusive(uid, async () => {
-    const rows = await listInventoryOutbox();
-    // A transport timeout is uncertain; cancellation is only for a definitive atomic NACK.
-    if (!rows.length || rows[0].status !== 'blocked') throw new Error('INVENTORY_UNCERTAIN_CANNOT_CANCEL');
+    // A transport timeout is uncertain; cancellation is only for a definitive atomic NACK, and only for
+    // the rejected request plus the requests that depend on it (same records). Independent requests stay.
+    const rows = rejectedGroupOf(await listInventoryOutbox());
+    if (!rows.length) throw new Error('INVENTORY_UNCERTAIN_CANNOT_CANCEL');
     for (const row of [...rows].reverse()) {
       assertOwner(uid);
       const inverse = [...row.operations].reverse().map(op => op.expected.kind === 'present'
