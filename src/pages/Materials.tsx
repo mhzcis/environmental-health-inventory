@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { buildTotalStockIndex, isLowStockByTotal } from '../utils/lowStock';
 import { Link } from 'react-router-dom';
 import { presentResultMessage, safeUserMessage } from '../services/safeUserMessage';
 import NotificationToast from '../components/NotificationToast';
@@ -703,6 +704,7 @@ const handleOpenDeleteDialog = (item: Material) => {
   // Sorting handlers
   
   // Search logic - supports pure numbers search seamlessly on item codes
+  const totalStockIndex = buildTotalStockIndex(materials);
   const filteredMaterials = buildMaterialWarehouseView(materials, selectedStorehouse, settings.storehouses).filter((item) => {
     const rawSearch = searchQuery.trim().toLowerCase();
     const itemDigits = item.code.replace(/\D/g, '');
@@ -719,9 +721,9 @@ const handleOpenDeleteDialog = (item: Material) => {
 
     let matchesStock = true;
     if (stockStatusFilter === 'critical') {
-      matchesStock = item.currentStock <= item.minimumStock;
+      matchesStock = isLowStockByTotal(item, totalStockIndex);
     } else if (stockStatusFilter === 'normal') {
-      matchesStock = item.currentStock > item.minimumStock;
+      matchesStock = !isLowStockByTotal(item, totalStockIndex);
     }
 
     return matchesSearch && matchesCategory && matchesStock && matchesStorehouse;
@@ -1099,7 +1101,7 @@ const handleOpenDeleteDialog = (item: Material) => {
           <TableBody>
             {paginatedMaterials.length > 0 ? (
               paginatedMaterials.map((item, idx) => {
-                const isCritical = item.currentStock <= item.minimumStock;
+                const isCritical = isLowStockByTotal(item, totalStockIndex);
                 return (
                   <TableRow 
                     key={`mat-row-${item.id}-${idx}`}
