@@ -93,7 +93,7 @@ CREATE OR REPLACE FUNCTION inventory_private.commit_inventory(p_mutation_id text
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
 DECLARE actor public.users%ROWTYPE; op jsonb; ops jsonb; receipt jsonb; digest text; old jsonb; val jsonb;
  col text; doc text; kind text; needed text; mode text; stamp text; saved public.audit_logs%ROWTYPE;
- affected jsonb:='[]'; results jsonb:='[]'; cfg jsonb; backup jsonb; entry jsonb; old_permissions jsonb;
+ affected jsonb:='[]'; results jsonb:='[]'; removed jsonb:='[]'; corr jsonb:='[]'; cfg jsonb; backup jsonb; entry jsonb; old_permissions jsonb;
 BEGIN
  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'INVENTORY_AUTH_REQUIRED' USING ERRCODE='42501'; END IF;
  -- One short serializable writer boundary. This also fences permission revocation through users.
@@ -219,18 +219,34 @@ BEGIN
      EXECUTE format('INSERT INTO public.%I(id,data,updated_at) VALUES($1,$2,now()) ON CONFLICT(id) DO UPDATE SET data=excluded.data,updated_at=now()',col) USING doc,val;
    END IF;
    affected:=affected||jsonb_build_array(col||'/'||doc);
+   -- QA-20261108 TX-03 (isolated only): keep the ORIGINAL values of a cancelled ledger entry in the receipt and link a correction to it.
+   IF col='transactions' AND kind='delete' AND old IS NOT NULL THEN
+     removed:=removed||jsonb_build_array(jsonb_build_object('id',doc,'transactionNumber',old->>'transactionNumber','transactionType',old->>'transactionType',
+       'quantity',old->'quantity','date',old->>'date','itemId',old->>'itemId','itemCode',old->>'itemCode','storehouseId',old->>'storehouseId','unit',old->>'unit'));
+   END IF;
+   IF col='transactions' AND kind='set' AND old IS NULL AND jsonb_typeof(val->'correctionOf')='object' THEN
+     corr:=corr||jsonb_build_array(jsonb_build_object('originalId',val->'correctionOf'->>'id','originalNumber',val->'correctionOf'->>'transactionNumber',
+       'originalQuantity',val->'correctionOf'->'quantity','replacementId',doc,'replacementNumber',val->>'transactionNumber','replacementQuantity',val->'quantity',
+       'reason',left(coalesce(val->'correctionOf'->>'reason',''),500)));
+   END IF;
  END LOOP;
+ IF EXISTS(SELECT 1 FROM jsonb_array_elements(corr) c WHERE NOT EXISTS(SELECT 1 FROM jsonb_array_elements(removed) r
+     WHERE r->>'id'=c->>'originalId' AND r->>'transactionNumber' IS NOT DISTINCT FROM c->>'originalNumber'
+       AND (r->>'quantity')::numeric IS NOT DISTINCT FROM (c->>'originalQuantity')::numeric))
+ THEN RAISE EXCEPTION 'INVENTORY_CORRECTION_LINK_INVALID' USING ERRCODE='23514'; END IF;
  IF mode<>'audit' THEN
    PERFORM inventory_private.validate_inventory();
    IF NOT EXISTS(SELECT 1 FROM public.users WHERE active AND permissions @> '["users_manage","settings_edit","system_reset"]'::jsonb)
    THEN RAISE EXCEPTION 'INVENTORY_LAST_ADMIN_REQUIRED' USING ERRCODE='23514'; END IF;
  END IF;
  receipt:=jsonb_build_object('id',p_mutation_id,'timestamp',stamp,'user',actor.full_name,'actorUserId',actor.id,'actorDisplayName',actor.full_name,
-   'action',CASE mode WHEN 'restore' THEN 'استعادة بيانات التطبيق' WHEN 'audit' THEN left(ops->0->'value'->>'action',200) ELSE 'اعتماد عملية مخزنية' END,
+   'action',CASE WHEN mode='restore' THEN 'استعادة بيانات التطبيق' WHEN mode='audit' THEN left(ops->0->'value'->>'action',200) WHEN jsonb_array_length(corr)>0 THEN 'تصحيح حركة مخزنية (إلغاء وبديل)' ELSE 'اعتماد عملية مخزنية' END,
    'details',CASE mode WHEN 'audit' THEN left(ops->0->'value'->>'details',8000) ELSE 'تم اعتماد العملية وجميع سجلاتها معًا.' END,
    'itemType',CASE mode WHEN 'audit' THEN coalesce(ops->0->'value'->>'itemType','عام') WHEN 'restore' THEN 'إعدادات' ELSE 'حركة' END,
    'operationType',CASE WHEN mode='restore' THEN 'backup' ELSE 'system' END,'affectedEntities',affected,
-   'result',CASE WHEN mode='audit' THEN 'reported' ELSE 'committed' END,'mutationDigest',digest,'mutationLabel',left(p_payload->>'label',160));
+   'result',CASE WHEN mode='audit' THEN 'reported' ELSE 'committed' END,'mutationDigest',digest,'mutationLabel',left(p_payload->>'label',160))
+   ||CASE WHEN jsonb_array_length(removed)>0 THEN jsonb_build_object('removedTransactions',removed) ELSE '{}'::jsonb END
+   ||CASE WHEN jsonb_array_length(corr)>0 THEN jsonb_build_object('corrections',corr) ELSE '{}'::jsonb END;
  INSERT INTO public.audit_logs(id,data,updated_at) VALUES(p_mutation_id,receipt,now());
  RETURN jsonb_build_object('audit',receipt,'replayed',false,'results',results);
 END;
