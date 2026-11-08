@@ -15,6 +15,7 @@ import * as zod from 'zod';
 import { dataService } from '../services/dataService';
 import { InventoryTransaction, Material } from '../types';
 import MaterialFormDialog from './MaterialFormDialog';
+import { localDateString } from '../utils/localDate';
 
 // Use same schema logic
 const transactionSchema = zod.object({
@@ -108,7 +109,7 @@ export default function CreateTransactionModal({ open, onClose, onSuccess, onErr
       transactionType: 'وارد',
       quantity: 0,
       supplierOrReceiver: '',
-      date: new Date().toISOString().split('T')[0],
+      date: localDateString(),
       storehouse: '',
       destStorehouse: '',
       notes: '',
@@ -135,7 +136,7 @@ export default function CreateTransactionModal({ open, onClose, onSuccess, onErr
         storehouse: globalStorehouseScope !== 'all' ? globalStorehouseScope : '',
         destStorehouse: '',
         supplierOrReceiver: '',
-        date: new Date().toISOString().split('T')[0],
+        date: localDateString(),
         notes: '',
       });
       setSavePartnerEntity(false);

@@ -171,6 +171,7 @@ import {
 import { bindDiagnosticsSession, classifyError, recordDiagnostic } from './operationalDiagnostics';
 import { safeErrorDetail, safeResultMessage, safeUserMessage } from './safeUserMessage';
 import { clearUnattributedRuntimeAlert } from './unattributedRuntimeAlert';
+import { localDateString } from '../utils/localDate';
 
 const localStorage = offlineProjectionStorage;
 
@@ -3231,7 +3232,7 @@ export const dataService = {
       baseNumber = `T-${String(seq).padStart(4, '0')}`;
     } while (existingNumbers.has(`${baseNumber}-OUT`) || existingNumbers.has(`${baseNumber}-IN`));
 
-    const dateStr = transactionDate || new Date().toISOString().split('T')[0];
+    const dateStr = transactionDate || localDateString();
     const now = Date.now();
     const operationId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
       ? `transfer-${crypto.randomUUID()}`

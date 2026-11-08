@@ -11,6 +11,7 @@ import { Material, InventoryTransaction } from '../types';
 import { dataService } from '../services/dataService';
 import { useStorehouse } from '../context/StorehouseContext';
 import { renderOption } from '../utils/emoji';
+import { localDateString } from '../utils/localDate';
 
 
 export const materialSchema = zod.object({
@@ -222,7 +223,7 @@ export default function MaterialFormDialog({ open, onClose, selectedMaterial, on
           if (isNew && data.initialStock > 0) {
             const initTx: InventoryTransaction = {
               id: `tr-init-${itemId}`,
-              date: new Date().toISOString().split('T')[0],
+              date: localDateString(),
               itemType: (data.category?.includes('مبيد') || data.category?.includes('مبيدات')) ? 'مبيد' : 'مادة',
               itemCategory: data.category,
               itemId,
