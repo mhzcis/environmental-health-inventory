@@ -32,7 +32,7 @@ export const getDesignTokens = (mode: 'light' | 'dark'): ThemeOptions => ({
             dark: '#b45309',
           },
           error: {
-            main: '#ef4444', // Red
+            main: '#dc2626', // Red (QA-20261108 A11Y-04: white label on error chips needs >= 4.5:1; #ef4444 gave 3.76)
             light: '#fee2e2',
             dark: '#b91c1c',
           },
