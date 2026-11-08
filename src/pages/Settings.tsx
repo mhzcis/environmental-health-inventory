@@ -1387,7 +1387,7 @@ export default function Settings() {
         <Typography variant="h5" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
           إعدادات النظام وإدارة الصلاحيات
         </Typography>
-        <Typography variant="body2" sx={{ color: '#64748b', mt: 0.5, fontFamily: '"Cairo", sans-serif' }}>
+        <Typography variant="body2" sx={{ color: '#566375', mt: 0.5, fontFamily: '"Cairo", sans-serif' }}>
           تخصيص هوية المؤسسة لترويسات الفواتير والتقارير، وإدارة مستودعات التوزيع، وتحرير مصفوفات الأمان والمستخدمين والتبديل بينهم
         </Typography>
       </Box>
@@ -1424,7 +1424,7 @@ export default function Settings() {
           <Grid size={{ xs: 12, md: 10, lg: 8 }} sx={{ mx: 'auto' }}>
             <Paper sx={{ p: 3, border: '1px solid #f1f5f9' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 3 }}>
-                <BusinessIcon sx={{ color: '#007ab7' }} />
+                <BusinessIcon sx={{ color: '#006da3' }} />
                 <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
                   هوية ومسميات الجهة والمؤسسة لترويسة التقارير
                 </Typography>
@@ -1508,7 +1508,7 @@ export default function Settings() {
                             checked={settings.showStorekeeperSignature !== false}
                             onChange={(e) => setSettings({ ...settings, showStorekeeperSignature: e.target.checked })}
                             size="small"
-                            sx={{ color: '#007ab7', '&.Mui-checked': { color: '#007ab7' } }}
+                            sx={{ color: '#006da3', '&.Mui-checked': { color: '#006da3' } }}
                           />
                         }
                         label={
@@ -1550,7 +1550,7 @@ export default function Settings() {
                             checked={settings.showSystemManagerSignature !== false}
                             onChange={(e) => setSettings({ ...settings, showSystemManagerSignature: e.target.checked })}
                             size="small"
-                            sx={{ color: '#007ab7', '&.Mui-checked': { color: '#007ab7' } }}
+                            sx={{ color: '#006da3', '&.Mui-checked': { color: '#006da3' } }}
                           />
                         }
                         label={
@@ -1592,7 +1592,7 @@ export default function Settings() {
                             checked={settings.showHealthDirectorSignature !== false}
                             onChange={(e) => setSettings({ ...settings, showHealthDirectorSignature: e.target.checked })}
                             size="small"
-                            sx={{ color: '#007ab7', '&.Mui-checked': { color: '#007ab7' } }}
+                            sx={{ color: '#006da3', '&.Mui-checked': { color: '#006da3' } }}
                           />
                         }
                         label={
@@ -1627,12 +1627,12 @@ export default function Settings() {
           <Grid size={{ xs: 12, md: 6 }}>
             <Paper sx={{ p: 3, border: '1px solid #f1f5f9' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1 }}>
-                <LayersIcon sx={{ color: '#007ab7' }} />
+                <LayersIcon sx={{ color: '#006da3' }} />
                 <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
                   خيارات وتصنيفات أصناف المخازن
                 </Typography>
               </Box>
-              <Typography variant="body2" sx={{ color: '#64748b', mb: 3, fontFamily: '"Cairo", sans-serif' }}>
+              <Typography variant="body2" sx={{ color: '#566375', mb: 3, fontFamily: '"Cairo", sans-serif' }}>
                 قم بتخصيص مدى البادئة والترميز الرقمي لضمان توليد الكود آلياً عند إدخال كرت صنف جديد (مثال: MAT من 1000 إلى 2000)
               </Typography>
 
@@ -1736,8 +1736,8 @@ export default function Settings() {
                         {cat.name}
                       </Typography>
                       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                        <Chip label={`البادئة: ${cat.prefix}`} size="small" variant="outlined" sx={{ height: 20, fontSize: '10px', color: '#007ab7', borderColor: '#b3d7ea', fontFamily: '"Cairo", sans-serif' }} />
-                        <Chip label={`المدى: ${cat.startRange} - ${cat.endRange}`} size="small" variant="outlined" sx={{ height: 20, fontSize: '10px', color: '#10b981', borderColor: '#a7f3d0', fontFamily: '"Cairo", sans-serif' }} />
+                        <Chip label={`البادئة: ${cat.prefix}`} size="small" variant="outlined" sx={{ height: 20, fontSize: '10px', color: '#006da3', borderColor: '#b3d7ea', fontFamily: '"Cairo", sans-serif' }} />
+                        <Chip label={`المدى: ${cat.startRange} - ${cat.endRange}`} size="small" variant="outlined" sx={{ height: 20, fontSize: '10px', color: '#047857', borderColor: '#a7f3d0', fontFamily: '"Cairo", sans-serif' }} />
                       </Box>
                     </Box>
                   </ListItem>
@@ -1750,12 +1750,12 @@ export default function Settings() {
           <Grid size={{ xs: 12, md: 6 }}>
             <Paper sx={{ p: 3, border: '1px solid #f1f5f9' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2 }}>
-                <StoreIcon sx={{ color: '#007ab7' }} />
+                <StoreIcon sx={{ color: '#006da3' }} />
                 <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
                   مستودعات ومخازن التوزيع للأصناف بالجهة
                 </Typography>
               </Box>
-              <Typography variant="body2" sx={{ color: '#64748b', mb: 2.5, fontFamily: '"Cairo", sans-serif' }}>
+              <Typography variant="body2" sx={{ color: '#566375', mb: 2.5, fontFamily: '"Cairo", sans-serif' }}>
                 إضافة وإقصاء مخازن الدائرة لتوزيع مواقع الحفظ
               </Typography>
 
@@ -1811,12 +1811,12 @@ export default function Settings() {
           <Grid size={{ xs: 12, md: 6 }}>
             <Paper sx={{ p: 3, border: '1px solid #f1f5f9' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2 }}>
-                <TuneIcon sx={{ color: '#007ab7' }} />
+                <TuneIcon sx={{ color: '#006da3' }} />
                 <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
                   وحدات التوزيع والمقاييس القياسية
                 </Typography>
               </Box>
-              <Typography variant="body2" sx={{ color: '#64748b', mb: 2.5, fontFamily: '"Cairo", sans-serif' }}>
+              <Typography variant="body2" sx={{ color: '#566375', mb: 2.5, fontFamily: '"Cairo", sans-serif' }}>
                 إدارة وحدات التعبئة والتوزيع في الكشوفات اليومية والتقارير العامة
               </Typography>
 
@@ -1878,7 +1878,7 @@ export default function Settings() {
               <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
                 قاعدة بيانات الجهات والموردين الشركاء 🤝
               </Typography>
-              <Typography variant="body2" sx={{ color: '#64748b', mt: 0.5, fontFamily: '"Cairo", sans-serif' }}>
+              <Typography variant="body2" sx={{ color: '#566375', mt: 0.5, fontFamily: '"Cairo", sans-serif' }}>
                 إدارة شركاء التوريد والجهات الحكومية والأهلية المستلمة لتنظيم وتسهيل توثيق حركات الصرف والوارد
               </Typography>
             </Box>
@@ -1967,7 +1967,7 @@ export default function Settings() {
                         </Typography>
                       )}
                       {p.notes ? (
-                        <Typography variant="body2" sx={{ color: '#64748b', fontFamily: '"Cairo", sans-serif', fontSize: '0.85rem', bgcolor: '#f8fafc', p: 1.5, borderRadius: '8px', border: '1px solid #f1f5f9' }}>
+                        <Typography variant="body2" sx={{ color: '#566375', fontFamily: '"Cairo", sans-serif', fontSize: '0.85rem', bgcolor: '#f8fafc', p: 1.5, borderRadius: '8px', border: '1px solid #f1f5f9' }}>
                           {p.notes}
                         </Typography>
                       ) : (
@@ -1982,7 +1982,7 @@ export default function Settings() {
                         size="small"
                         onClick={() => handleOpenEditPartner(p)}
                         startIcon={<EditIcon sx={{ ml: 0.5, mr: -0.5, fontSize: 16 }} />}
-                        sx={{ fontFamily: '"Cairo", sans-serif', fontWeight: 'bold', color: '#007ab7' }}
+                        sx={{ fontFamily: '"Cairo", sans-serif', fontWeight: 'bold', color: '#006da3' }}
                       >
                         تعديل
                       </Button>
@@ -2002,7 +2002,7 @@ export default function Settings() {
             {(settings.partners || []).length === 0 && (
               <Grid size={12}>
                 <Box sx={{ textAlign: 'center', py: 8 }}>
-                  <Typography variant="body1" sx={{ color: '#64748b', fontFamily: '"Cairo", sans-serif' }}>
+                  <Typography variant="body1" sx={{ color: '#566375', fontFamily: '"Cairo", sans-serif' }}>
                     لم يتم تسجيل أي جهة شريكة أو مورد حتى الآن في النظام.
                   </Typography>
                 </Box>
@@ -2019,7 +2019,7 @@ export default function Settings() {
             <Typography variant="h6" sx={{ fontWeight: 'bold', fontFamily: '"Cairo", sans-serif', color: '#1e293b' }}>
               إدارة شؤون الموظفين ومصفوفة التفويضات محمية بالكامل
             </Typography>
-            <Typography variant="body2" sx={{ color: '#64748b', mt: 1.5, fontFamily: '"Cairo", sans-serif', maxWidth: '500px', mx: 'auto', lineHeight: 1.6 }}>
+            <Typography variant="body2" sx={{ color: '#566375', mt: 1.5, fontFamily: '"Cairo", sans-serif', maxWidth: '500px', mx: 'auto', lineHeight: 1.6 }}>
               يتطلب عرض حسابات الموظفين وتعديل صلاحياتها الحصول على صلاحية <strong>إدارة المستخدمين</strong>. تواصل مع مدير النظام لمنحك الوصول المناسب.
             </Typography>
           </Paper>
@@ -2032,7 +2032,7 @@ export default function Settings() {
                 <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
                   حسابات المستخدمين ({users.length})
                 </Typography>
-                <Typography variant="body2" sx={{ color: '#64748b', mt: 0.5, fontFamily: '"Cairo", sans-serif' }}>
+                <Typography variant="body2" sx={{ color: '#566375', mt: 0.5, fontFamily: '"Cairo", sans-serif' }}>
                   {users.filter(user => user.active !== false).length} نشط — {users.filter(user => user.active === false).length} معطّل. اختر حسابًا لتعديل بياناته وصلاحياته.
                 </Typography>
               </Box>
@@ -2070,7 +2070,7 @@ export default function Settings() {
                                 </Typography>
                                 {isSelf && <Chip label="أنت حالياً" size="small" color="primary" sx={{ height: 18, fontSize: '9px', fontWeight: 'bold', fontFamily: '"Cairo", sans-serif' }} />}
                               </Box>
-                              <Typography variant="caption" sx={{ color: '#64748b', display: 'block', mt: 0, fontFamily: '"Cairo", sans-serif', direction: 'ltr', textAlign: 'right', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              <Typography variant="caption" sx={{ color: '#566375', display: 'block', mt: 0, fontFamily: '"Cairo", sans-serif', direction: 'ltr', textAlign: 'right', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                                 {u.username} 
                               </Typography>
                             </Box>
@@ -2096,7 +2096,7 @@ export default function Settings() {
                           </Box>
                         </Box>
                         
-                        <Typography variant="caption" sx={{ display: 'block', color: '#64748b', mb: 1, fontFamily: '"Cairo", sans-serif', textAlign: 'start' }}>
+                        <Typography variant="caption" sx={{ display: 'block', color: '#566375', mb: 1, fontFamily: '"Cairo", sans-serif', textAlign: 'start' }}>
                           الصلاحيات المفعّلة: ({u.permissions.length} من {APP_PERMISSIONS.length})
                         </Typography>
                         
@@ -2109,7 +2109,7 @@ export default function Settings() {
                                 label={pInfo ? pInfo.name.split(' - ')[1] || pInfo.name : pId} 
                                 size="small" 
                                 variant="outlined"
-                                sx={{ fontSize: '10px', height: 20, color: '#007ab7', borderColor: '#b3d7ea', fontFamily: '"Cairo", sans-serif' }} 
+                                sx={{ fontSize: '10px', height: 20, color: '#006da3', borderColor: '#b3d7ea', fontFamily: '"Cairo", sans-serif' }} 
                               />
                             );
                           })}
@@ -2154,7 +2154,7 @@ export default function Settings() {
           <Grid size={{ xs: 12, md: 7 }}>
             <Paper sx={{ p: 3, border: '1px solid #f1f5f9' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 3 }}>
-                <KeyIcon sx={{ color: '#007ab7' }} />
+                <KeyIcon sx={{ color: '#006da3' }} />
                 <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
                   {editingUser ? `تعديل حساب: ${editingUser.fullName}` : 'إنشاء حساب موظف'}
                 </Typography>
@@ -2320,7 +2320,7 @@ export default function Settings() {
                         <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
                           صلاحيات الحساب
                         </Typography>
-                        <Typography variant="caption" sx={{ color: '#64748b', fontFamily: '"Cairo", sans-serif' }}>
+                        <Typography variant="caption" sx={{ color: '#566375', fontFamily: '"Cairo", sans-serif' }}>
                           اختر الصلاحيات المحددة التي يُسمح لهذا الحساب بالقيام بها على النظام.
                         </Typography>
                       </Box>
@@ -2367,7 +2367,7 @@ export default function Settings() {
                                 <Typography variant="body2" sx={{ fontWeight: 'bold', color: '#1e293b', fontSize: '0.8rem', fontFamily: '"Cairo", sans-serif' }}>
                                   {p.name}
                                 </Typography>
-                                <Typography variant="caption" sx={{ color: '#64748b', fontSize: '0.75rem', lineHeight: 1.7, display: 'block', mt: 0.2, fontFamily: '"Cairo", sans-serif' }}>
+                                <Typography variant="caption" sx={{ color: '#566375', fontSize: '0.75rem', lineHeight: 1.7, display: 'block', mt: 0.2, fontFamily: '"Cairo", sans-serif' }}>
                                   {p.desc}
                                 </Typography>
                               </Box>
@@ -2416,13 +2416,13 @@ export default function Settings() {
             <Paper sx={{ p: 4, borderRadius: '20px', display: 'flex', flexDirection: 'column', height: '100%' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 3 }}>
                 <Box sx={{ p: 1, bgcolor: '#f0f9ff', borderRadius: '12px', display: 'flex', alignItems: 'center' }}>
-                  <BackupIcon sx={{ color: '#007ab7' }} />
+                  <BackupIcon sx={{ color: '#006da3' }} />
                 </Box>
                 <Box sx={{ textAlign: 'start' }}>
                   <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
                     النسخ الاحتياطي المحلي واستيراد البيانات
                   </Typography>
-                  <Typography variant="caption" sx={{ color: '#64748b', fontFamily: '"Cairo", sans-serif' }}>
+                  <Typography variant="caption" sx={{ color: '#566375', fontFamily: '"Cairo", sans-serif' }}>
                     تصدير سجل المستودعات الحالي وحفظه كملف جيسون (JSON)
                   </Typography>
                 </Box>
@@ -2488,13 +2488,13 @@ export default function Settings() {
             <Paper sx={{ p: 4, borderRadius: '20px', display: 'flex', flexDirection: 'column', height: '100%' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 3 }}>
                 <Box sx={{ p: 1, bgcolor: '#f0fdf4', borderRadius: '12px', display: 'flex', alignItems: 'center' }}>
-                  <AutorenewIcon sx={{ color: '#16a34a' }} />
+                  <AutorenewIcon sx={{ color: '#15803d' }} />
                 </Box>
                 <Box sx={{ textAlign: 'start' }}>
                   <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
                     مُزامنة التخزين السحابي (Google Drive)
                   </Typography>
-                  <Typography variant="caption" sx={{ color: '#64748b', fontFamily: '"Cairo", sans-serif' }}>
+                  <Typography variant="caption" sx={{ color: '#566375', fontFamily: '"Cairo", sans-serif' }}>
                     تأمين الأرصدة عبر الرفع المباشر لسجل الجرد إلى حساب غوغل درايف
                   </Typography>
                 </Box>
@@ -2539,13 +2539,13 @@ export default function Settings() {
             <Paper sx={{ p: 4, borderRadius: '20px', display: 'flex', flexDirection: 'column', bgcolor: 'white' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 3 }}>
                 <Box sx={{ p: 1, bgcolor: '#fef3c7', borderRadius: '12px', display: 'flex', alignItems: 'center' }}>
-                  <CloudUploadIcon sx={{ color: '#d97706' }} />
+                  <CloudUploadIcon sx={{ color: '#b45309' }} />
                 </Box>
                 <Box sx={{ textAlign: 'start' }}>
                   <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
                     فحص جاهزية النسخة الاحتياطية للترحيل السحابي
                   </Typography>
-                  <Typography variant="caption" sx={{ color: '#64748b', fontFamily: '"Cairo", sans-serif' }}>
+                  <Typography variant="caption" sx={{ color: '#566375', fontFamily: '"Cairo", sans-serif' }}>
                     تحقق من توافق النسخة الاحتياطية قبل الترحيل (Dry Run)
                   </Typography>
                 </Box>
@@ -2554,7 +2554,7 @@ export default function Settings() {
               <Divider sx={{ mb: 3 }} />
 
               <Box sx={{ textAlign: 'start' }}>
-                <Typography variant="body2" sx={{ color: '#d97706', fontWeight: 'bold', mb: 2, fontFamily: '"Cairo", sans-serif' }}>
+                <Typography variant="body2" sx={{ color: '#b45309', fontWeight: 'bold', mb: 2, fontFamily: '"Cairo", sans-serif' }}>
                   هذا فحص فقط؛ لا يرفع البيانات إلى السحابة ولا يعدّلها.
                 </Typography>
                 
@@ -2591,13 +2591,13 @@ export default function Settings() {
                           <Typography variant="body2">الإعدادات: {dryRunResult.expectedCounts.settings}</Typography>
                           <Typography variant="body2">سجلات التدقيق: {dryRunResult.expectedCounts.auditLogs}</Typography>
                           <Typography variant="body2">سجلات المولد: {dryRunResult.expectedCounts.generatorLogs}</Typography>
-                          <Typography variant="body2" sx={{ color: '#007ab7', fontWeight: 'bold' }}>الإجمالي: {Object.values(dryRunResult.expectedCounts).reduce((a, b) => a + b, 0)} مستند</Typography>
+                          <Typography variant="body2" sx={{ color: '#006da3', fontWeight: 'bold' }}>الإجمالي: {Object.values(dryRunResult.expectedCounts).reduce((a, b) => a + b, 0)} مستند</Typography>
                         </Box>
                       </Grid>
 
                       {dryRunResult.errorMessage && (
                         <Grid size={{ xs: 12 }}>
-                          <Typography variant="body2" sx={{ color: '#ef4444', mt: 1, fontWeight: 'bold' }}>رسالة الخطأ: {dryRunResult.errorMessage}</Typography>
+                          <Typography variant="body2" sx={{ color: '#c81e1e', mt: 1, fontWeight: 'bold' }}>رسالة الخطأ: {dryRunResult.errorMessage}</Typography>
                         </Grid>
                       )}
                     </Grid>
@@ -2650,13 +2650,13 @@ export default function Settings() {
                               <Typography variant="body2">الإعدادات: {executeResult.writtenCounts.settings}</Typography>
                               <Typography variant="body2">سجلات التدقيق: {executeResult.writtenCounts.auditLogs}</Typography>
                               <Typography variant="body2">سجلات المولد: {executeResult.writtenCounts.generatorLogs}</Typography>
-                              <Typography variant="body2" sx={{ color: '#007ab7', fontWeight: 'bold' }}>الإجمالي: {Object.values(executeResult.writtenCounts).reduce((a, b) => a + b, 0)} مستند</Typography>
+                              <Typography variant="body2" sx={{ color: '#006da3', fontWeight: 'bold' }}>الإجمالي: {Object.values(executeResult.writtenCounts).reduce((a, b) => a + b, 0)} مستند</Typography>
                             </Box>
                           </Grid>
 
                           {executeResult.errorMessage && (
                             <Grid size={{ xs: 12 }}>
-                              <Typography variant="body2" sx={{ color: '#ef4444', mt: 1, fontWeight: 'bold' }}>رسالة الخطأ: {executeResult.errorMessage}</Typography>
+                              <Typography variant="body2" sx={{ color: '#c81e1e', mt: 1, fontWeight: 'bold' }}>رسالة الخطأ: {executeResult.errorMessage}</Typography>
                             </Grid>
                           )}
                         </Grid>
@@ -2682,7 +2682,7 @@ export default function Settings() {
                   <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
                     فحص صلاحيات الوصول السحابي
                   </Typography>
-                  <Typography variant="caption" sx={{ color: '#64748b', fontFamily: '"Cairo", sans-serif' }}>
+                  <Typography variant="caption" sx={{ color: '#566375', fontFamily: '"Cairo", sans-serif' }}>
                     أداة فحص RBAC للقراءة فقط
                   </Typography>
                 </Box>
@@ -2714,11 +2714,11 @@ export default function Settings() {
                         <Grid size={{ xs: 12 }} key={idx}>
                           <Box sx={{ p: 2, bgcolor: 'white', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
                             <Typography variant="body2" sx={{ fontWeight: 'bold' }}>المسار: {t.path}</Typography>
-                            <Typography variant="body2" sx={{ color: '#64748b' }}>الصلاحية المطلوبة: {t.requiredPermission}</Typography>
+                            <Typography variant="body2" sx={{ color: '#566375' }}>الصلاحية المطلوبة: {t.requiredPermission}</Typography>
                             <Typography variant="body2" sx={{ mt: 1 }}>
                               النتيجة: {t.status === 'allowed' ? '✅ مسموح (allowed)' : t.status === 'permission-denied' ? '⛔ مرفوض (permission-denied)' : '❌ خطأ (unexpected-error)'}
                             </Typography>
-                            {t.details && <Typography variant="caption" sx={{ color: '#ef4444' }}>{t.details}</Typography>}
+                            {t.details && <Typography variant="caption" sx={{ color: '#c81e1e' }}>{t.details}</Typography>}
                           </Box>
                         </Grid>
                       ))}
@@ -2738,7 +2738,7 @@ export default function Settings() {
                   <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
                     مقارنة البيانات المحلية والسحابية
                   </Typography>
-                  <Typography variant="caption" sx={{ color: '#64748b', fontFamily: '"Cairo", sans-serif' }}>
+                  <Typography variant="caption" sx={{ color: '#566375', fontFamily: '"Cairo", sans-serif' }}>
                     مقارنة بيانات هذا الجهاز بالبيانات السحابية دون تعديلها.
                   </Typography>
                 </Box>
@@ -2868,7 +2868,7 @@ export default function Settings() {
                       </Grid>
                       {(comparisonReport.stockMismatchLocal?.length > 0 || comparisonReport.stockMismatchCloud?.length > 0) && (
                       <Grid size={{ xs: 12 }}>
-                        <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 1, color: '#ef4444' }}>أخطاء حساب الأرصدة (CurrentStock vs Sum):</Typography>
+                        <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 1, color: '#c81e1e' }}>أخطاء حساب الأرصدة (CurrentStock vs Sum):</Typography>
                         <pre style={{ fontSize: '12px', whiteSpace: 'pre-wrap', backgroundColor: '#fee2e2', padding: '10px', borderRadius: '8px', margin: 0 }}>
                           {JSON.stringify({ localMismatch: comparisonReport.stockMismatchLocal, cloudMismatch: comparisonReport.stockMismatchCloud }, null, 2)}
                         </pre>
@@ -2896,7 +2896,7 @@ export default function Settings() {
             <Paper sx={{ p: 4, borderRadius: '20px', bgcolor: 'white', display: 'flex', flexDirection: 'column' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 3 }}>
                 <Box sx={{ p: 1, bgcolor: '#f0fdf4', borderRadius: '12px', display: 'flex', alignItems: 'center' }}>
-                  <CloudDownloadIcon sx={{ color: '#16a34a' }} />
+                  <CloudDownloadIcon sx={{ color: '#15803d' }} />
                 </Box>
                 <Box sx={{ textAlign: 'start' }}>
                   <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#111827', fontFamily: '"Cairo", sans-serif' }}>
@@ -2917,7 +2917,7 @@ export default function Settings() {
                     <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: 1, color: '#0f172a', fontFamily: '"Cairo", sans-serif' }}>
                       ١. مصفوفة بطاقات الأصناف والمواد
                     </Typography>
-                    <Typography variant="body2" sx={{ color: '#64748b', mb: 3, fontSize: '0.82rem', fontFamily: '"Cairo", sans-serif', lineHeight: 1.6 }}>
+                    <Typography variant="body2" sx={{ color: '#566375', mb: 3, fontSize: '0.82rem', fontFamily: '"Cairo", sans-serif', lineHeight: 1.6 }}>
                       تنزيل الملف القياسي لتعبئة الأصناف والمواد المخزنية والمستودعات بشكل جماعي، ثم إعادة رفعه لتأسيس الأرصدة التلقائية دون الحاجة لإدخالها فرادى.
                     </Typography>
 
@@ -2926,7 +2926,7 @@ export default function Settings() {
                         variant="outlined"
                         onClick={handleDownloadItemsTemplate}
                         startIcon={<CloudDownloadIcon sx={{ ml: 1, mr: -0.5 }} />}
-                        sx={{ borderColor: '#007ab7', color: '#007ab7', borderRadius: '12px', fontWeight: 'bold', fontFamily: '"Cairo", sans-serif', py: 1.5, flex: 1, '&:hover': { bgcolor: 'rgba(0,122,183,0.05)', borderColor: '#006293' } }}
+                        sx={{ borderColor: '#007ab7', color: '#006da3', borderRadius: '12px', fontWeight: 'bold', fontFamily: '"Cairo", sans-serif', py: 1.5, flex: 1, '&:hover': { bgcolor: 'rgba(0,122,183,0.05)', borderColor: '#006293' } }}
                       >
                         تنزيل قالب الأصناف
                       </Button>
@@ -2956,7 +2956,7 @@ export default function Settings() {
                     <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: 1, color: '#0f172a', fontFamily: '"Cairo", sans-serif' }}>
                       ٢. قيود المعاملات والحركات المخزنية (توريد وصرف)
                     </Typography>
-                    <Typography variant="body2" sx={{ color: '#64748b', mb: 3, fontSize: '0.82rem', fontFamily: '"Cairo", sans-serif', lineHeight: 1.6 }}>
+                    <Typography variant="body2" sx={{ color: '#566375', mb: 3, fontSize: '0.82rem', fontFamily: '"Cairo", sans-serif', lineHeight: 1.6 }}>
                       تنزيل القالب المعد لتسجيل عمليات التوريد والصرف والاستهلاك جماعياً. تأكد من مطابقة أكواد الأصناف المكتوبة هنا بما هو معرف مسبقاً بقاعدة بيانات النظام لإجراء محاسبة الرصيد بدقة.
                     </Typography>
 
@@ -2965,7 +2965,7 @@ export default function Settings() {
                         variant="outlined"
                         onClick={handleDownloadTransactionsTemplate}
                         startIcon={<CloudDownloadIcon sx={{ ml: 1, mr: -0.5 }} />}
-                        sx={{ borderColor: '#16a34a', color: '#16a34a', borderRadius: '12px', fontWeight: 'bold', fontFamily: '"Cairo", sans-serif', py: 1.5, flex: 1, '&:hover': { bgcolor: 'rgba(22,163,74,0.05)', borderColor: '#15803d' } }}
+                        sx={{ borderColor: '#16a34a', color: '#15803d', borderRadius: '12px', fontWeight: 'bold', fontFamily: '"Cairo", sans-serif', py: 1.5, flex: 1, '&:hover': { bgcolor: 'rgba(22,163,74,0.05)', borderColor: '#15803d' } }}
                       >
                         تنزيل قالب الحركات
                       </Button>
@@ -3009,7 +3009,7 @@ export default function Settings() {
             >
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
                 <Box sx={{ p: 1.5, bgcolor: '#ffedd5', borderRadius: '14px', display: 'flex', alignItems: 'center' }}>
-                  <DeleteForeverIcon sx={{ color: '#ea580c', fontSize: 28 }} />
+                  <DeleteForeverIcon sx={{ color: '#c2410c', fontSize: 28 }} />
                 </Box>
                 <Box sx={{ textAlign: 'start' }}>
                   <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#9a3412', fontFamily: '"Cairo", sans-serif' }}>
@@ -3121,7 +3121,7 @@ export default function Settings() {
           }
         }}
       >
-        <DialogTitle sx={{ fontFamily: '"Cairo", sans-serif', fontWeight: 'bold', textAlign: 'center', color: driveError ? '#ef4444' : '#16a34a' }}>
+        <DialogTitle sx={{ fontFamily: '"Cairo", sans-serif', fontWeight: 'bold', textAlign: 'center', color: driveError ? '#c81e1e' : '#15803d' }}>
           {driveError ? '⚠️ فشل الاتصال أو الرفع السحابي' : '📤 تصدير ومزامنة البيانات سحابياً'}
         </DialogTitle>
         <DialogContent sx={{ textAlign: 'center' }}>
@@ -3140,7 +3140,7 @@ export default function Settings() {
                     border: '3px solid #ef4444'
                   }}
                 >
-                  <Typography variant="h4" sx={{ color: '#ef4444' }}>✕</Typography>
+                  <Typography variant="h4" sx={{ color: '#c81e1e' }}>✕</Typography>
                 </Box>
               ) : driveStep < 5 ? (
                 <LoadingSpinner message="جاري تجهيز النسخة الاحتياطية..." />
@@ -3157,7 +3157,7 @@ export default function Settings() {
                     border: '3px solid #16a34a'
                   }}
                 >
-                  <Typography variant="h4" sx={{ color: '#16a34a' }}>✓</Typography>
+                  <Typography variant="h4" sx={{ color: '#15803d' }}>✓</Typography>
                 </Box>
               )}
             </Box>
@@ -3176,7 +3176,7 @@ export default function Settings() {
                   {driveStep === 5 && 'اكتمل النسخ السحابي بنجاح وتأمين الكشوفات! 🎉'}
                 </Typography>
 
-                <Typography variant="caption" sx={{ color: '#64748b', display: 'block', mb: 2, fontFamily: '"Cairo", sans-serif' }}>
+                <Typography variant="caption" sx={{ color: '#566375', display: 'block', mb: 2, fontFamily: '"Cairo", sans-serif' }}>
                   {driveStep < 5 
                     ? 'يرجى عدم إغلاق هذه النافذة ريثما تكتمل جميع خطوات الرفع والتأمين السحابي...' 
                     : `تم حفظ وتأمين ملفات البيانات والتقارير بنجاح باسم: ${settings.organizationName || 'backup'}_${localDateString()}.xlsx / .json`}
@@ -3374,14 +3374,14 @@ export default function Settings() {
           <DialogContentText sx={{ fontFamily: '"Cairo", sans-serif', color: '#475569', fontSize: '0.95rem', mt: 1, lineHeight: 1.7 }}>
             هل أنت متأكد من رغبتك في تعطيل وصول الموظف <strong>"{userToDelete?.fullName}"</strong> إلى النظام؟ سيبقى ملفه محفوظاً ويمكن إعادة تفعيله لاحقاً.
             <br />
-            <span style={{ color: '#ef4444', fontWeight: 'bold' }}>تنبيه:</span> سيُمنع هذا الحساب من الوصول إلى بيانات التطبيق. تبقى بياناته محفوظة ويمكن إعادة تفعيله لاحقًا (الحساب: <code>{userToDelete?.username}</code>).
+            <span style={{ color: '#c81e1e', fontWeight: 'bold' }}>تنبيه:</span> سيُمنع هذا الحساب من الوصول إلى بيانات التطبيق. تبقى بياناته محفوظة ويمكن إعادة تفعيله لاحقًا (الحساب: <code>{userToDelete?.username}</code>).
           </DialogContentText>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 3, gap: 1.5, direction: 'rtl' }}>
           <Button 
             onClick={() => setDeleteUserDialogOpen(false)} 
             variant="outlined"
-            sx={{ borderRadius: '10px', fontFamily: '"Cairo", sans-serif', flexGrow: 1, color: '#64748b', borderColor: '#cbd5e1' }}
+            sx={{ borderRadius: '10px', fontFamily: '"Cairo", sans-serif', flexGrow: 1, color: '#566375', borderColor: '#cbd5e1' }}
           >
             إلغاء الأمر 🛡️
           </Button>
@@ -3490,7 +3490,7 @@ export default function Settings() {
           <Button
             onClick={() => setPartnerFormOpen(false)}
             variant="outlined"
-            sx={{ borderRadius: '10px', fontFamily: '"Cairo", sans-serif', flexGrow: 1, color: '#64748b', borderColor: '#cbd5e1' }}
+            sx={{ borderRadius: '10px', fontFamily: '"Cairo", sans-serif', flexGrow: 1, color: '#566375', borderColor: '#cbd5e1' }}
           >
             إلغاء التعديل 🛡️
           </Button>
@@ -3544,7 +3544,7 @@ export default function Settings() {
         <DialogActions sx={{ px: 3, pb: 3, pt: 0, gap: 1 }}>
           <Button
             onClick={() => setMigrationConfirmDialogOpen(false)}
-            sx={{ fontFamily: '"Cairo", sans-serif', fontWeight: 'bold', color: '#64748b' }}
+            sx={{ fontFamily: '"Cairo", sans-serif', fontWeight: 'bold', color: '#566375' }}
             disabled={isExecutingMigration}
           >
             إلغاء
@@ -3587,14 +3587,14 @@ export default function Settings() {
           <DialogContentText sx={{ fontFamily: '"Cairo", sans-serif', color: '#475569', fontSize: '0.95rem', mt: 1, lineHeight: 1.7 }}>
             هل أنت متأكد من رغبتك في حذف الشريك <strong>"{partnerToDelete?.name}"</strong> بالكامل من النظام وسجل العناوين الرئيسي؟
             <br />
-            <span style={{ color: '#ef4444', fontWeight: 'bold' }}>تنبيه:</span> هذا الإجراء لن يحذف الحركات السابقة المرتبطة بهذا الاسم، ولكنه سيزيله من خيارات التعبئة التلقائية عند إنشاء الحركات الجديدة.
+            <span style={{ color: '#c81e1e', fontWeight: 'bold' }}>تنبيه:</span> هذا الإجراء لن يحذف الحركات السابقة المرتبطة بهذا الاسم، ولكنه سيزيله من خيارات التعبئة التلقائية عند إنشاء الحركات الجديدة.
           </DialogContentText>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 3, gap: 1.5, direction: 'rtl' }}>
           <Button
             onClick={() => setDeletePartnerDialogOpen(false)}
             variant="outlined"
-            sx={{ borderRadius: '10px', fontFamily: '"Cairo", sans-serif', flexGrow: 1, color: '#64748b', borderColor: '#cbd5e1' }}
+            sx={{ borderRadius: '10px', fontFamily: '"Cairo", sans-serif', flexGrow: 1, color: '#566375', borderColor: '#cbd5e1' }}
           >
             إلغاء الأمر 🛡️
           </Button>

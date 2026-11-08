@@ -322,7 +322,7 @@ export default function MaterialFormDialog({ open, onClose, selectedMaterial, on
                   bgcolor: '#f8fafc',
                   '& .MuiInputBase-root': {
                     pointerEvents: 'none',
-                    color: '#64748b'
+                    color: '#566375'
                   },
                   '& .MuiOutlinedInput-notchedOutline': {
                     borderColor: '#e2e8f0 !important'
@@ -387,7 +387,7 @@ export default function MaterialFormDialog({ open, onClose, selectedMaterial, on
             {watchInitialStock > 0 && (
               <Grid size={12}>
                 <Box sx={{ p: 2, bgcolor: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '10px' }}>
-                  <Typography variant="body2" sx={{ color: '#0284c7', fontWeight: 'bold', mb: 0.5 }}>
+                  <Typography variant="body2" sx={{ color: '#0369a1', fontWeight: 'bold', mb: 0.5 }}>
                     بيان الرصيد الافتتاحي
                   </Typography>
                   <Typography variant="body1" sx={{ color: '#0369a1' }}>
@@ -417,7 +417,7 @@ export default function MaterialFormDialog({ open, onClose, selectedMaterial, on
               </TextField>
             </Grid>
             <Grid size={12}>
-              <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: '#64748b', mb: 1, mt: 1 }}>بيانات الجودة والسلامة (اختياري)</Typography>
+              <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: '#566375', mb: 1, mt: 1 }}>بيانات الجودة والسلامة (اختياري)</Typography>
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
               <TextField
@@ -482,7 +482,7 @@ export default function MaterialFormDialog({ open, onClose, selectedMaterial, on
                       onChange={(e) => setSaveNewSupplier(e.target.checked)}
                       style={{ marginLeft: '8px' }}
                     />
-                    <label htmlFor="saveSupplier" style={{ fontSize: '14px', color: '#64748b', cursor: 'pointer' }}>حفظ هذا المورد في الإعدادات</label>
+                    <label htmlFor="saveSupplier" style={{ fontSize: '14px', color: '#566375', cursor: 'pointer' }}>حفظ هذا المورد في الإعدادات</label>
                   </Box>
                 </Box>
               )}
@@ -528,7 +528,7 @@ export default function MaterialFormDialog({ open, onClose, selectedMaterial, on
           <Button 
             onClick={onClose} 
             variant="outlined" 
-            sx={{ px: 3, py: 1.5, borderRadius: '10px', color: '#64748b', borderColor: '#e2e8f0', '&:hover': { borderColor: '#cbd5e1', bgcolor: '#f8fafc' } }}
+            sx={{ px: 3, py: 1.5, borderRadius: '10px', color: '#566375', borderColor: '#e2e8f0', '&:hover': { borderColor: '#cbd5e1', bgcolor: '#f8fafc' } }}
           >
             إلغاء
           </Button>

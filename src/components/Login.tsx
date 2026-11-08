@@ -143,7 +143,7 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: () => void }
             <Typography 
               variant="subtitle2" 
               sx={{ 
-                color: '#007ab7', 
+                color: '#006da3', 
                 fontWeight: 'bold', 
                 mt: 0.5,
                 fontFamily: '"Cairo", sans-serif',
@@ -155,7 +155,7 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: () => void }
             <Typography 
               variant="caption" 
               sx={{ 
-                color: '#64748b', 
+                color: '#566375', 
                 mt: 1,
                 fontFamily: '"Cairo", sans-serif',
                 textAlign: 'center'
@@ -286,7 +286,7 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: () => void }
                     sx={{
                       color: '#94a3b8',
                       '&.Mui-checked': {
-                        color: '#007ab7',
+                        color: '#006da3',
                       },
                     }}
                   />
@@ -306,7 +306,7 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: () => void }
               onClick={() => { setRecoveryEmail(username); setRecoveryError(''); setRecoverySent(false); setRecoveryOpen(true); }}
               sx={{
                 mb: 2,
-                color: '#64748b',
+                color: '#566375',
                 fontFamily: '"Cairo", sans-serif',
                 textTransform: 'none',
                 fontWeight: 'bold'

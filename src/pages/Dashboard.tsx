@@ -166,13 +166,14 @@ export default function Dashboard() {
           <Typography variant="h5" sx={{ fontWeight: 'bold', color: '#1e293b' }}>
             مراقبة المخزون والموازنات الإدارية البيئية
           </Typography>
-          <Typography variant="body2" sx={{ color: '#64748b', mt: 0.5 }}>
+          <Typography variant="body2" sx={{ color: '#566375', mt: 0.5 }}>
             بيانات تفصيلية حية لمتغيرات الأرصدة المتوفرة، حركات الصرف، ومؤشرات التوريد اللوجستي بمكتب خان يونس
           </Typography>
         </Box>
         <FormControl size="small" sx={{ minWidth: 220, bgcolor: '#fff' }}>
-          <InputLabel>المستودع الرئيسي المعتمد</InputLabel>
+          <InputLabel id="dashboard-storehouse-label">المستودع الرئيسي المعتمد</InputLabel>
           <Select
+            labelId="dashboard-storehouse-label"
             value={selectedStorehouse}
             label="المستودع الرئيسي المعتمد"
             onChange={(e) => { void setSelectedStorehouse(e.target.value).catch(() => {}); }}
@@ -194,14 +195,14 @@ export default function Dashboard() {
           <Paper sx={{ p: 2.5, }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <Box>
-                <Typography variant="caption" sx={{ fontWeight: 'bold', color: '#64748b' }}>إجمالي الأصناف بالمستودعات</Typography>
+                <Typography variant="caption" sx={{ fontWeight: 'bold', color: '#566375' }}>إجمالي الأصناف بالمستودعات</Typography>
                 <Typography variant="h4" sx={{ fontWeight: 'bold', color: '#1e293b', mt: 1 }}>{totalItems}</Typography>
               </Box>
-              <Box sx={{ p: 1.5, bgcolor: '#ecfdf5', color: '#059669', borderRadius: '12px' }}>
+              <Box sx={{ p: 1.5, bgcolor: '#ecfdf5', color: '#047857', borderRadius: '12px' }}>
                 <CategoryIcon />
               </Box>
             </Box>
-            <Typography variant="caption" sx={{ color: '#64748b', display: 'block', mt: 1.5 }}>
+            <Typography variant="caption" sx={{ color: '#566375', display: 'block', mt: 1.5 }}>
               الأصناف المسجلة بنشاط بالنظام
             </Typography>
           </Paper>
@@ -212,16 +213,16 @@ export default function Dashboard() {
           <Paper sx={{ p: 2.5, border: '1px solid #f1f5f9' }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <Box>
-                <Typography variant="caption" sx={{ fontWeight: 'bold', color: '#64748b' }}>أكثر المواد استهلاكاً (الشهر)</Typography>
-                <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#007ab7', mt: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '140px' }} title={mostConsumedItem.name}>
+                <Typography variant="caption" sx={{ fontWeight: 'bold', color: '#566375' }}>أكثر المواد استهلاكاً (الشهر)</Typography>
+                <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#006da3', mt: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '140px' }} title={mostConsumedItem.name}>
                   {mostConsumedItem.name}
                 </Typography>
               </Box>
-              <Box sx={{ p: 1.5, bgcolor: '#eff6ff', color: '#007ab7', borderRadius: '12px' }}>
+              <Box sx={{ p: 1.5, bgcolor: '#eff6ff', color: '#006da3', borderRadius: '12px' }}>
                 <InventoryIcon />
               </Box>
             </Box>
-            <Typography variant="caption" sx={{ color: '#007ab7', display: 'block', mt: 1.5, fontWeight: 'bold' }}>
+            <Typography variant="caption" sx={{ color: '#006da3', display: 'block', mt: 1.5, fontWeight: 'bold' }}>
               بحجم استهلاك: {mostConsumedItem.qty} وحدة
             </Typography>
           </Paper>
@@ -232,8 +233,8 @@ export default function Dashboard() {
           <Paper sx={{ p: 2.5, bgcolor: lowStockCount > 0 ? 'rgba(239,68,68,0.01)' : 'white' }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <Box>
-                <Typography variant="caption" sx={{ fontWeight: 'bold', color: '#64748b' }}>الأصناف الشحيحة (تحت الحد)</Typography>
-                <Typography variant="h4" sx={{ fontWeight: 'bold', color: lowStockCount > 0 ? '#ef4444' : '#059669', mt: 1 }}>
+                <Typography variant="caption" sx={{ fontWeight: 'bold', color: '#566375' }}>الأصناف الشحيحة (تحت الحد)</Typography>
+                <Typography variant="h4" sx={{ fontWeight: 'bold', color: lowStockCount > 0 ? '#c81e1e' : '#047857', mt: 1 }}>
                   {lowStockCount}
                 </Typography>
               </Box>
@@ -241,7 +242,7 @@ export default function Dashboard() {
                 <WarningAmberIcon />
               </Box>
             </Box>
-            <Typography variant="caption" sx={{ color: lowStockCount > 0 ? '#ef4444' : '#059669', display: 'block', mt: 1.5, fontWeight: 'bold' }}>
+            <Typography variant="caption" sx={{ color: lowStockCount > 0 ? '#c81e1e' : '#047857', display: 'block', mt: 1.5, fontWeight: 'bold' }}>
               {lowStockCount > 0 ? 'يتطلب تزويداً عاجلاً للمستودعات' : 'مستويات الأرصدة ممتازة'}
             </Typography>
           </Paper>
@@ -252,14 +253,14 @@ export default function Dashboard() {
           <Paper sx={{ p: 2.5, border: '1px solid #f1f5f9' }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <Box>
-                <Typography variant="caption" sx={{ fontWeight: 'bold', color: '#64748b' }}>حركات التوريد والصرف (الشهر)</Typography>
+                <Typography variant="caption" sx={{ fontWeight: 'bold', color: '#566375' }}>حركات التوريد والصرف (الشهر)</Typography>
                 <Typography variant="h4" sx={{ fontWeight: 'bold', color: '#7c3aed', mt: 1 }}>{monthlyTxCount}</Typography>
               </Box>
               <Box sx={{ p: 1.5, bgcolor: '#faf5ff', color: '#7c3aed', borderRadius: '12px' }}>
                 <ReceiptLongIcon />
               </Box>
             </Box>
-            <Typography variant="caption" sx={{ color: '#64748b', display: 'block', mt: 1.5 }}>
+            <Typography variant="caption" sx={{ color: '#566375', display: 'block', mt: 1.5 }}>
               حركات اليوم المسجلة: <strong>{dailyTxCount} حركة هامة</strong>
             </Typography>
           </Paper>
@@ -406,7 +407,7 @@ export default function Dashboard() {
             <Typography variant="body1" sx={{ fontWeight: 'bold', color: '#1e293b' }}>
               آخر الحركات السنوية والمستندات المسجلة
             </Typography>
-            <Typography variant="caption" sx={{ color: '#64748b' }}>
+            <Typography variant="caption" sx={{ color: '#566375' }}>
               تتبع فوري لأحدث إيصالات التوريد، أذونات التحويل والصرف اللوجستي المنفذة
             </Typography>
           </Box>
@@ -450,22 +451,22 @@ export default function Dashboard() {
 
                 return (
                   <TableRow key={`${tx.id}-${idx}`} sx={{ '&:hover': { bgcolor: '#f8fafc' } }}>
-                    <TableCell sx={{ fontFamily: 'monospace', fontWeight: 600, color: '#64748b' }}><span dir="ltr">{tx.transactionNumber || '---'}</span></TableCell>
+                    <TableCell sx={{ fontFamily: 'monospace', fontWeight: 600, color: '#566375' }}><span dir="ltr">{tx.transactionNumber || '---'}</span></TableCell>
                     <TableCell sx={{ fontWeight: 'bold' }}>
                       {tx.itemName} 
-                      <Typography variant="caption" sx={{ color: '#007ab7', display: 'block' }}>
+                      <Typography variant="caption" sx={{ color: '#006da3', display: 'block' }}>
                         📦 <span dir="ltr">{tx.itemCode}</span> • 🏢 {tx.storehouse || 'المخزن الرئيسي'}
                       </Typography>
                     </TableCell>
                     <TableCell align="center">
                       <Chip label={tx.transactionType} size="small" sx={{ bgcolor: colorClass.bg, color: colorClass.text, fontWeight: 'bold', height: 22, fontSize: '10px' }} />
                     </TableCell>
-                    <TableCell align="center" sx={{ fontWeight: 'bold', color: isInbound ? '#15803d' : '#ef4444' }}>
+                    <TableCell align="center" sx={{ fontWeight: 'bold', color: isInbound ? '#15803d' : '#c81e1e' }}>
                       <span dir="ltr">{isInbound ? '+' : '-'}{tx.quantity}</span>
                     </TableCell>
                     <TableCell align="center" sx={{ fontWeight: 'bold' }}>{tx.displayStockAfter ?? tx.stockAfter}</TableCell>
                     <TableCell sx={{ fontSize: '0.82rem', color: '#475569' }}>{tx.supplierOrReceiver || tx.notes || 'غير محدد'}</TableCell>
-                    <TableCell sx={{ color: '#64748b', fontSize: '0.8rem' }}>{tx.date}</TableCell>
+                    <TableCell sx={{ color: '#566375', fontSize: '0.8rem' }}>{tx.date}</TableCell>
                   </TableRow>
                 );
               })}

@@ -75,13 +75,13 @@ export default function AuditLogs() {
       {/* Header */}
       <Box sx={{ mb: 4, display: 'flex', alignItems: 'center', gap: 2 }}>
         <Box sx={{ p: 1.5, bgcolor: '#e0f2fe', borderRadius: '12px' }}>
-          <HistoryIcon sx={{ color: '#0284c7', fontSize: '2rem' }} />
+          <HistoryIcon sx={{ color: '#0369a1', fontSize: '2rem' }} />
         </Box>
         <Box>
           <Typography variant="h5" sx={{ fontWeight: 'bold', color: '#1e293b' }}>
             سجل العمليات والتدقيق الأمني العام (Audit Trail)
           </Typography>
-          <Typography variant="body2" sx={{ color: '#64748b', mt: 0.5 }}>
+          <Typography variant="body2" sx={{ color: '#566375', mt: 0.5 }}>
             تتبع ورصد كافة التحركات المخزنية الحيوية، تسجيل الإدخال وعمليات الحذف والتحويلات مع معلومات التوقيت الآمن وهوية المستخدم للمساءلة والشفافية الكاملة
           </Typography>
         </Box>
@@ -123,7 +123,7 @@ export default function AuditLogs() {
             </TextField>
           </Grid>
           <Grid size={{ xs: 12, md: 4 }} sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <Typography variant="body2" sx={{ fontWeight: 'bold', color: '#64748b' }}>
+            <Typography variant="body2" sx={{ fontWeight: 'bold', color: '#566375' }}>
               وجدت: {filteredLogs.length} سجل محاسبي مأمون
             </Typography>
           </Grid>
@@ -165,7 +165,7 @@ export default function AuditLogs() {
                     <TableCell sx={{ fontSize: '0.88rem', color: '#475569', lineHeight: 1.5 }}>
                       {log.details}
                       {getAuditAffectedEntities(log.primaryEntity ?? log.affectedEntities).length > 0 && (
-                        <Typography variant="caption" sx={{ display: 'block', mt: 0.5, color: '#64748b', fontFamily: 'monospace' }}>
+                        <Typography variant="caption" sx={{ display: 'block', mt: 0.5, color: '#566375', fontFamily: 'monospace' }}>
                           {getAuditAffectedEntities(log.primaryEntity ?? log.affectedEntities).join('، ')}
                         </Typography>
                       )}
@@ -173,7 +173,7 @@ export default function AuditLogs() {
                     <TableCell sx={{ fontWeight: 'semibold', color: '#047857' }}>
                       👤 {log.user}
                       {log.actorUserId && (
-                        <Typography variant="caption" sx={{ display: 'block', color: '#64748b', fontFamily: 'monospace' }}>
+                        <Typography variant="caption" sx={{ display: 'block', color: '#566375', fontFamily: 'monospace' }}>
                           {log.actorUserId}
                         </Typography>
                       )}
@@ -183,7 +183,7 @@ export default function AuditLogs() {
                         <Tooltip title="عرض كرت الاستلام / المستند المرفق بهذه العملية">
                           <IconButton 
                             size="small" 
-                            sx={{ color: '#059669' }} 
+                            sx={{ color: '#047857' }} 
                             onClick={() => {
                               setViewingAttachment(log.attachment || null);
                               setOpenAttachmentDialog(true);
@@ -204,7 +204,7 @@ export default function AuditLogs() {
                 <TableCell colSpan={6} align="center" sx={{ py: 6 }}>
                   <Box sx={{ color: '#94a3b8', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                     <InfoIcon sx={{ fontSize: '3rem', mb: 1 }} />
-                    <Typography variant="body1" sx={{ color: '#64748b', fontStyle: 'italic' }}>
+                    <Typography variant="body1" sx={{ color: '#566375', fontStyle: 'italic' }}>
                       لم يعثر على أي حدث يدعم شروط الفرز الحالية بسجل التدقيق الرقمي.
                     </Typography>
                   </Box>
@@ -267,7 +267,7 @@ export default function AuditLogs() {
               </Button>
             </Box>
           ) : (
-            <Typography sx={{ py: 3, textAlign: 'center', color: '#64748b' }}>
+            <Typography sx={{ py: 3, textAlign: 'center', color: '#566375' }}>
               لا يوجد مستند مرفق لهذه الحركة.
             </Typography>
           )}

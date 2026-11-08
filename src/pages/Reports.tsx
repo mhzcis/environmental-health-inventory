@@ -1004,10 +1004,10 @@ export default function Reports() {
       <Box className="no-print-area" sx={{ mb: 4, pb: 2, borderBottom: '1px solid #e2e8f0', display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 2 }}>
         <Box>
           <Typography variant="h5" sx={{ fontWeight: '800', color: '#0f172a', fontFamily: '"Cairo", sans-serif', display: 'flex', alignItems: 'center', gap: 1 }}>
-            <AnalyticsIcon sx={{ color: '#007ab7', fontSize: '28px' }} />
+            <AnalyticsIcon sx={{ color: '#006da3', fontSize: '28px' }} />
             شاشة التقارير والمخرجات الرسمية المنظمة
           </Typography>
-          <Typography variant="body2" sx={{ color: '#64748b', mt: 0.5, fontFamily: '"Cairo", sans-serif' }}>
+          <Typography variant="body2" sx={{ color: '#566375', mt: 0.5, fontFamily: '"Cairo", sans-serif' }}>
             توليد كشوفات الأرصدة المخزنية المعتمدة بشكل فوري، وتحليل مستويات الأمان، وتتبع الحركات المخزنية مع ميزة الطباعة وتصدير Excel منسق.
           </Typography>
         </Box>
@@ -1015,16 +1015,16 @@ export default function Reports() {
         {/* Rapid Stats Tiles for context */}
         <Box sx={{ display: 'flex', flexDirection: 'row', gap: 2, flexWrap: 'wrap' }}>
           <Card variant="outlined" sx={{ bgcolor: '#fff', borderRadius: '12px', borderColor: '#e2e8f0', minWidth: 120, p: 1, py: 1.5, textAlign: 'center' }}>
-            <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 'bold' }}>رصيد الأصناف الكلية</Typography>
+            <Typography variant="caption" sx={{ color: '#566375', fontWeight: 'bold' }}>رصيد الأصناف الكلية</Typography>
             <Typography variant="h6" sx={{ fontWeight: '800', color: '#0f172a' }}>{stat.totalItems}</Typography>
           </Card>
           <Card variant="outlined" sx={{ bgcolor: '#fff', borderRadius: '12px', borderColor: '#e2e8f0', minWidth: 120, p: 1, py: 1.5, textAlign: 'center' }}>
-            <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 'bold' }}>الأرصدة المتوفرة</Typography>
-            <Typography variant="h6" sx={{ fontWeight: '800', color: '#007ab7' }}>{stat.sumQtys}</Typography>
+            <Typography variant="caption" sx={{ color: '#566375', fontWeight: 'bold' }}>الأرصدة المتوفرة</Typography>
+            <Typography variant="h6" sx={{ fontWeight: '800', color: '#006da3' }}>{stat.sumQtys}</Typography>
           </Card>
           <Card variant="outlined" sx={{ bgcolor: '#fff', borderRadius: '12px', borderColor: '#fee2e2', minWidth: 120, p: 1, py: 1.5, textAlign: 'center' }}>
-            <Typography variant="caption" sx={{ color: '#ef4444', fontWeight: 'bold' }}>أصناف حرجة للتعاقد</Typography>
-            <Typography variant="h6" sx={{ fontWeight: '800', color: '#ef4444' }}>{stat.criticalItems}</Typography>
+            <Typography variant="caption" sx={{ color: '#c81e1e', fontWeight: 'bold' }}>أصناف حرجة للتعاقد</Typography>
+            <Typography variant="h6" sx={{ fontWeight: '800', color: '#c81e1e' }}>{stat.criticalItems}</Typography>
           </Card>
           {stat.expiredCount > 0 && (
             <Card variant="outlined" sx={{ bgcolor: '#fff8f8', borderRadius: '12px', borderColor: '#fca5a5', minWidth: 120, p: 1, py: 1.5, textAlign: 'center' }}>
@@ -1283,7 +1283,7 @@ export default function Reports() {
             <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: 1, color: '#0f172a', fontFamily: '"Cairo", sans-serif', display: 'flex', alignItems: 'center', gap: 1 }}>
               📎 سندات توثيق الأرصدة الافتتاحية المعتمدة (حسب التصنيف)
             </Typography>
-            <Typography variant="body2" sx={{ color: '#64748b', fontSize: '0.82rem', fontFamily: '"Cairo", sans-serif', lineHeight: 1.6, mb: 3 }}>
+            <Typography variant="body2" sx={{ color: '#566375', fontSize: '0.82rem', fontFamily: '"Cairo", sans-serif', lineHeight: 1.6, mb: 3 }}>
               لتثبيت المستندات القانونية للأرصدة التأسيسية، يرجى رفع السند المعتمد والموقع كصورة لكل فئة وتصنيف بشكل منفصل. سيقوم النظام بربط الصورة تلقائياً بجميع حركات الأرصدة الافتتاحية التابعة للتصنيف المختار لسهولة الاستعراض والطباعة والتوثيق المالي والمخزني دون تكرار تخزين الملف.
             </Typography>
           </Box>
@@ -1436,7 +1436,7 @@ export default function Reports() {
                   </Box>
                 </Box>
               ) : (
-                <Typography variant="body2" sx={{ color: '#64748b', fontFamily: '"Cairo", sans-serif', fontStyle: 'italic' }}>
+                <Typography variant="body2" sx={{ color: '#566375', fontFamily: '"Cairo", sans-serif', fontStyle: 'italic' }}>
                   الرجاء اختيار تصنيف لرفع السند الخاص به.
                 </Typography>
               )}
@@ -1481,7 +1481,7 @@ export default function Reports() {
                                    setViewingAttachment(attachmentData);
                                    setOpenAttachmentDialog(true);
                                 }}>
-                                  <VisibilityIcon fontSize="small" sx={{ color: '#16a34a' }} />
+                                  <VisibilityIcon fontSize="small" sx={{ color: '#15803d' }} />
                                 </IconButton>
                                 <IconButton size="small" color="error" onClick={async () => {
                                    await dataService.saveOpeningStockAttachment(key, null);
@@ -1543,7 +1543,7 @@ export default function Reports() {
               </Button>
             </Box>
           ) : (
-            <Typography sx={{ py: 3, textAlign: 'center', color: '#64748b', fontFamily: '"Cairo", sans-serif' }}>
+            <Typography sx={{ py: 3, textAlign: 'center', color: '#566375', fontFamily: '"Cairo", sans-serif' }}>
               لا يوجد مستند مرفق.
             </Typography>
           )}
@@ -1615,12 +1615,12 @@ export default function Reports() {
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#007ab7' }} />
             <Typography variant="body2" sx={{ fontWeight: 'bold', color: '#334155', fontFamily: '"Cairo", sans-serif', fontSize: '13px' }}>
-              تبيان المعاينة: <span style={{ color: '#007ab7' }}>{paginatedData.length}</span> من أصل <span style={{ color: '#007ab7' }}>{currentReportData.length}</span> سجل مطابق للبحث
+              تبيان المعاينة: <span style={{ color: '#006da3' }}>{paginatedData.length}</span> من أصل <span style={{ color: '#006da3' }}>{currentReportData.length}</span> سجل مطابق للبحث
             </Typography>
           </Box>
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-            <Typography variant="body2" sx={{ fontWeight: '600', color: '#64748b', fontFamily: '"Cairo", sans-serif', fontSize: '12px' }}>
+            <Typography variant="body2" sx={{ fontWeight: '600', color: '#566375', fontFamily: '"Cairo", sans-serif', fontSize: '12px' }}>
               مسافة وتباعد الأسطر:
             </Typography>
             <Box sx={{ display: 'flex', gap: 0.5, bgcolor: '#f1f5f9', p: 0.5, borderRadius: '10px' }}>
@@ -1709,7 +1709,7 @@ export default function Reports() {
                   <TableCell align="center" sx={{ fontWeight: '900', color: '#1e293b', fontFamily: '"Cairo", sans-serif', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>وحدة القياس</TableCell>
                   <TableCell align="center" sx={{ fontWeight: '900', color: '#1e293b', fontFamily: '"Cairo", sans-serif', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>الرصيد المتدني المتوفر</TableCell>
                   <TableCell align="center" sx={{ fontWeight: '900', color: '#1e293b', fontFamily: '"Cairo", sans-serif', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>رصيد الأمان</TableCell>
-                  <TableCell align="center" sx={{ fontWeight: '900', color: '#ef4444', fontFamily: '"Cairo", sans-serif', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>حجم العجز الفعلي</TableCell>
+                  <TableCell align="center" sx={{ fontWeight: '900', color: '#c81e1e', fontFamily: '"Cairo", sans-serif', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>حجم العجز الفعلي</TableCell>
                   <TableCell align="center" sx={{ fontWeight: '900', color: '#1e293b', fontFamily: '"Cairo", sans-serif', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>الموقع والمخزن</TableCell>
                 </TableRow>
               )}
@@ -1748,7 +1748,7 @@ export default function Reports() {
                   <TableCell align="center" sx={{ fontWeight: '900', color: '#1e293b', fontFamily: '"Cairo", sans-serif', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>إشغال المستودع الحالي</TableCell>
                   <TableCell align="center" sx={{ fontWeight: '900', color: '#1e293b', fontFamily: '"Cairo", sans-serif', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>عدد الأصناف الكلية المدرجة</TableCell>
                   <TableCell align="center" sx={{ fontWeight: '900', color: '#1e293b', fontFamily: '"Cairo", sans-serif', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>مجموع كمية الرصيد</TableCell>
-                  <TableCell align="center" sx={{ fontWeight: '900', color: '#ef4444', fontFamily: '"Cairo", sans-serif', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>أصناف حرجة للغاية</TableCell>
+                  <TableCell align="center" sx={{ fontWeight: '900', color: '#c81e1e', fontFamily: '"Cairo", sans-serif', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>أصناف حرجة للغاية</TableCell>
                   <TableCell align="center" sx={{ fontWeight: '900', color: '#1e293b', fontFamily: '"Cairo", sans-serif', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>متوسط رصيد الصنف الواحد</TableCell>
                 </TableRow>
               )}
@@ -1772,7 +1772,7 @@ export default function Reports() {
                   <TableCell align="center" sx={{ fontWeight: '900', color: '#1e293b', fontFamily: '"Cairo", sans-serif', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>اليوم</TableCell>
                   <TableCell align="center" sx={{ fontWeight: '900', color: '#1e293b', fontFamily: '"Cairo", sans-serif', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>القراءة السابقة</TableCell>
                   <TableCell align="center" sx={{ fontWeight: '900', color: '#1e293b', fontFamily: '"Cairo", sans-serif', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>القراءة الحالية</TableCell>
-                  <TableCell align="center" sx={{ fontWeight: '900', color: '#0284c7', fontFamily: '"Cairo", sans-serif', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>ساعات التشغيل</TableCell>
+                  <TableCell align="center" sx={{ fontWeight: '900', color: '#0369a1', fontFamily: '"Cairo", sans-serif', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>ساعات التشغيل</TableCell>
                   <TableCell align="center" sx={{ fontWeight: '900', color: '#1e293b', fontFamily: '"Cairo", sans-serif', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>الملاحظات</TableCell>
                   <TableCell align="center" sx={{ fontWeight: '900', color: '#1e293b', fontFamily: '"Cairo", sans-serif', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>المُدخل</TableCell>
                 </TableRow>
@@ -1785,15 +1785,15 @@ export default function Reports() {
                     const isLow = isLowStockByTotal(row, totalStockIndex);
                     return (
                       <TableRow key={`${row.id}-${idx}`} sx={{ '&:nth-of-type(even)': { bgcolor: '#f8fafc' }, '&:hover': { bgcolor: '#f1f5f9' }, transition: 'background-color 0.15s ease' }}>
-                        <TableCell align="center" sx={{ fontFamily: 'monospace', fontWeight: 'bold', color: row.isSubRow ? '#64748b' : '#007ab7', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>
+                        <TableCell align="center" sx={{ fontFamily: 'monospace', fontWeight: 'bold', color: row.isSubRow ? '#566375' : '#006da3', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>
                            {row.isSubRow ? '' : row.code}
                         </TableCell>
-                        <TableCell align="center" sx={{ fontWeight: row.isSubRow ? 'normal' : 'bold', color: row.isSubRow ? '#64748b' : 'inherit', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>
+                        <TableCell align="center" sx={{ fontWeight: row.isSubRow ? 'normal' : 'bold', color: row.isSubRow ? '#566375' : 'inherit', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>
                            {row.isSubRow ? `    - ${row.name}` : row.name}
                         </TableCell>
                         <TableCell align="center" sx={{ py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.category}</TableCell>
                         <TableCell align="center" sx={{ py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.unit}</TableCell>
-                        <TableCell align="center" sx={{ fontWeight: '900', color: isLow ? '#ef4444' : '#10b981', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>
+                        <TableCell align="center" sx={{ fontWeight: '900', color: isLow ? '#c81e1e' : '#047857', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>
                           {row.currentStock} {isLow ? '⚠️' : '✓'}
                         </TableCell>
                         <TableCell align="center" sx={{ color: '#475569', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.minimumStock}</TableCell>
@@ -1806,13 +1806,13 @@ export default function Reports() {
                     const deficit = Math.max(0, row.minimumStock - row.currentStock);
                     return (
                       <TableRow key={`${row.id}-${idx}`} sx={{ '&:nth-of-type(even)': { bgcolor: '#fff5f5' }, '&:hover': { bgcolor: '#fee2e2' }, transition: 'background-color 0.15s ease' }}>
-                        <TableCell align="center" sx={{ fontFamily: 'monospace', fontWeight: 'bold', color: '#ef4444', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.code}</TableCell>
-                        <TableCell align="center" sx={{ fontWeight: 'bold', color: '#ef4444', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.name}</TableCell>
+                        <TableCell align="center" sx={{ fontFamily: 'monospace', fontWeight: 'bold', color: '#c81e1e', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.code}</TableCell>
+                        <TableCell align="center" sx={{ fontWeight: 'bold', color: '#c81e1e', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.name}</TableCell>
                         <TableCell align="center" sx={{ py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.category}</TableCell>
                         <TableCell align="center" sx={{ py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.unit}</TableCell>
                         <TableCell align="center" sx={{ fontWeight: '900', color: '#b91c1c', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.currentStock}</TableCell>
                         <TableCell align="center" sx={{ color: '#475569', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.minimumStock}</TableCell>
-                        <TableCell align="center" sx={{ fontWeight: '900', color: '#ef4444', bgcolor: '#fef2f2', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>
+                        <TableCell align="center" sx={{ fontWeight: '900', color: '#c81e1e', bgcolor: '#fef2f2', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>
                           {deficit}
                         </TableCell>
                         <TableCell align="center" sx={{ py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{getDisplayStorageLocation(row)}</TableCell>
@@ -1829,10 +1829,10 @@ export default function Reports() {
                         <TableCell align="center" sx={{ fontFamily: 'monospace', fontWeight: 'bold', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.code}</TableCell>
                         <TableCell align="center" sx={{ fontWeight: 'bold', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.name}</TableCell>
                         <TableCell align="center" sx={{ py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.productionDate || '--'}</TableCell>
-                        <TableCell align="center" sx={{ fontWeight: 'bold', color: isExpired ? '#b91c1c' : '#d97706', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>
+                        <TableCell align="center" sx={{ fontWeight: 'bold', color: isExpired ? '#b91c1c' : '#b45309', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>
                           {row.expiryDate || '--'}
                         </TableCell>
-                        <TableCell align="center" sx={{ fontWeight: 'bold', color: isExpired ? '#ef4444' : '#1e293b', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>
+                        <TableCell align="center" sx={{ fontWeight: 'bold', color: isExpired ? '#c81e1e' : '#1e293b', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>
                           {isExpired ? (
                             <Chip label={`منتهى الصلاحية`} size="small" sx={{ bgcolor: '#fee2e2', color: '#991b1b', fontWeight: 'bold', height: '22px', fontSize: '11px' }} />
                           ) : (
@@ -1898,10 +1898,10 @@ export default function Reports() {
                             }} 
                           />
                         </TableCell>
-                        <TableCell align="center" sx={{ fontWeight: 'bold', color: isInbound ? '#15803d' : '#ef4444', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>
+                        <TableCell align="center" sx={{ fontWeight: 'bold', color: isInbound ? '#15803d' : '#c81e1e', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>
                           {isInbound ? '+' : '-'}{row.quantity}
                         </TableCell>
-                        <TableCell align="center" sx={{ color: '#64748b', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.displayStockBefore ?? row.stockBefore}</TableCell>
+                        <TableCell align="center" sx={{ color: '#566375', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.displayStockBefore ?? row.stockBefore}</TableCell>
                         <TableCell align="center" sx={{ fontWeight: 'bold', color: '#0f172a', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.displayStockAfter ?? row.stockAfter}</TableCell>
                         <TableCell align="center" sx={{ py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.supplierOrReceiver || 'مخزن غير محدد'}</TableCell>
                         <TableCell align="center" sx={{ py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.executedBy}</TableCell>
@@ -1909,12 +1909,12 @@ export default function Reports() {
                       {getTransactionWarehouseDetails(row).map((detail) => (
                         <TableRow key={`${row.id}-warehouse-${detail.warehouse}`} sx={{ bgcolor: '#f8fafc' }}>
                           <TableCell />
-                          <TableCell align="center" sx={{ color: '#0284c7', fontWeight: 'bold', py: cellPadding.py }}>↳ {detail.warehouse}</TableCell>
-                          <TableCell align="center" sx={{ color: '#64748b', py: cellPadding.py }}>↳ تفصيل رصيد {row.itemName}</TableCell>
+                          <TableCell align="center" sx={{ color: '#0369a1', fontWeight: 'bold', py: cellPadding.py }}>↳ {detail.warehouse}</TableCell>
+                          <TableCell align="center" sx={{ color: '#566375', py: cellPadding.py }}>↳ تفصيل رصيد {row.itemName}</TableCell>
                           <TableCell />
                           <TableCell align="center">تفصيل</TableCell>
                           <TableCell align="center">{detail.warehouse === row.storehouse ? row.quantity : '—'}</TableCell>
-                          <TableCell align="center" sx={{ color: '#64748b' }}>{detail.before}</TableCell>
+                          <TableCell align="center" sx={{ color: '#566375' }}>{detail.before}</TableCell>
                           <TableCell align="center" sx={{ fontWeight: 'bold' }}>{detail.after}</TableCell>
                           <TableCell colSpan={2} />
                         </TableRow>
@@ -1930,8 +1930,8 @@ export default function Reports() {
                         <TableCell align="center" sx={{ fontWeight: 'bold', color: '#0f172a', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.category}</TableCell>
                         <TableCell align="center" sx={{ fontWeight: 'bold', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.storageLocation}</TableCell>
                         <TableCell align="center" sx={{ fontWeight: 'bold', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.totalItems}</TableCell>
-                        <TableCell align="center" sx={{ fontWeight: '800', color: '#007ab7', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.totalQty}</TableCell>
-                        <TableCell align="center" sx={{ fontWeight: 'bold', color: row.lowStockCount > 0 ? '#ef4444' : '#10b981', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>
+                        <TableCell align="center" sx={{ fontWeight: '800', color: '#006da3', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.totalQty}</TableCell>
+                        <TableCell align="center" sx={{ fontWeight: 'bold', color: row.lowStockCount > 0 ? '#c81e1e' : '#047857', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>
                           {row.lowStockCount} {row.lowStockCount > 0 ? '⚠️' : '✓'}
                         </TableCell>
                         <TableCell align="center" sx={{ color: '#475569', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{avg}</TableCell>
@@ -1944,15 +1944,15 @@ export default function Reports() {
                     const dateFormatted = row.createdAt ? new Date(row.createdAt).toLocaleDateString('ar-EG') : 'تأسيسي';
                     return (
                       <TableRow key={`${row.id}-${idx}`} sx={{ bgcolor: row.isSubRow ? '#f8fafc' : 'inherit', '&:hover': { bgcolor: '#f1f5f9' }, transition: 'background-color 0.15s ease' }}>
-                        <TableCell align="center" sx={{ fontFamily: 'monospace', fontWeight: 'bold', color: row.isSubRow ? '#64748b' : '#007ab7', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>
+                        <TableCell align="center" sx={{ fontFamily: 'monospace', fontWeight: 'bold', color: row.isSubRow ? '#566375' : '#006da3', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>
                           {row.isSubRow ? '' : row.code}
                         </TableCell>
-                        <TableCell align="center" sx={{ fontWeight: row.isSubRow ? 'normal' : 'bold', color: row.isSubRow ? '#64748b' : 'inherit', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>
+                        <TableCell align="center" sx={{ fontWeight: row.isSubRow ? 'normal' : 'bold', color: row.isSubRow ? '#566375' : 'inherit', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>
                           {row.isSubRow ? `    - ${row.name}` : row.name}
                         </TableCell>
                         <TableCell align="center" sx={{ py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.category}</TableCell>
                         <TableCell align="center" sx={{ py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.unit}</TableCell>
-                        <TableCell align="center" sx={{ fontWeight: '900', color: row.isSubRow ? '#0284c7' : '#0f172a', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{openingQty}</TableCell>
+                        <TableCell align="center" sx={{ fontWeight: '900', color: row.isSubRow ? '#0369a1' : '#0f172a', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{openingQty}</TableCell>
                         <TableCell align="center" sx={{ py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{getDisplayStorageLocation(row)}</TableCell>
                         <TableCell align="center" sx={{ py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{dateFormatted}</TableCell>
                         <TableCell align="center" sx={{ py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.notes || '--'}</TableCell>
@@ -1963,11 +1963,11 @@ export default function Reports() {
                   if (reportType === 'generator_log') {
                     return (
                       <TableRow key={`${row.id}-${idx}`} sx={{ '&:nth-of-type(even)': { bgcolor: '#f8fafc' }, '&:hover': { bgcolor: '#f1f5f9' }, transition: 'background-color 0.15s ease' }}>
-                        <TableCell align="center" sx={{ fontWeight: 'bold', color: '#0284c7', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.date}</TableCell>
+                        <TableCell align="center" sx={{ fontWeight: 'bold', color: '#0369a1', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.date}</TableCell>
                         <TableCell align="center" sx={{ py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.dayName}</TableCell>
                         <TableCell align="center" sx={{ py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.previousReading}</TableCell>
                         <TableCell align="center" sx={{ fontWeight: 'bold', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.currentReading}</TableCell>
-                        <TableCell align="center" sx={{ fontWeight: '900', color: '#059669', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.operatingHours} ساعة</TableCell>
+                        <TableCell align="center" sx={{ fontWeight: '900', color: '#047857', py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.operatingHours} ساعة</TableCell>
                         <TableCell align="center" sx={{ py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.notes || '-'}</TableCell>
                         <TableCell align="center" sx={{ py: cellPadding.py, px: cellPadding.px, fontSize: fontSizeStyle }}>{row.createdBy}</TableCell>
                       </TableRow>
@@ -1978,7 +1978,7 @@ export default function Reports() {
                 })
               ) : (
                 <TableRow>
-                  <TableCell colSpan={11} align="center" sx={{ py: 6, fontStyle: 'italic', color: '#64748b', fontFamily: '"Cairo", sans-serif' }}>
+                  <TableCell colSpan={11} align="center" sx={{ py: 6, fontStyle: 'italic', color: '#566375', fontFamily: '"Cairo", sans-serif' }}>
                     لم يعثر على سجلات تطابق قواعد التصفية بالفترة الزمنية المحددة.
                   </TableCell>
                 </TableRow>

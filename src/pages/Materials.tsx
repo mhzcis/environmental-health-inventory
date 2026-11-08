@@ -799,7 +799,7 @@ const handleOpenDeleteDialog = (item: Material) => {
           <Typography variant="h5" sx={{ fontWeight: 'bold', color: '#1e293b' }}>
             المستودع وإدارة أصناف المخزون
           </Typography>
-          <Typography variant="body2" sx={{ color: '#64748b', mt: 0.5 }}>
+          <Typography variant="body2" sx={{ color: '#566375', mt: 0.5 }}>
             إدخال وفحص جميع أصناف المخازن من لوازم ومبيدات وآلات مع كود توليد آلي متناسق
           </Typography>
         </Box>
@@ -937,7 +937,7 @@ const handleOpenDeleteDialog = (item: Material) => {
           </Grid>
           <Grid size={12}>
             <Divider sx={{ my: 1 }} />
-            <Typography variant="body2" sx={{ fontWeight: 'bold', color: '#64748b', fontFamily: '"Cairo", sans-serif', textAlign: 'end', mt: 1 }}>
+            <Typography variant="body2" sx={{ fontWeight: 'bold', color: '#566375', fontFamily: '"Cairo", sans-serif', textAlign: 'end', mt: 1 }}>
               الأصناف المطابقة: {filteredMaterials.filter(m => !m.isSubRow).length}
             </Typography>
           </Grid>
@@ -1060,7 +1060,7 @@ const handleOpenDeleteDialog = (item: Material) => {
                 onClick={handleCollapseAll}
                 sx={{ 
                   borderColor: '#cbd5e1', 
-                  color: '#64748b', 
+                  color: '#566375', 
                   borderRadius: '8px', 
                   fontWeight: 'bold', 
                   fontSize: '0.8rem',
@@ -1072,7 +1072,7 @@ const handleOpenDeleteDialog = (item: Material) => {
             </>
           )}
         </Box>
-        <Typography variant="body2" sx={{ fontWeight: 'bold', color: '#64748b', fontFamily: '"Cairo", sans-serif' }}>
+        <Typography variant="body2" sx={{ fontWeight: 'bold', color: '#566375', fontFamily: '"Cairo", sans-serif' }}>
           عدد السجلات المعروضة: {visibleMaterials.length}
         </Typography>
       </Box>
@@ -1084,6 +1084,7 @@ const handleOpenDeleteDialog = (item: Material) => {
               <TableCell padding="checkbox">
                 <Checkbox
                   id="select-all-materials"
+                  slotProps={{ input: { 'aria-label': 'تحديد كل الأصناف الظاهرة' } }}
                   indeterminate={selectedMaterialIds.length > 0 && selectedMaterialIds.length < filteredMaterials.length}
                   checked={filteredMaterials.length > 0 && selectedMaterialIds.length === filteredMaterials.length}
                   onChange={(e) => {
@@ -1124,6 +1125,7 @@ const handleOpenDeleteDialog = (item: Material) => {
                       {!item.isSubRow ? (
                         <Checkbox
                           id={`select-material-${item.id}`}
+                          slotProps={{ input: { 'aria-label': `تحديد الصنف ${item.code || ''} ${item.name || ''}`.trim() } }}
                           checked={selectedMaterialIds.includes(item.id)}
                           onChange={(e) => {
                             if (e.target.checked) {
@@ -1142,18 +1144,20 @@ const handleOpenDeleteDialog = (item: Material) => {
                           {item.hasSubRows ? (
                             <IconButton 
                               size="small" 
+                              aria-label={expandedRows[item.id] ? 'إخفاء أرصدة المستودعات' : 'عرض أرصدة المستودعات'}
+                              aria-expanded={!!expandedRows[item.id]}
                               onClick={(e) => { e.stopPropagation(); setExpandedRows(prev => ({...prev, [item.id]: !prev[item.id]})); }}
                               sx={{ 
                                 p: 0.3, 
                                 bgcolor: expandedRows[item.id] ? '#e0f2fe' : '#f1f5f9', 
-                                color: '#0284c7',
+                                color: '#0369a1',
                                 '&:hover': { bgcolor: '#bae6fd' } 
                               }}
                             >
                               {expandedRows[item.id] ? <KeyboardArrowUpIcon fontSize="small" /> : <KeyboardArrowDownIcon fontSize="small" />}
                             </IconButton>
                           ) : item.isSubRow ? (
-                            <SubdirectoryArrowLeftIcon sx={{ fontSize: 16, color: '#0284c7', transform: 'scaleX(-1)' }} />
+                            <SubdirectoryArrowLeftIcon sx={{ fontSize: 16, color: '#0369a1', transform: 'scaleX(-1)' }} />
                           ) : null}
                         </Box>
                         <Typography 
@@ -1162,7 +1166,7 @@ const handleOpenDeleteDialog = (item: Material) => {
                             fontFamily: 'monospace', 
                             fontWeight: item.isSubRow ? 600 : 700, 
                             fontSize: item.isSubRow ? '0.8rem' : '0.875rem',
-                            color: item.isSubRow ? '#475569' : '#007ab7'
+                            color: item.isSubRow ? '#475569' : '#006da3'
                           }}
                         >
                           {item.code}
@@ -1202,23 +1206,23 @@ const handleOpenDeleteDialog = (item: Material) => {
                         size="small" 
                         sx={{ 
                           bgcolor: item.isSubRow ? '#f1f5f9' : '#e2e8f0', 
-                          color: item.isSubRow ? '#64748b' : '#334155', 
+                          color: item.isSubRow ? '#566375' : '#334155', 
                           fontWeight: 600,
                           fontSize: item.isSubRow ? '11px' : '12px'
                         }} 
                       />
                     </TableCell>
-                    <TableCell align="center" sx={{ fontSize: item.isSubRow ? '0.8rem' : '0.875rem', color: item.isSubRow ? '#64748b' : 'inherit' }}>
+                    <TableCell align="center" sx={{ fontSize: item.isSubRow ? '0.8rem' : '0.875rem', color: item.isSubRow ? '#566375' : 'inherit' }}>
                       {item.unit}
                     </TableCell>
-                    <TableCell align="center" sx={{ fontSize: item.isSubRow ? '0.8rem' : '0.875rem', color: '#64748b' }}>
+                    <TableCell align="center" sx={{ fontSize: item.isSubRow ? '0.8rem' : '0.875rem', color: '#566375' }}>
                       {item.minimumStock}
                     </TableCell>
-                    <TableCell align="center" sx={{ fontWeight: 'bold', fontSize: item.isSubRow ? '0.875rem' : '1rem', color: isCritical ? '#ef4444' : '#059669' }}>
+                    <TableCell align="center" sx={{ fontWeight: 'bold', fontSize: item.isSubRow ? '0.875rem' : '1rem', color: isCritical ? '#c81e1e' : '#047857' }}>
                       {item.currentStock}
                     </TableCell>
                     <TableCell>
-                      <Typography sx={{ fontSize: item.isSubRow ? '0.8rem' : '0.85rem', color: item.isSubRow ? '#0284c7' : '#64748b', fontWeight: item.isSubRow ? 600 : 400 }}>
+                      <Typography sx={{ fontSize: item.isSubRow ? '0.8rem' : '0.85rem', color: item.isSubRow ? '#0369a1' : '#566375', fontWeight: item.isSubRow ? 600 : 400 }}>
                         {getDisplayStorageLocation(item)}
                       </Typography>
                     </TableCell>
@@ -1319,7 +1323,7 @@ const handleOpenDeleteDialog = (item: Material) => {
                     bgcolor: '#f8fafc',
                     '& .MuiInputBase-root': {
                       pointerEvents: 'none',
-                      color: '#64748b'
+                      color: '#566375'
                     },
                     '& .MuiOutlinedInput-notchedOutline': {
                       borderColor: '#e2e8f0 !important'
@@ -1360,7 +1364,7 @@ const handleOpenDeleteDialog = (item: Material) => {
             {watchInitialStock > 0 && (
               <Grid size={12}>
                 <Box sx={{ p: 2, bgcolor: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '10px', width: '100%' }}>
-                  <Typography variant="body2" sx={{ color: '#0284c7', fontWeight: 'bold', mb: 0.5 }}>
+                  <Typography variant="body2" sx={{ color: '#0369a1', fontWeight: 'bold', mb: 0.5 }}>
                     بيان الرصيد الافتتاحي
                   </Typography>
                   <Typography variant="body1" sx={{ color: '#0369a1' }}>
@@ -1426,7 +1430,7 @@ const handleOpenDeleteDialog = (item: Material) => {
 
               {/* Optional Fields */}
               <Grid size={12}>
-                <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: '#64748b', mb: 1, mt: 1 }}>بيانات الجودة والسلامة (اختياري)</Typography>
+                <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: '#566375', mb: 1, mt: 1 }}>بيانات الجودة والسلامة (اختياري)</Typography>
               </Grid>
 
               <Grid size={{ xs: 12, sm: 6 }}>
@@ -1496,7 +1500,7 @@ const handleOpenDeleteDialog = (item: Material) => {
                         onChange={(e) => setSaveNewSupplier(e.target.checked)}
                         style={{ marginLeft: '8px' }}
                       />
-                      <label htmlFor="saveSupplier" style={{ fontSize: '14px', color: '#64748b', cursor: 'pointer' }}>حفظ هذا المورد في الإعدادات</label>
+                      <label htmlFor="saveSupplier" style={{ fontSize: '14px', color: '#566375', cursor: 'pointer' }}>حفظ هذا المورد في الإعدادات</label>
                     </Box>
                   </Box>
                 )}
@@ -1558,12 +1562,12 @@ const handleOpenDeleteDialog = (item: Material) => {
         onClose={() => setOpenDeleteDialog(false)}
         slotProps={{ paper: { sx: { p: 1, direction: 'rtl' } } }}
       >
-        <DialogTitle sx={{ fontWeight: 'bold', color: '#ef4444' }}>تحذير سلامة مخزنية!</DialogTitle>
+        <DialogTitle sx={{ fontWeight: 'bold', color: '#c81e1e' }}>تحذير سلامة مخزنية!</DialogTitle>
         <DialogContent>
           <Typography variant="body1" sx={{ color: '#1e293b', mb: 2 }}>
             هل أنت متأكد تماماً من رغبتك في حذف الصنف: <strong>{materialToDelete?.name}</strong> من السجلات نهائياً؟
           </Typography>
-          <Typography variant="body2" sx={{ color: '#ef4444', bgcolor: '#fef2f2', p: 1.5, borderRadius: '8px', border: '1px solid #fee2e2' }}>
+          <Typography variant="body2" sx={{ color: '#c81e1e', bgcolor: '#fef2f2', p: 1.5, borderRadius: '8px', border: '1px solid #fee2e2' }}>
             تنبيه: لا يمكن حذف الصنف في حال تواجد له أي حركات مخزنية تاريخية 'وارد' أو 'صادر' حفاظاً على صحة الموازنات المحاسبية العامة ومراقبة الفقد.
           </Typography>
         </DialogContent>
@@ -1592,12 +1596,12 @@ const handleOpenDeleteDialog = (item: Material) => {
         onClose={() => setOpenBulkDeleteDialog(false)}
         slotProps={{ paper: { sx: { p: 1, direction: 'rtl' } } }}
       >
-        <DialogTitle sx={{ fontWeight: 'bold', color: '#ef4444' }}>تحذير حذف جماعي!</DialogTitle>
+        <DialogTitle sx={{ fontWeight: 'bold', color: '#c81e1e' }}>تحذير حذف جماعي!</DialogTitle>
         <DialogContent>
           <Typography variant="body1" sx={{ color: '#1e293b', mb: 2 }}>
             هل أنت متأكد من حذف <strong>{selectedMaterialIds.length}</strong> من الأصناف المحددة نهائياً؟
           </Typography>
-          <Typography variant="body2" sx={{ color: '#ef4444', bgcolor: '#fef2f2', p: 1.5, borderRadius: '8px', border: '1px solid #fee2e2' }}>
+          <Typography variant="body2" sx={{ color: '#c81e1e', bgcolor: '#fef2f2', p: 1.5, borderRadius: '8px', border: '1px solid #fee2e2' }}>
             تنبيه: سيتم أيضاً حذف كافة الحركات المخزنية المسجلة على هذه الأصناف تلقائياً وبشكل كامل. لا يمكن التراجع عن هذه الخطوة نهائياً!
           </Typography>
         </DialogContent>
@@ -1635,35 +1639,35 @@ const handleOpenDeleteDialog = (item: Material) => {
           {detailsMaterial && (
             <Grid container spacing={2}>
               <Grid size={6}>
-                <Typography variant="caption" sx={{ color: '#64748b' }}>كود التخصيص</Typography>
-                <Typography variant="body1" dir="ltr" sx={{ fontWeight: 'bold', color: '#007ab7', fontFamily: 'monospace', userSelect: 'all' }}>{detailsMaterial.code}</Typography>
+                <Typography variant="caption" sx={{ color: '#566375' }}>كود التخصيص</Typography>
+                <Typography variant="body1" dir="ltr" sx={{ fontWeight: 'bold', color: '#006da3', fontFamily: 'monospace', userSelect: 'all' }}>{detailsMaterial.code}</Typography>
               </Grid>
               <Grid size={6}>
-                <Typography variant="caption" sx={{ color: '#64748b' }}>اسم الصنف</Typography>
+                <Typography variant="caption" sx={{ color: '#566375' }}>اسم الصنف</Typography>
                 <Typography variant="body1" sx={{ fontWeight: 'bold' }}>{detailsMaterial.name}</Typography>
               </Grid>
               <Grid size={6}>
-                <Typography variant="caption" sx={{ color: '#64748b' }}>التصنيف والجهة</Typography>
+                <Typography variant="caption" sx={{ color: '#566375' }}>التصنيف والجهة</Typography>
                 <Typography variant="body1" sx={{ fontWeight: 'bold' }}>{detailsMaterial.category}</Typography>
               </Grid>
               <Grid size={6}>
-                <Typography variant="caption" sx={{ color: '#64748b' }}>وحدة المعاملات المخزنية</Typography>
+                <Typography variant="caption" sx={{ color: '#566375' }}>وحدة المعاملات المخزنية</Typography>
                 <Typography variant="body1" sx={{ fontWeight: 'bold' }}>{detailsMaterial.unit}</Typography>
               </Grid>
               <Grid size={6}>
-                <Typography variant="caption" sx={{ color: '#64748b' }}>الرصيد المتاح حالياً</Typography>
-                <Typography variant="body1" sx={{ fontWeight: 'bold', color: '#059669', fontSize: '1.2rem' }}>{detailsMaterial.currentStock}</Typography>
+                <Typography variant="caption" sx={{ color: '#566375' }}>الرصيد المتاح حالياً</Typography>
+                <Typography variant="body1" sx={{ fontWeight: 'bold', color: '#047857', fontSize: '1.2rem' }}>{detailsMaterial.currentStock}</Typography>
               </Grid>
               <Grid size={6}>
-                <Typography variant="caption" sx={{ color: '#64748b' }}>حد السلامة المخزنية</Typography>
+                <Typography variant="caption" sx={{ color: '#566375' }}>حد السلامة المخزنية</Typography>
                 <Typography variant="body1" sx={{ fontWeight: 'bold' }}>{detailsMaterial.minimumStock}</Typography>
               </Grid>
               <Grid size={12}>
-                <Typography variant="caption" sx={{ color: '#64748b' }}>موقع التخزين والمستودع</Typography>
+                <Typography variant="caption" sx={{ color: '#566375' }}>موقع التخزين والمستودع</Typography>
                 <Typography variant="body1" sx={{ fontWeight: 'medium' }}>{getDisplayStorageLocation(detailsMaterial)}</Typography>
               </Grid>
               <Grid size={12}>
-                <Typography variant="caption" sx={{ color: '#64748b' }}>تعليمات سلامة وملاحظات إدارية</Typography>
+                <Typography variant="caption" sx={{ color: '#566375' }}>تعليمات سلامة وملاحظات إدارية</Typography>
                 <Typography variant="body1" sx={{ bgcolor: '#f8fafc', p: 1.5, borderRadius: '8px', minHeight: '60px' }}>
                   {detailsMaterial.notes || 'لا يوجد ملاحظات مسجلة على هذا الصنف.'}
                 </Typography>
@@ -1695,29 +1699,29 @@ const handleOpenDeleteDialog = (item: Material) => {
               {(detailsMaterial.productionDate || detailsMaterial.expiryDate || detailsMaterial.manufacturer || detailsMaterial.hazardLevel) && (
                 <>
                   <Grid size={12}>
-                    <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: '#64748b', mb: 1, mt: 1, borderTop: '1px solid #e2e8f0', pt: 2 }}>بيانات الجودة والسلامة:</Typography>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: '#566375', mb: 1, mt: 1, borderTop: '1px solid #e2e8f0', pt: 2 }}>بيانات الجودة والسلامة:</Typography>
                   </Grid>
                   {detailsMaterial.productionDate && (
                     <Grid size={6}>
-                      <Typography variant="caption" sx={{ color: '#64748b' }}>تاريخ الإنتاج</Typography>
+                      <Typography variant="caption" sx={{ color: '#566375' }}>تاريخ الإنتاج</Typography>
                       <Typography variant="body1" sx={{ fontWeight: 'medium' }}>{detailsMaterial.productionDate}</Typography>
                     </Grid>
                   )}
                   {detailsMaterial.expiryDate && (
                     <Grid size={6}>
-                      <Typography variant="caption" sx={{ color: '#64748b' }}>تاريخ الإنتهاء</Typography>
+                      <Typography variant="caption" sx={{ color: '#566375' }}>تاريخ الإنتهاء</Typography>
                       <Typography variant="body1" sx={{ fontWeight: 'medium' }}>{detailsMaterial.expiryDate}</Typography>
                     </Grid>
                   )}
                   {detailsMaterial.manufacturer && (
                     <Grid size={6}>
-                      <Typography variant="caption" sx={{ color: '#64748b' }}>الشركة الصانعة الموردة</Typography>
+                      <Typography variant="caption" sx={{ color: '#566375' }}>الشركة الصانعة الموردة</Typography>
                       <Typography variant="body1" sx={{ fontWeight: 'medium' }}>{detailsMaterial.manufacturer}</Typography>
                     </Grid>
                   )}
                   {detailsMaterial.hazardLevel && (
                     <Grid size={6}>
-                      <Typography variant="caption" sx={{ color: '#64748b' }}>تصنيف خطورة الصنف</Typography>
+                      <Typography variant="caption" sx={{ color: '#566375' }}>تصنيف خطورة الصنف</Typography>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                         <Box sx={{ 
                           width: 12, height: 12, borderRadius: '50%', 
@@ -1787,7 +1791,7 @@ const handleOpenDeleteDialog = (item: Material) => {
             <TableRow sx={{ bgcolor: '#f8fafc' }}>
                   <TableCell sx={{ fontWeight: 'bold', color: '#475569', py: 1.5 }}>كود الصنف</TableCell>
                   <TableCell sx={{ fontWeight: 'bold', color: '#475569' }}>اسم الصنف</TableCell>
-                  <TableCell sx={{ fontWeight: 'bold', color: '#0284c7' }}>المستودع المستهدف</TableCell>
+                  <TableCell sx={{ fontWeight: 'bold', color: '#0369a1' }}>المستودع المستهدف</TableCell>
                   <TableCell align="center" sx={{ fontWeight: 'bold', color: '#475569' }}>الرصيد الدفتري الحالي</TableCell>
                   <TableCell align="center" sx={{ fontWeight: 'bold', color: '#475569', width: '180px' }}>الرصيد الفعلي المقاس 📥</TableCell>
                   <TableCell align="center" sx={{ fontWeight: 'bold', color: '#475569', width: '140px' }}>الفارق / التسوية</TableCell>
@@ -1802,9 +1806,9 @@ const handleOpenDeleteDialog = (item: Material) => {
 
                   return (
                     <TableRow key={`stocktake-${row.rowKey}-${idx}`} hover>
-                      <TableCell sx={{ fontFamily: 'monospace', fontWeight: 'bold', color: '#64748b' }}><span dir="ltr">{row.code}</span></TableCell>
+                      <TableCell sx={{ fontFamily: 'monospace', fontWeight: 'bold', color: '#566375' }}><span dir="ltr">{row.code}</span></TableCell>
                       <TableCell sx={{ fontWeight: 'bold', color: '#1e293b' }}>{row.name}</TableCell>
-                      <TableCell sx={{ color: '#0284c7', fontWeight: 'bold', fontSize: '0.85rem' }}>{row.storehouse}</TableCell>
+                      <TableCell sx={{ color: '#0369a1', fontWeight: 'bold', fontSize: '0.85rem' }}>{row.storehouse}</TableCell>
                       <TableCell align="center" sx={{ fontWeight: 'bold', color: '#334155' }}>
                         {systemStock} {row.unit}
                       </TableCell>

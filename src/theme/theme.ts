@@ -294,9 +294,23 @@ export const getDesignTokens = (mode: 'light' | 'dark'): ThemeOptions => ({
       },
     },
     MuiTablePagination: {
+      defaultProps: {
+        // QA-20261108 A11Y-02: Arabic accessible names for the page buttons.
+        getItemAriaLabel: (type: 'first' | 'last' | 'next' | 'previous') =>
+          ({ first: 'الصفحة الأولى', last: 'الصفحة الأخيرة', next: 'الصفحة التالية', previous: 'الصفحة السابقة' })[type],
+      },
       styleOverrides: {
         root: {
           borderBottom: 'none',
+          // QA-20261108 WK-OBS-02: on narrow screens wrap the pagination bar instead of
+          // pushing the next-page button out of view (it was reachable only by scrolling).
+          '@media (max-width:599.95px)': {
+            overflow: 'visible',
+            '& .MuiTablePagination-toolbar': { flexWrap: 'wrap', justifyContent: 'center', paddingLeft: 4, paddingRight: 4, rowGap: 4, minHeight: 'auto' },
+            '& .MuiTablePagination-spacer': { display: 'none' },
+            '& .MuiTablePagination-input': { marginLeft: 8, marginRight: 8 },
+            '& .MuiTablePagination-actions': { marginLeft: 0, marginRight: 0 },
+          },
         },
       },
     },

@@ -428,7 +428,7 @@ export default function AppLayout({ children }: Props) {
             onClick={handleLogoutAttempt} 
             title="تسجيل الخروج"
             sx={{ 
-              color: '#ef4444', 
+              color: '#c81e1e', 
               bgcolor: 'rgba(239, 68, 68, 0.15)', 
               p: 0.5,
               borderRadius: '6px',
@@ -498,28 +498,29 @@ export default function AppLayout({ children }: Props) {
           zIndex: (theme) => theme.zIndex.drawer + 1
         }}
       >
-        <Toolbar sx={{ justifyContent: 'space-between', px: { xs: 2, sm: 3 } }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 0.5, sm: 1.5 } }}>
+        <Toolbar sx={{ justifyContent: 'space-between', px: { xs: 1, sm: 3 }, gap: { xs: 0.5, sm: 1 } }}>
+          {/* QA-20261108 A11Y-01/WK-OBS-02: the title block shrinks so the logout control stays on screen at 360/390. */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 0.5, sm: 1.5 }, minWidth: 0, flexShrink: 1 }}>
             <IconButton
               color="inherit"
-              aria-label="toggle drawer"
+              aria-label="فتح قائمة التنقل"
               edge="start"
               onClick={handleDrawerToggle}
               sx={{ ml: 1, display: 'inline-flex', p: 0.5 }}
             >
               <MenuIcon />
             </IconButton>
-            <Box sx={{ textAlign: 'right' }}>
-              <Typography variant="h6" sx={{ fontWeight: 'bold', fontSize: { xs: '0.9rem', sm: '1.15rem' }, color: '#ffffff', fontFamily: '"Cairo", sans-serif', maxWidth: { xs: '180px', sm: '350px', md: '100%' }, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <Box sx={{ textAlign: 'right', minWidth: 0 }}>
+              <Typography variant="h6" sx={{ fontWeight: 'bold', fontSize: { xs: '0.9rem', sm: '1.15rem' }, color: '#ffffff', fontFamily: '"Cairo", sans-serif', maxWidth: { xs: '100%', sm: '350px', md: '100%' }, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {settings.organizationName}
               </Typography>
-              <Typography variant="caption" sx={{ fontWeight: 600, color: '#38bdf8', fontSize: { xs: '0.7rem', sm: '0.85rem' }, fontFamily: '"Cairo", sans-serif', display: 'block', maxWidth: { xs: '180px', sm: '350px', md: '100%' }, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <Typography variant="caption" sx={{ fontWeight: 600, color: '#38bdf8', fontSize: { xs: '0.7rem', sm: '0.85rem' }, fontFamily: '"Cairo", sans-serif', display: 'block', maxWidth: { xs: '100%', sm: '350px', md: '100%' }, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {settings.departmentName}
               </Typography>
             </Box>
           </Box>
           
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 1, sm: 1.5 } }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 0.25, sm: 1.5 }, flexShrink: 0 }}>
             {/* Global Storehouse Selector - Sleek Pill & Menu */}
             <Box>
               <Button
@@ -531,8 +532,10 @@ export default function AppLayout({ children }: Props) {
                   bgcolor: 'rgba(255,255,255,0.08)',
                   border: '1px solid rgba(255,255,255,0.2)',
                   borderRadius: '20px',
-                  px: { xs: 1.2, sm: 1.8 },
+                  px: { xs: 0.75, sm: 1.8 },
                   py: 0.5,
+                  minWidth: 0,
+                  '& .MuiButton-startIcon': { display: { xs: 'none', sm: 'inherit' } },
                   color: '#ffffff',
                   fontWeight: 'bold',
                   fontSize: { xs: '0.75rem', sm: '0.85rem' },
@@ -592,7 +595,7 @@ export default function AppLayout({ children }: Props) {
                 anchorOrigin={{ horizontal: 'right', vertical: 'bottom' }}
               >
                 <Box sx={{ px: 1.5, py: 1, borderBottom: '1px solid #f1f5f9', mb: 0.5 }}>
-                  <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 'bold', fontFamily: '"Cairo", sans-serif', display: 'block' }}>
+                  <Typography variant="caption" sx={{ color: '#566375', fontWeight: 'bold', fontFamily: '"Cairo", sans-serif', display: 'block' }}>
                     🏢 نطاق التغطية والمستودع النشط
                   </Typography>
                 </Box>
@@ -612,7 +615,7 @@ export default function AppLayout({ children }: Props) {
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                     🌐 جميع المستودعات (شامل)
                   </Box>
-                  {selectedStorehouse === 'all' && <CheckIcon sx={{ fontSize: 18, color: '#0284c7' }} />}
+                  {selectedStorehouse === 'all' && <CheckIcon sx={{ fontSize: 18, color: '#0369a1' }} />}
                 </MenuItem>
                 <Divider sx={{ my: 0.5 }} />
                 {activeStorehouses.map((warehouse) => (
@@ -633,7 +636,7 @@ export default function AppLayout({ children }: Props) {
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                       🏢 {warehouse.name}
                     </Box>
-                    {selectedStorehouse === warehouse.name && <CheckIcon sx={{ fontSize: 18, color: '#0284c7' }} />}
+                    {selectedStorehouse === warehouse.name && <CheckIcon sx={{ fontSize: 18, color: '#0369a1' }} />}
                   </MenuItem>
                 ))}
               </Menu>
@@ -642,12 +645,13 @@ export default function AppLayout({ children }: Props) {
             <IconButton
               onClick={() => setShortcutsHelpOpen(true)}
               title="اختصارات لوحة المفاتيح (Shift + ?)"
-              sx={{ color: '#e2e8f0', p: 0.5, '&:hover': { bgcolor: 'rgba(255,255,255,0.08)' } }}
+              aria-label="اختصارات لوحة المفاتيح"
+              sx={{ color: '#e2e8f0', p: 0.5, display: { xs: 'none', sm: 'inline-flex' }, '&:hover': { bgcolor: 'rgba(255,255,255,0.08)' } }}
             >
               <KeyboardIcon sx={{ fontSize: { xs: 20, sm: 24 } }} />
             </IconButton>
 
-            <Box sx={{ position: 'relative', cursor: 'pointer', display: 'flex', alignItems: 'center' }} onClick={handleNotifClick}>
+            <IconButton aria-label={`التنبيهات${totalAlerts > 0 ? ` (${totalAlerts})` : ''}`} title="التنبيهات" sx={{ position: 'relative', p: 0.5 }} onClick={handleNotifClick}>
               <NotificationsIcon sx={{ color: '#e2e8f0', fontSize: { xs: 20, sm: 24 } }} />
               {totalAlerts > 0 && (
                 <Chip
@@ -667,7 +671,7 @@ export default function AppLayout({ children }: Props) {
                   }}
                 />
               )}
-            </Box>
+            </IconButton>
 
             <Popover
               open={openNotif}
@@ -721,10 +725,10 @@ export default function AppLayout({ children }: Props) {
                 </Box>
               )}
             </Popover>
-            <Divider orientation="vertical" flexItem sx={{ mx: { xs: 0.5, sm: 1 }, borderColor: 'rgba(255, 255, 255, 0.15)' }} />
+            <Divider orientation="vertical" flexItem sx={{ mx: { xs: 0.5, sm: 1 }, display: { xs: 'none', sm: 'block' }, borderColor: 'rgba(255, 255, 255, 0.15)' }} />
             
             <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 0.5, sm: 1.5 } }}>
-              <Avatar sx={{ bgcolor: 'primary.main', width: { xs: 28, sm: 36 }, height: { xs: 28, sm: 36 }, fontSize: '0.8rem', fontWeight: 'bold', fontFamily: '"Cairo", sans-serif' }}>
+              <Avatar sx={{ display: { xs: 'none', sm: 'flex' }, bgcolor: 'primary.main', width: { xs: 28, sm: 36 }, height: { xs: 28, sm: 36 }, fontSize: '0.8rem', fontWeight: 'bold', fontFamily: '"Cairo", sans-serif' }}>
                 {currentUser.fullName.charAt(0)}
               </Avatar>
               <Box sx={{ display: { xs: 'none', md: 'flex' }, flexDirection: 'column', textAlign: 'right' }}>
@@ -738,6 +742,7 @@ export default function AppLayout({ children }: Props) {
               <IconButton 
                 onClick={handleLogoutAttempt} 
                 title="تسجيل الخروج الآمن"
+                aria-label="تسجيل الخروج الآمن"
                 sx={{ 
                   color: '#f87171', 
                   p: { xs: 0.5, sm: 1 },
@@ -942,13 +947,13 @@ export default function AppLayout({ children }: Props) {
             children
           ) : (
             <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', py: 8, px: 2, textAlign: 'center' }}>
-              <Box sx={{ width: 80, height: 80, bgcolor: '#fee2e2', color: '#ef4444', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 3 }}>
+              <Box sx={{ width: 80, height: 80, bgcolor: '#fee2e2', color: '#c81e1e', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', mb: 3 }}>
                 <Typography variant="h3" sx={{ fontWeight: 'bold' }}>🔒</Typography>
               </Box>
               <Typography variant="h5" sx={{ fontFamily: '"Cairo", sans-serif', fontWeight: 'bold', color: '#1e293b', mb: 1 }}>
                 {location.pathname === '/' ? 'لا تمتلك صلاحية عرض لوحة التحكم' : 'عذراً، لا تمتلك الصلاحية الكافية للدخول'}
               </Typography>
-              <Typography variant="body1" sx={{ fontFamily: '"Cairo", sans-serif', color: '#64748b', maxWidth: 500, mb: 4, lineHeight: 1.7 }}>
+              <Typography variant="body1" sx={{ fontFamily: '"Cairo", sans-serif', color: '#566375', maxWidth: 500, mb: 4, lineHeight: 1.7 }}>
                 {location.pathname === '/' ? (
                   'لا يتوفر لحسابك صلاحية استعراض لوحة التحكم الرئيسية للمنظومة حالياً. بإمكانك التنقل واستعراض بقية صفحات وأقسام النظام المتاحة لك بكل سهولة من خلال استخدام القائمة الجانبية.'
                 ) : (
@@ -1211,11 +1216,11 @@ export default function AppLayout({ children }: Props) {
         fullWidth
         sx={{ '& .MuiDialog-paper': { borderRadius: '16px', p: 1, direction: 'rtl' } }}
       >
-        <DialogTitle sx={{ fontFamily: '"Cairo", sans-serif', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: 1, borderBottom: '1px solid #e2e8f0', pb: 1.5, color: '#007ab7' }}>
+        <DialogTitle sx={{ fontFamily: '"Cairo", sans-serif', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: 1, borderBottom: '1px solid #e2e8f0', pb: 1.5, color: '#006da3' }}>
           ⌨️ اختصارات لوحة المفاتيح للمنظومة
         </DialogTitle>
         <DialogContent sx={{ mt: 2 }}>
-          <Typography variant="body2" sx={{ fontFamily: '"Cairo", sans-serif', color: '#64748b', mb: 2, lineHeight: 1.6 }}>
+          <Typography variant="body2" sx={{ fontFamily: '"Cairo", sans-serif', color: '#566375', mb: 2, lineHeight: 1.6 }}>
             بإمكانك استخدام الاختصارات التالية للتنقل السريع والكفؤ بين أقسام المنظومة الرئيسية دون الحاجة للفأرة:
           </Typography>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
@@ -1236,7 +1241,7 @@ export default function AppLayout({ children }: Props) {
                   {sh.keys.map((k, kidx) => (
                     <React.Fragment key={kidx}>
                       {kidx > 0 && <span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 'bold' }}>+</span>}
-                      <Box sx={{ px: 1, py: 0.3, bgcolor: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '11px', fontFamily: 'monospace', fontWeight: 'bold', color: '#007ab7', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
+                      <Box sx={{ px: 1, py: 0.3, bgcolor: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '11px', fontFamily: 'monospace', fontWeight: 'bold', color: '#006da3', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
                         {k}
                       </Box>
                     </React.Fragment>

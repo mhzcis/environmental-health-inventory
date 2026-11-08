@@ -549,9 +549,9 @@ export default function GeneratorLog() {
             <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700, fontFamily: 'Cairo, sans-serif' }}>
               إجمالي التشغيل (التراكمي)
             </Typography>
-            <FunctionsIcon sx={{ color: '#0284c7' }} />
+            <FunctionsIcon sx={{ color: '#0369a1' }} />
           </Box>
-          <Typography variant="h5" sx={{ fontWeight: 800, color: '#0284c7', fontFamily: 'Cairo, sans-serif' }}>
+          <Typography variant="h5" sx={{ fontWeight: 800, color: '#0369a1', fontFamily: 'Cairo, sans-serif' }}>
             {stats.totalHours} <Typography component="span" variant="caption" sx={{ color: 'text.secondary' }}>ساعة</Typography>
           </Typography>
         </Paper>
@@ -562,9 +562,9 @@ export default function GeneratorLog() {
             <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700, fontFamily: 'Cairo, sans-serif' }}>
               تشغيل الشهر الحالي
             </Typography>
-            <CalendarMonthIcon sx={{ color: '#059669' }} />
+            <CalendarMonthIcon sx={{ color: '#047857' }} />
           </Box>
-          <Typography variant="h5" sx={{ fontWeight: 800, color: '#059669', fontFamily: 'Cairo, sans-serif' }}>
+          <Typography variant="h5" sx={{ fontWeight: 800, color: '#047857', fontFamily: 'Cairo, sans-serif' }}>
             {stats.monthHours} <Typography component="span" variant="caption" sx={{ color: 'text.secondary' }}>ساعة</Typography>
           </Typography>
         </Paper>
@@ -575,9 +575,9 @@ export default function GeneratorLog() {
             <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700, fontFamily: 'Cairo, sans-serif' }}>
               ساعات آخر تشغيل
             </Typography>
-            <HistoryToggleOffIcon sx={{ color: '#d97706' }} />
+            <HistoryToggleOffIcon sx={{ color: '#b45309' }} />
           </Box>
-          <Typography variant="h5" sx={{ fontWeight: 800, color: '#d97706', fontFamily: 'Cairo, sans-serif' }}>
+          <Typography variant="h5" sx={{ fontWeight: 800, color: '#b45309', fontFamily: 'Cairo, sans-serif' }}>
             {stats.lastRunHours} <Typography component="span" variant="caption" sx={{ color: 'text.secondary' }}>ساعة</Typography>
           </Typography>
         </Paper>
@@ -588,9 +588,9 @@ export default function GeneratorLog() {
             <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700, fontFamily: 'Cairo, sans-serif' }}>
               أعلى تشغيل (آخر 30 يوماً)
             </Typography>
-            <ShowChartIcon sx={{ color: '#ea580c' }} />
+            <ShowChartIcon sx={{ color: '#c2410c' }} />
           </Box>
-          <Typography variant="h5" sx={{ fontWeight: 800, color: '#ea580c', fontFamily: 'Cairo, sans-serif' }}>
+          <Typography variant="h5" sx={{ fontWeight: 800, color: '#c2410c', fontFamily: 'Cairo, sans-serif' }}>
             {stats.maxHoursLast30Days} <Typography component="span" variant="caption" sx={{ color: 'text.secondary' }}>ساعة</Typography>
           </Typography>
         </Paper>
@@ -640,9 +640,9 @@ export default function GeneratorLog() {
             <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700, fontFamily: 'Cairo, sans-serif' }}>
               آخر قراءة مسجلة للعداد
             </Typography>
-            <SpeedIcon sx={{ color: '#16a34a' }} />
+            <SpeedIcon sx={{ color: '#15803d' }} />
           </Box>
-          <Typography variant="h5" sx={{ fontWeight: 800, color: '#16a34a', fontFamily: 'Cairo, sans-serif' }}>
+          <Typography variant="h5" sx={{ fontWeight: 800, color: '#15803d', fontFamily: 'Cairo, sans-serif' }}>
             {stats.lastRecordedReading}
           </Typography>
         </Paper>
@@ -1043,11 +1043,11 @@ export default function GeneratorLog() {
                     <TableRow key={item.id}>
                       <TableCell sx={{ fontWeight: 700 }}>{item.date}</TableCell>
                       <TableCell>
-                        {item.oldPreviousReading} ➔ <strong style={{ color: '#0284c7' }}>{item.newPreviousReading}</strong>
+                        {item.oldPreviousReading} ➔ <strong style={{ color: '#0369a1' }}>{item.newPreviousReading}</strong>
                       </TableCell>
                       <TableCell>{item.newCurrentReading}</TableCell>
                       <TableCell>
-                        {item.oldOperatingHours} س ➔ <strong style={{ color: '#059669' }}>{item.newOperatingHours} س</strong>
+                        {item.oldOperatingHours} س ➔ <strong style={{ color: '#047857' }}>{item.newOperatingHours} س</strong>
                       </TableCell>
                     </TableRow>
                   ))}

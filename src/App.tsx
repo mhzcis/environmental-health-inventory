@@ -177,7 +177,7 @@ export default function App() {
   if (!authReady || authTerminating) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', bgcolor: '#f8fafc' }}>
-        <CircularProgress size={60} thickness={4} sx={{ color: '#007ab7' }} />
+        <CircularProgress size={60} thickness={4} sx={{ color: '#006da3' }} />
       </Box>
     );
   }
