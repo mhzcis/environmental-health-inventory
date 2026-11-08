@@ -2213,6 +2213,10 @@ export const dataService = {
         await resumeInventoryProjection(applyInventoryProjection);
         return { success: true, status: 'pending-local', message: 'توجد طلبات محفوظة على الجهاز تنتظر الإقرار؛ راجع لوحة المزامنة.' };
       }
+      // QA-20261108 SES-06: requests queued by ANOTHER account stay with their owner (never sent as, nor deletable by, this account).
+      if (await new IndexedDbSyncQueueStore().countAll() > 0) {
+        throw new Error('على هذا الجهاز طلبات محفوظة لحساب آخر لم يؤكدها الخادم بعد. لن تُرسل باسمك ولن تُحذف. اطلب من صاحب تلك الطلبات تسجيل الدخول على هذا الجهاز لإرسالها، ثم سجّل دخولك.');
+      }
       await assertNoOutstandingSyncWork(false);
       let materials: Material[] = [];
       let transactions: InventoryTransaction[] = [];
