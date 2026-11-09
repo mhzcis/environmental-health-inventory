@@ -35,6 +35,7 @@ import LockIcon from '@mui/icons-material/Lock';
 import { dataService } from '../services/dataService';
 import { GeneratorLogEntry, GeneratorLogSimulationResult } from '../types';
 import { exportToExcel } from '../utils/exportExcel';
+import { downloadPreparedMessage } from '../utils/downloadFeedback';
 import { exportToPDF } from '../utils/printHtml';
 import { localDateString } from '../utils/localDate';
 
@@ -378,7 +379,7 @@ export default function GeneratorLog() {
         rows,
       });
 
-      setSnackbar({ open: true, message: 'تم إنشاء تقرير Excel بنجاح', severity: 'success' });
+      setSnackbar({ open: true, message: downloadPreparedMessage('تقرير Excel'), severity: 'success' });
     } catch (err: any) {
       setSnackbar({ open: true, message: 'فشل تصدير تقرير Excel: ' + safeUserMessage(err, 'export', { allowAppText: true }), severity: 'error' });
     }
@@ -426,7 +427,7 @@ export default function GeneratorLog() {
         ]
       });
 
-      setSnackbar({ open: true, message: 'تم تصدير تقرير PDF وتنزيل الملف بنجاح 📄', severity: 'success' });
+      setSnackbar({ open: true, message: downloadPreparedMessage('تقرير PDF 📄'), severity: 'success' });
     } catch (err: any) {
       setSnackbar({ open: true, message: 'فشل تصدير تقرير PDF: ' + safeUserMessage(err, 'export', { allowAppText: true }), severity: 'error' });
     }

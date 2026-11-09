@@ -31,6 +31,7 @@ const getSupplierOrReceiverLabel = (txType: string) => {
 };
 
 import { exportToExcel } from '../utils/exportExcel';
+import { downloadPreparedMessage } from '../utils/downloadFeedback';
 import { dataService } from '../services/dataService';
 import { buildTransactionLedger, getHistoricalWarehouseStocksDetailed, TransactionViewRow } from '../utils/inventoryLogic';
 import { useStorehouse } from '../context/StorehouseContext';
@@ -303,7 +304,7 @@ export default function Transactions() {
         ]
       });
 
-      setSuccessMessage(`تم تصدير الحركات المحددة بنجاح إلى ملف PDF 📄`);
+      setSuccessMessage(downloadPreparedMessage('ملف PDF 📄'));
       setTimeout(() => setSuccessMessage(null), 5000);
     } catch {
 
@@ -367,7 +368,7 @@ export default function Transactions() {
         ]
       });
 
-      setSuccessMessage(`تم تصدير الحركات المحددة بنجاح إلى ملف Excel 🟢`);
+      setSuccessMessage(downloadPreparedMessage('ملف Excel 🟢'));
       setTimeout(() => setSuccessMessage(null), 5000);
     } catch {
 
@@ -554,7 +555,7 @@ export default function Transactions() {
         notes: item.notes || 'سند رسمي معتمد وموقع إلكترونياً، لا يوجد ملاحظات إرشادية إضافية.',
         barcode: item.transactionNumber || item.id
       });
-      setSuccessMessage('تم تصدير سند الحركة بنجاح كملف PDF.');
+      setSuccessMessage(downloadPreparedMessage('سند الحركة PDF'));
       setTimeout(() => setSuccessMessage(null), 4000);
     } catch (err) {
 

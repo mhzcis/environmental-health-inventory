@@ -32,6 +32,7 @@ import { dataService } from '../services/dataService';
 import { presentResultMessage, safeErrorDetail, safeUserMessage } from '../services/safeUserMessage';
 import { createBackup, validateBackup, migrateValidatedBackupToFirestore, testFirestoreRbacReads, compareLocalAndCloudData, P7_CLOUD_MIGRATION_EXECUTION_ENABLED, isSystemAdminRole } from '../services/backupService';
 import NotificationToast from '../components/NotificationToast';
+import { downloadPreparedMessage } from '../utils/downloadFeedback';
 
 import { AppSettings, CategoryConfig, SystemUser, MigrationLog, RbacTestReport, DataComparisonReport } from '../types';
 import { auth, isFirebaseAvailable } from '../services/firebase';
@@ -735,7 +736,7 @@ export default function Settings() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "الأصناف");
     XLSX.writeFile(wb, "نموذج_أصناف_المستودع.xlsx");
-    setSuccessMsg('تم تنزيل قالب إكسل للأصناف بنجاح! يمكن تعديله وحفظه لرفعه مرة أخرى.');
+    setSuccessMsg(downloadPreparedMessage('قالب إكسل للأصناف — يمكن تعديله وحفظه لرفعه مرة أخرى'));
   };
 
   const handleDownloadTransactionsTemplate = () => {
@@ -752,7 +753,7 @@ export default function Settings() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "قيود الحركات");
     XLSX.writeFile(wb, "نموذج_الحركات_والمعاملات.xlsx");
-    setSuccessMsg('تم تنزيل قالب إكسل للقيود والحركات بنجاح!');
+    setSuccessMsg(downloadPreparedMessage('قالب إكسل للقيود والحركات'));
   };
 
   // QA-20261108 IMP-02: show the spreadsheet row and an Arabic reason instead of a masked internal error.
@@ -876,7 +877,7 @@ export default function Settings() {
       link.href = url;
       link.download = `${safe(settings.organizationName || 'organization')}_${safe(settings.departmentName || 'department')}_backup_v2_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
       document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
-      setSuccessMsg(`تم تنزيل نسخة موثقة: ${backupData.manifest.counts.materials} صنف و${backupData.manifest.counts.transactions} حركة.`);
+      setSuccessMsg(downloadPreparedMessage(`نسخة موثقة: ${backupData.manifest.counts.materials} صنف و${backupData.manifest.counts.transactions} حركة`));
     } catch (err: any) { setErrorMsg(`فشل تصدير النسخة الاحتياطية: ${safeUserMessage(err, 'export', { allowAppText: true })}`); }
   };
 
