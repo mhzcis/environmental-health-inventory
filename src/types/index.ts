@@ -24,7 +24,10 @@ export interface Item {
   storageLocationDetail?: string;
   warehouseStocks?: Record<string, number>; // Legacy/display projection keyed by warehouse name.
   warehouseStocksById?: Record<string, number>; // Canonical warehouse stock projection keyed by stable warehouse id.
-  notes?: string;
+  notes?: string; 
+    archived?: boolean;
+    archivedAt?: string;
+    archivedReason?: string;
   createdAt: string;
   updatedAt: string;
   type?: string; // Keep for backward compatibility or remove
