@@ -128,7 +128,7 @@ function assertStringList(
 const MATERIAL_KEYS = [
   'id', 'code', 'name', 'category', 'unit', 'minimumStock', 'currentStock', 'initialStock',
   'storageLocation', 'primaryStorehouseId', 'storageLocationDetail', 'warehouseStocks',
-  'warehouseStocksById', 'notes', 'createdAt', 'updatedAt', 'type', 'manufacturer',
+  'warehouseStocksById', 'notes', ''archived', 'archivedAt', 'archivedReason', createdAt', 'updatedAt', 'type', 'manufacturer',
   'productionDate', 'expiryDate', 'hazardLevel',
 ] as const;
 
@@ -206,10 +206,11 @@ const assertMaterial = (data: Record<string, unknown>): void => {
   assertString(domain, 'id', data.id, PRODUCT_LIMITS.documentIdBytes);
   assertString(domain, 'name', data.name);
   for (const field of ['code', 'category', 'unit', 'storageLocation', 'primaryStorehouseId',
-    'storageLocationDetail', 'notes', 'type', 'manufacturer', 'hazardLevel']) {
+    'storageLocationDetail', 'notes', 'type', 'manufacturer', 'hazardLevel'], 'archivedReason') {
     assertOptionalString(domain, data, field);
   }
-  for (const field of ['createdAt', 'updatedAt', 'productionDate', 'expiryDate']) {
+  assertOptionalBoolean(domain, data, 'archived');
+  for (const field of ['createdAt', 'updatedAt', 'productionDate', 'expiryDate', 'archivedAt']) {
     assertOptionalString(domain, data, field, PRODUCT_LIMITS.isoDateBytes);
   }
   for (const field of ['minimumStock', 'currentStock', 'initialStock']) assertOptionalNumber(domain, data, field);
@@ -361,6 +362,8 @@ export const assertComposedSettingsViewModel = (data: Record<string, unknown>): 
     fail(domain, 'categories', `CARDINALITY_${Array.isArray(data.categories) ? data.categories.length : 'INVALID'}_MAX_${PRODUCT_LIMITS.categories}`);
   }
   const categoryNames = new Set<string>();
+  const categoryPrefixes = new Set<string>();
+  const categoryRanges: Array<{ start: number; end: number }> = [];
   data.categories.forEach((entry, index) => {
     if (!isRecord(entry)) fail(domain, `categories[${index}]`, 'MAP_REQUIRED');
     assertKeys(domain, `categories[${index}]`, entry, ['name', 'prefix', 'startRange', 'endRange'], ['name', 'prefix', 'startRange', 'endRange']);
@@ -368,10 +371,21 @@ export const assertComposedSettingsViewModel = (data: Record<string, unknown>): 
     assertString(domain, `categories[${index}].prefix`, entry.prefix);
     assertFiniteNumber(domain, `categories[${index}].startRange`, entry.startRange, true);
     assertFiniteNumber(domain, `categories[${index}].endRange`, entry.endRange, true);
-    if (entry.startRange > entry.endRange) fail(domain, `categories[${index}]`, 'INVALID_RANGE');
-    if (categoryNames.has(entry.name)) fail(domain, `categories[${index}].name`, 'DUPLICATE');
-    categoryNames.add(entry.name);
+    if (entry.startRange < 0 || entry.startRange > entry.endRange) fail(domain, `categories[${index}]`, 'INVALID_RANGE');
+    const normalizedName = entry.name.trim().toLowerCase();
+    const normalizedPrefix = entry.prefix.trim().toUpperCase();
+    if (!normalizedName || categoryNames.has(normalizedName)) fail(domain, `categories[${index}].name`, 'DUPLICATE');
+    if (!/^[A-Z0-9]{2,12}$/.test(normalizedPrefix) || categoryPrefixes.has(normalizedPrefix)) {
+      fail(domain, `categories[${index}].prefix`, 'INVALID_OR_DUPLICATE_PREFIX');
+    }
+    if (categoryRanges.some(r => (entry.startRange as number) <= r.end && (entry.endRange as number) >= r.start)) {
+      fail(domain, `categories[${index}]`, 'OVERLAPPING_RANGE');
+    }
+    categoryNames.add(normalizedName);
+    categoryPrefixes.add(normalizedPrefix);
+    categoryRanges.push({ start: entry.startRange as number, end: entry.endRange as number });
   });
+ 
 
   assertStringList(domain, 'units', data.units, PRODUCT_LIMITS.units, { nonEmpty: true });
   assertStringList(domain, 'storehouses', data.storehouses, PRODUCT_LIMITS.storehouses, { nonEmpty: true });
