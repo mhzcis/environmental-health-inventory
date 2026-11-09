@@ -103,7 +103,8 @@ export interface InventoryRpcOperation {
   expected?: { kind: 'present' | 'missing'; data?: Record<string, unknown> };
 }
 export interface InventoryRpcPayload {
-  mode: 'mutation' | 'audit' | 'restore';
+  /** 'correction' (QA-20261109 TX-03): cancel + replacement with an audit link; a server without correction support rejects it atomically. */
+  mode: 'mutation' | 'audit' | 'restore' | 'correction';
   label: string;
   operations?: InventoryRpcOperation[];
   backup?: Record<string, unknown>;

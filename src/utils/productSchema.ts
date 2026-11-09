@@ -136,8 +136,10 @@ const TRANSACTION_KEYS = [
   'id', 'transactionNumber', 'date', 'itemType', 'itemId', 'itemCode', 'itemName',
   'itemCategory', 'transactionType', 'transferType', 'operationId', 'pairedTransactionId',
   'quantity', 'unit', 'storehouse', 'storehouseId', 'stockBefore', 'stockAfter', 'executedBy',
-  'supplierOrReceiver', 'notes', 'attachment', 'createdAt', 'updatedAt',
+  'supplierOrReceiver', 'notes', 'attachment', 'createdAt', 'updatedAt', 'correctionOf',
 ] as const;
+// QA-20261108 TX-03: a replacement entry carries the cancelled original's values (audit link).
+const CORRECTION_KEYS = ['id', 'transactionNumber', 'transactionType', 'quantity', 'date', 'itemId', 'itemCode', 'storehouseId', 'reason'] as const;
 
 const SETTINGS_SLIM_ROOT_KEYS = [
   'settingsSchemaVersion', 'organizationName', 'departmentName', 'expiryWarningThresholdDays', 'units',
@@ -240,6 +242,14 @@ const assertTransaction = (data: Record<string, unknown>): void => {
     fail(domain, 'transferType', 'UNKNOWN_VALUE');
   }
   assertOptionalString(domain, data, 'attachment', PRODUCT_LIMITS.attachmentBytes);
+  if (own(data, 'correctionOf')) {
+    const ref = data.correctionOf;
+    if (!isRecord(ref)) fail(domain, 'correctionOf', 'MAP_REQUIRED');
+    assertKeys(domain, 'correctionOf', ref, CORRECTION_KEYS, ['id', 'transactionNumber', 'quantity', 'reason']);
+    assertString(domain, 'correctionOf.id', ref.id, PRODUCT_LIMITS.documentIdBytes);
+    assertFiniteNumber(domain, 'correctionOf.quantity', ref.quantity);
+    for (const field of ['transactionNumber', 'transactionType', 'date', 'itemId', 'itemCode', 'storehouseId', 'reason']) assertOptionalString(domain, ref, field);
+  }
 };
 
 const assertTransactionCountersField = (domain: string, data: Record<string, unknown>): void => {
@@ -611,7 +621,7 @@ const MAX_ECHOED_SCHEMA_REASON = 48;
 export const KNOWN_SCHEMA_DOMAINS: ReadonlySet<string> = new Set(['materials', 'transactions', 'settings', 'users', 'generator_logs', 'audit_logs']);
 export const KNOWN_SCHEMA_FIELD_NAMES: ReadonlySet<string> = new Set<string>([
   ...MATERIAL_KEYS, ...TRANSACTION_KEYS, ...SETTINGS_SLIM_ROOT_KEYS, ...SETTINGS_LEGACY_NESTED_KEYS, ...SETTINGS_CATEGORY_KEYS,
-  ...SETTINGS_WAREHOUSE_KEYS, ...SETTINGS_PARTNER_KEYS, ...SETTINGS_OSA_KEYS, ...USER_KEYS, ...GENERATOR_KEYS, ...AUDIT_KEYS,
+  ...SETTINGS_WAREHOUSE_KEYS, ...SETTINGS_PARTNER_KEYS, ...SETTINGS_OSA_KEYS, ...USER_KEYS, ...GENERATOR_KEYS, ...AUDIT_KEYS, ...CORRECTION_KEYS,
   'inbound', 'outbound', 'consumed', 'transfer', 'adjustment', 'opening',
   'attachment', 'categoryIds', 'createdBy', 'currentReading', 'data', 'date', 'dayName', 'docId', 'endRange', 'itemId', 'itemType',
   'key', 'operatingHours', 'partnerIds', 'phone', 'prefix', 'previousReading', 'quantity', 'schemaVersion', 'sortOrder', 'startRange',

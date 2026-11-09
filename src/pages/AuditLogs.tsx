@@ -164,6 +164,11 @@ export default function AuditLogs() {
                     </TableCell>
                     <TableCell sx={{ fontSize: '0.88rem', color: '#475569', lineHeight: 1.5 }}>
                       {log.details}
+                      {log.corrections?.map((c, i) => (
+                        <Box key={i} component="span" data-audit-correction sx={{ display: 'block', mt: 0.5, color: '#075985', fontWeight: 'bold' }}>
+                          تصحيح: أُلغي السند {c.originalNumber} (الكمية {c.originalQuantity}) واستُبدل بالسند {c.replacementNumber} (الكمية {c.replacementQuantity}){c.reason ? ` — السبب: ${c.reason}` : ''}
+                        </Box>
+                      ))}
                       {getAuditAffectedEntities(log.primaryEntity ?? log.affectedEntities).length > 0 && (
                         <Typography variant="caption" sx={{ display: 'block', mt: 0.5, color: '#566375', fontFamily: 'monospace' }}>
                           {getAuditAffectedEntities(log.primaryEntity ?? log.affectedEntities).join('، ')}
