@@ -43,7 +43,24 @@ const acceptSession = (session: Session | null) => {
     for (const listener of authListeners) listener(delivered);
   });
 };
-supabase?.auth.onAuthStateChange((_event, session) => acceptSession(session));
+supabase?.auth.onAuthStateChange((event, session) => {
+  if (event === 'SIGNED_OUT' || (!session && event === 'TOKEN_REFRESHED')) {
+    acceptSession(null);
+    return;
+  }
+  acceptSession(session);
+});
+if (supabase) {
+  void supabase.auth.getSession().then(({ error }) => {
+    if (error) {
+      const msg = String(error.message || '').toLowerCase();
+      if (msg.includes('refresh token') || msg.includes('invalid grant') || msg.includes('invalid_grant') || (error as { status?: number }).status === 400) {
+        void supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+        acceptSession(null);
+      }
+    }
+  }).catch(() => {});
+}
 export const getCurrentAuthUser = (): SupabaseAuthUser | null => currentUser;
 export const subscribeAuthState = (listener: (user: SupabaseAuthUser | null) => void): (() => void) => {
   authListeners.add(listener);
@@ -92,7 +109,7 @@ const assertTable = (table: SupabaseTableName) => {
   if (!allowedTables.has(table)) throw new Error('UNSUPPORTED_SUPABASE_TABLE');
 };
 type Row = { id: string; data: Record<string, unknown>; [key: string]: unknown };
-const decode = <T>(table: SupabaseTableName, row: Row): T => {
+const decode = <T>(_table: SupabaseTableName, row: Row): T => {
   return { ...row.data, id: row.id } as T;
 };
 export interface InventoryRpcOperation {
@@ -121,20 +138,6 @@ export interface InventoryRestorePreview {
   authIdentities: 'preserved';
 }
 
-const encode = (table: SupabaseTableName, id: string, payload: Record<string, unknown>): Row => {
-  const data = { ...payload, id };
-  const row: Row = { id, data, updated_at: new Date().toISOString() };
-  if (table === 'users') Object.assign(row, {
-    auth_uid: payload.authUid || id,
-    username: payload.username,
-    full_name: payload.fullName,
-    role: payload.role,
-    permissions: payload.permissions,
-    active: payload.active !== false,
-    created_at: payload.createdAt,
-  });
-  return row;
-};
 const PAGE_SIZE = 500;
 export const supabaseDb = {
   async getDoc<T = Record<string, unknown>>(table: SupabaseTableName, id: string): Promise<T | null> {
