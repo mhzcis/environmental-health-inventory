@@ -19,7 +19,7 @@ const normalizeEmail = (value: string | null | undefined) => (value || '').trim(
  *   seeds the first authenticated user as System Admin (`مدير نظام`) with full permissions.
  */
 export async function ensureCanonicalCurrentUserProfile(
-  _localCandidates: SystemUser[],
+  localCandidates: SystemUser[],
 ): Promise<LegacyUserMigrationResult> {
   const currentUser = getCurrentAuthUser();
   if (!isSupabaseConfigured() || !currentUser?.uid || !currentUser.email) {
@@ -138,7 +138,26 @@ export async function ensureCanonicalCurrentUserProfile(
     };
   } catch (error: any) {
     const msg = String(error?.message || '').toLowerCase();
-    const isNetwork = msg.includes('fetch') || msg.includes('network') || msg.includes('offline');
+    const isNetwork = msg.includes('fetch') || msg.includes('network') || msg.includes('offline')
+      || (typeof navigator !== 'undefined' && navigator.onLine === false);
+    if (isNetwork && Array.isArray(localCandidates)) {
+      const cached = localCandidates.find(
+        (u) => (u.id === uid || u.authUid === uid) && normalizeEmail(u.username) === email && u.active !== false,
+      );
+      if (cached) {
+        const check = validateCanonicalManagedUser(uid, { ...cached, id: uid, authUid: uid }, {
+          expectedEmail: email,
+          requireActive: true,
+        });
+        if (check.valid) {
+          return {
+            success: true,
+            migrated: false,
+            message: 'تم استئناف الجلسة المحلية الموثقة في وضع عدم الاتصال.',
+          };
+        }
+      }
+    }
     return {
       success: false,
       migrated: false,
