@@ -47,18 +47,22 @@ jobs:
       - name: Test Supabase adapter, inventory and warehouse centrality
         run: npm run test:deployment
 
-      - name: Test durable atomic writes and repaired workflows
+      - name: Test durable atomic writes and repaired workflows 
+            shell: bash
         run: |
-          npm run test:atomic
+          set -euo pipefail 
+           npm run test:atomic
           npm run test:repairs
 
-      - name: Build Vite application for GitHub Pages
+      - name: Build Vite application for GitHub Pages 
+            shell: bash
         env:
           VITE_BASE_PATH: /${{ github.event.repository.name }}/
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || vars.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || vars.VITE_SUPABASE_ANON_KEY }}
         run: |
-          npm run build
+                  set -euo pipefail 
+           npm run build
           cp dist/index.html dist/404.html
           touch dist/.nojekyll
 
