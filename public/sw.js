@@ -1,7 +1,16 @@
 const CACHE_PREFIX = 'inventory-app-shell-';
-const CACHE_VERSION = `${CACHE_PREFIX}v3`;
-const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './Cairo-Regular.ttf'];
+const CACHE_VERSION = `${CACHE_PREFIX}v4`;
+const APP_SHELL = [
+  './',
+  './index.html',
+  './manifest.webmanifest',
+  './Cairo-Regular.ttf',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
+  './icons/icon-512-maskable.png',
+];
 const STATIC_ASSET = /\/assets\/[A-Za-z0-9._-]+$/;
+const SHELL_ICON = /\/icons\/icon-\d+(?:-maskable)?\.png$/;
 
 const isCacheableRequest = (request) => {
   if (request.method !== 'GET') return false;
@@ -9,7 +18,10 @@ const isCacheableRequest = (request) => {
   if (url.origin !== self.location.origin) return false;
   if (request.headers.has('authorization')) return false;
   if (request.mode === 'navigate') return url.pathname.endsWith('/') || url.pathname.endsWith('/index.html');
-  return STATIC_ASSET.test(url.pathname) || url.pathname.endsWith('/manifest.webmanifest') || url.pathname.endsWith('/Cairo-Regular.ttf');
+  return STATIC_ASSET.test(url.pathname)
+    || SHELL_ICON.test(url.pathname)
+    || url.pathname.endsWith('/manifest.webmanifest')
+    || url.pathname.endsWith('/Cairo-Regular.ttf');
 };
 
 const canStoreResponse = (response) => {

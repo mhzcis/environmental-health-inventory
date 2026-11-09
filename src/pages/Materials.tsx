@@ -32,6 +32,7 @@ import { useStorehouse } from '../context/StorehouseContext';
 
 import { exportToPDF } from '../utils/printHtml';
 import { exportToExcel } from '../utils/exportExcel';
+import { downloadPreparedMessage } from '../utils/downloadFeedback';
 import { requireStableStringPart } from '../utils/printHtml';
 import { renderOption } from '../utils/emoji';
 import { localDateString } from '../utils/localDate';
@@ -608,7 +609,7 @@ const handleOpenDeleteDialog = (item: Material) => {
         ]
       });
 
-      setSuccessMessage(`تم تصدير الأصناف المحددة بنجاح إلى ملف PDF 📄`);
+      setSuccessMessage(downloadPreparedMessage('ملف PDF 📄'));
       setTimeout(() => setSuccessMessage(null), 5000);
     } catch {
 
@@ -656,7 +657,7 @@ const handleOpenDeleteDialog = (item: Material) => {
         ]
       });
 
-      setSuccessMessage(`تم تصدير الأصناف المحددة بنجاح إلى ملف Excel 🟢`);
+      setSuccessMessage(downloadPreparedMessage('ملف Excel 🟢'));
       setTimeout(() => setSuccessMessage(null), 5000);
     } catch {
 

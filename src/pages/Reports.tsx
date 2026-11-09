@@ -31,6 +31,7 @@ import { renderOption } from '../utils/emoji';
 import { PRODUCT_LIMITS } from '../utils/productSchema';
 import { openingAttachmentMatrixKey } from '../utils/settingsNormalization';
 import { daysUntilLocalDate, parseLocalDate, localDateString } from '../utils/localDate';
+import { downloadPreparedMessage, isDownloadAbortError } from '../utils/downloadFeedback';
 
 
 type ReportType = 'inventory' | 'low_stock' | 'expiry_warning' | 'transactions' | 'category_summary' | 'opening_stock' | 'generator_log';
@@ -675,7 +676,7 @@ export default function Reports() {
       const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       saveAs(blob, filename);
 
-      setSuccessMessage(`تم تصدير ملف Excel منسق واحترافي بنجاح باسم: ${filename}`);
+      setSuccessMessage(downloadPreparedMessage(filename));
       
     } catch (err: any) {
       setErrorMessage('تعذر تصدير Excel: ' + safeUserMessage(err, 'export'));
@@ -939,10 +940,11 @@ export default function Reports() {
         ]
       });
 
-      setSuccessMessage(`تم توليد وتنزيل كشف التقرير الموحد بنجاح: ${filename} 📄`);
+      setSuccessMessage(downloadPreparedMessage(`${filename} 📄`));
     } catch (e) { console.error("Export PDF error:", e);
-
-      setErrorMessage('خطأ التصدير: ' + safeUserMessage(e, 'export', { allowAppText: true }));
+      if (!isDownloadAbortError(e)) {
+        setErrorMessage('خطأ التصدير: ' + safeUserMessage(e, 'export', { allowAppText: true }));
+      }
     } finally {
       setExportingPDF(false);
     }

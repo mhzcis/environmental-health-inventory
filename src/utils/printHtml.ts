@@ -645,6 +645,9 @@ export async function buildTextPDF(data: PrintData & { orientation?: 'portrait' 
   }
   return pdf;
 }
+// jsPDF pdf.save() triggers a normal browser download via an anchor click.
+// Browsers do not expose a reliable cancel/dismiss signal for that path, so callers
+// must not claim the file was saved — only that it was prepared for download.
 export async function exportToPDF(data: PrintData & { filename: string; orientation?: 'portrait' | 'landscape' }) {
   const pdf = await buildTextPDF(data);
   pdf.save(data.filename);

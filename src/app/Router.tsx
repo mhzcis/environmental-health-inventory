@@ -7,6 +7,7 @@ import GeneratorLog from '../pages/GeneratorLog';
 import Reports from '../pages/Reports';
 import AuditLogs from '../pages/AuditLogs';
 import Settings from '../pages/Settings';
+import NotFound from '../pages/NotFound';
 
 export default function AppRouter() {
   return (
@@ -21,9 +22,9 @@ export default function AppRouter() {
           <Route path="/reports" element={<Reports />} />
           <Route path="/audit" element={<AuditLogs />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="*" element={<NotFound />} />
         </Routes>
       </AppLayout>
     </HashRouter>
   );
 }
-
