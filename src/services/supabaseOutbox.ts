@@ -90,8 +90,13 @@ const isPermanent = (error: unknown) => {
 export const listInventoryOutbox = async (): Promise<Queued[]> =>
   (await store.listForUser(owner())).filter(row =>
     ['supabase-v1', 'supabase-restore-v1'].includes((row as Queued).transport));
-const payloadFor = (row: Queued): InventoryRpcPayload => row.restorePayload || ({
-  mode: 'mutation', label: row.rpcLabel,
+// QA-20261109 TX-03: a request that creates a replacement entry linked by correctionOf is a correction.
+export const isCorrectionRequest = (operations: ReadonlyArray<Pick<InventorySyncOperation, 'collection' | 'kind'> & { value?: unknown }>): boolean =>
+  operations.some(op => op.collection === 'transactions' && op.kind === 'set'
+    && !!op.value && typeof op.value === 'object' && !!(op.value as { correctionOf?: unknown }).correctionOf
+    && typeof (op.value as { correctionOf?: unknown }).correctionOf === 'object');
+const buildPayload = (row: Pick<Queued, 'operations' | 'rpcLabel'>): InventoryRpcPayload => ({
+  mode: isCorrectionRequest(row.operations) ? 'correction' : 'mutation', label: row.rpcLabel,
   operations: row.operations.map(op => ({
     collection: op.collection as SupabaseTableName, docId: op.docId, kind: op.kind,
     ...(op.kind === 'set' ? { value: op.value } : {}),
@@ -99,6 +104,10 @@ const payloadFor = (row: Queued): InventoryRpcPayload => row.restorePayload || (
       ? { kind: 'present', data: op.expected.exactLegacyPayload } : { kind: 'missing' },
   })),
 });
+// A stored payload is sent verbatim (also by older app builds, which send row.restorePayload as-is),
+// so a queued correction keeps its 'correction' mode even if the app is rolled back before it is sent.
+const payloadFor = (row: Queued): InventoryRpcPayload => row.restorePayload || buildPayload(row);
+const CORRECTION_UNSUPPORTED = 'الخادم الحالي لا يدعم تصحيح الحركات؛ لم يُعتمد الإلغاء ولا البديل، والطلب باقٍ محفوظًا على الجهاز ويمكن إعادة إرساله بعد تحديث الخادم.';
 const once = async (row: Queued): Promise<InventoryRpcAck> => {
   assertOwner(row.userId);
   try {
@@ -114,9 +123,10 @@ const once = async (row: Queued): Promise<InventoryRpcAck> => {
     delete row.waitingOn;
     if (row.status === 'blocked') {
       const code = String((error as { message?: string })?.message || (error as { code?: string })?.code || '').match(/INVENTORY_[A-Z_]+/)?.[0];
-      if (code) row.lastErrorCode = code;
+      if (code) row.lastErrorCode = code; else delete row.lastErrorCode;
     }
-    row.lastError = row.status === 'blocked'
+    const unsupportedCorrection = row.status === 'blocked' && payloadFor(row).mode === 'correction' && row.lastErrorCode === 'INVENTORY_OPERATIONS_INVALID';
+    row.lastError = unsupportedCorrection ? CORRECTION_UNSUPPORTED : row.status === 'blocked'
       ? 'رفض الخادم هذا الطلب ولم يُعتمد؛ بقي محفوظًا للمراجعة. الطلبات المستقلة عنه تُرسل تلقائيًا.'
       : 'لم يصل إقرار الخادم؛ سيُعاد الإرسال تلقائيًا عند عودة الاتصال دون تكرار الحركة.';
     await store.put(row); emit();
@@ -222,6 +232,7 @@ export async function enqueueInventoryMutation(
       id: mutationId, userId: uid, operations: durable, label, rpcLabel: label, transport: 'supabase-v1',
       status: 'pending', attempts: 0, nextAttemptAt: now, createdAt: now, updatedAt: now,
     };
+    if (!existing && isCorrectionRequest(durable)) row.restorePayload = buildPayload(row);
     if (!existing) await store.insert(row);
     assertOwner(uid);
     supabaseDb.rememberOperations(prepared);

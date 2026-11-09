@@ -2003,6 +2003,11 @@ export const dataService = {
         createSyncSetOperation('transactions', replacement.id, replacement as unknown as Record<string, unknown>, undefined),
       ], 'correct-transaction');
     } catch (error) {
+      if (error instanceof InventoryPendingError && error.blocked) {
+        // QA-20261109 TX-03: definitive rejection (e.g. a server without correction support): nothing was committed.
+        return { success: false, pending: true, replacementId: replacement.id, replacementNumber,
+          message: `لم يُعتمد التصحيح على الخادم: الحركة ${original.transactionNumber} ما زالت معتمدة كما هي ولم يُسجَّل البديل ${replacementNumber}. الطلب محفوظ على هذا الجهاز للمراجعة في لوحة المزامنة.` };
+      }
       if (error instanceof InventoryPendingError) {
         return { success: false, pending: true, replacementId: replacement.id, replacementNumber,
           message: `التصحيح محفوظ على هذا الجهاز ولم يؤكده الخادم بعد: الحركة ${original.transactionNumber} ما زالت معتمدة على الخادم، والبديل ${replacementNumber} معلّق وسيُرسل تلقائيًا (الإلغاء والبديل يُعتمدان معًا أو لا يُعتمد أي منهما).` };

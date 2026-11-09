@@ -134,7 +134,10 @@ BEGIN
      END LOOP;
    END LOOP;
  ELSE
-   IF mode NOT IN ('mutation','audit') OR jsonb_typeof(ops) IS DISTINCT FROM 'array' OR jsonb_array_length(ops)>450 OR jsonb_array_length(ops)=0
+   -- QA-20261109 TX-03: 'correction' is a distinct mode so that a server WITHOUT correction support
+   -- (e.g. SQL rolled back to #8, which accepts only mutation/audit) rejects the whole request atomically
+   -- instead of committing it with an incomplete audit receipt.
+   IF mode NOT IN ('mutation','audit','correction') OR jsonb_typeof(ops) IS DISTINCT FROM 'array' OR jsonb_array_length(ops)>450 OR jsonb_array_length(ops)=0
    THEN RAISE EXCEPTION 'INVENTORY_OPERATIONS_INVALID' USING ERRCODE='22023'; END IF;
  END IF;
  IF EXISTS(SELECT 1 FROM jsonb_array_elements(ops) x GROUP BY x->>'collection',x->>'docId' HAVING count(*)>1)
@@ -220,16 +223,20 @@ BEGIN
    END IF;
    affected:=affected||jsonb_build_array(col||'/'||doc);
    -- QA-20261108 TX-03 (isolated only): keep the ORIGINAL values of a cancelled ledger entry in the receipt and link a correction to it.
-   IF col='transactions' AND kind='delete' AND old IS NOT NULL THEN
+   IF mode<>'restore' AND col='transactions' AND kind='delete' AND old IS NOT NULL THEN
      removed:=removed||jsonb_build_array(jsonb_build_object('id',doc,'transactionNumber',old->>'transactionNumber','transactionType',old->>'transactionType',
        'quantity',old->'quantity','date',old->>'date','itemId',old->>'itemId','itemCode',old->>'itemCode','storehouseId',old->>'storehouseId','unit',old->>'unit'));
    END IF;
-   IF col='transactions' AND kind='set' AND old IS NULL AND jsonb_typeof(val->'correctionOf')='object' THEN
+   -- QA-20261109 TX-03: a NEW replacement row carrying correctionOf is only accepted in correction mode.
+   IF col='transactions' AND kind='set' AND old IS NULL AND mode='mutation' AND jsonb_typeof(val->'correctionOf')='object'
+   THEN RAISE EXCEPTION 'INVENTORY_CORRECTION_MODE_REQUIRED' USING ERRCODE='22023'; END IF;
+   IF mode='correction' AND col='transactions' AND kind='set' AND old IS NULL AND jsonb_typeof(val->'correctionOf')='object' THEN
      corr:=corr||jsonb_build_array(jsonb_build_object('originalId',val->'correctionOf'->>'id','originalNumber',val->'correctionOf'->>'transactionNumber',
        'originalQuantity',val->'correctionOf'->'quantity','replacementId',doc,'replacementNumber',val->>'transactionNumber','replacementQuantity',val->'quantity',
        'reason',left(coalesce(val->'correctionOf'->>'reason',''),500)));
    END IF;
  END LOOP;
+ IF mode='correction' AND jsonb_array_length(corr)=0 THEN RAISE EXCEPTION 'INVENTORY_CORRECTION_LINK_INVALID' USING ERRCODE='23514'; END IF;
  IF EXISTS(SELECT 1 FROM jsonb_array_elements(corr) c WHERE NOT EXISTS(SELECT 1 FROM jsonb_array_elements(removed) r
      WHERE r->>'id'=c->>'originalId' AND r->>'transactionNumber' IS NOT DISTINCT FROM c->>'originalNumber'
        AND (r->>'quantity')::numeric IS NOT DISTINCT FROM (c->>'originalQuantity')::numeric))
