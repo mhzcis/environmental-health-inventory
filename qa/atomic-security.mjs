@@ -61,4 +61,31 @@ const del=(collection,docId,old)=>({collection,docId,kind:'delete',expected:{kin
 await test('QA-20261106 MAT-04 unused material (initialStock 0, no ledger rows) can be deleted',async()=>{await commit(ids.admin,payload([del('materials','m1',mat())]));assert.equal(await count('materials'),0);assert.equal(await count('audit_logs'),1);});
 await test('QA-20261106 MAT-04 material with ledger rows still cannot be deleted (no orphan transactions)',async()=>{await commit(ids.admin,payload([set('settings','app_config',{...cfg,transactionCounters:{...cfg.transactionCounters,inbound:1}},cfg),set('transactions','t1',tr())]));await rejects(()=>commit(ids.admin,payload([del('materials','m1',mat())])),['23514']);assert.equal(await count('materials'),1);});
 await test('QA-20261106 MAT-04 deleting a material still requires materials_delete',()=>rejects(()=>commit(ids.employee,payload([del('materials','m1',mat())])),['42501']));
+await test('QA-20261109 R8 CFG-02 overlapping category ranges or duplicate prefixes are rejected by SQL',async()=>{
+  await rejects(()=>commit(ids.admin,payload([set('settings','app_config',{...cfg,categories:[{name:'C1',prefix:'PES',startRange:1000,endRange:2000},{name:'C2',prefix:'SAN',startRange:2000,endRange:2999}]},cfg)])),['23514']);
+  await rejects(()=>commit(ids.admin,payload([set('settings','app_config',{...cfg,categories:[{name:'C1',prefix:'PES',startRange:1000,endRange:1999},{name:'C2',prefix:'pes',startRange:2000,endRange:2999}]},cfg)])),['23514']);
+});
+await test('QA-20261109 R8 MAT-02 material code must match category prefix and numeric range when configured',async()=>{
+  const catCfg={...cfg,categories:[{name:'QA',prefix:'QA',startRange:1000,endRange:1999}]};
+  await commit(ids.admin,payload([set('settings','app_config',catCfg,cfg)]));
+  await rejects(()=>commit(ids.admin,payload([set('materials','m2',mat('m2','WRONG-1002'))])),['23514']);
+  await rejects(()=>commit(ids.admin,payload([set('materials','m2',mat('m2','QA-2500'))])),['23514']);
+  await commit(ids.admin,payload([set('materials','m2',mat('m2','QA-1002'))]));
+  assert.equal(await count('materials'),2);
+});
+await test('QA-20261109 R8 cached stock on public.materials is automatically synchronized with ledger after commit',async()=>{
+  await commit(ids.employee,payload([set('settings','app_config',{...cfg,transactionCounters:{...cfg.transactionCounters,inbound:1}},cfg),set('transactions','t1',tr('t1','W-0001',10))]));
+  const mAfter=(await db.query("select data from materials where id='m1'")).rows[0].data;
+  assert.equal(Number(mAfter.currentStock),10);
+  assert.equal(Number(mAfter.warehouseStocks['QA-A']),10);
+});
+await test('QA-20261109 R8 OPS-QA reversible logical archive preserves material and ledger history',async()=>{
+  await commit(ids.employee,payload([set('settings','app_config',{...cfg,transactionCounters:{...cfg.transactionCounters,inbound:1}},cfg),set('transactions','t1',tr('t1','W-0001',10))]));
+  const mCur=(await db.query("select data from materials where id='m1'")).rows[0].data;
+  await commit(ids.admin,payload([set('materials','m1',{...mCur,archived:true,archivedAt:'2026-11-09T07:00:00Z',archivedReason:'QA archive'},mCur)]));
+  const mArch=(await db.query("select data from materials where id='m1'")).rows[0].data;
+  assert.equal(mArch.archived,true);
+  assert.equal(Number(mArch.currentStock),10);
+  assert.equal(await count('transactions'),1);
+});
 const report={environment:'PGlite with copied production RLS/grants + candidate SQL; no live Auth/REST proof',total:results.length,passed:results.filter(x=>x.status==='PASS').length,failed:results.filter(x=>x.status==='FAIL').length,results};fs.writeFileSync((process.env.QA_SQL_OUTPUT || '/tmp/inventory-atomic-security.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report));await db.close();if(report.failed)process.exitCode=1;
