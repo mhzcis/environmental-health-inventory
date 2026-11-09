@@ -15,6 +15,7 @@ import * as zod from 'zod';
 import { dataService } from '../services/dataService';
 import { InventoryTransaction, Material } from '../types';
 import MaterialFormDialog from './MaterialFormDialog';
+import { localDateString } from '../utils/localDate';
 
 // Use same schema logic
 const transactionSchema = zod.object({
@@ -108,7 +109,7 @@ export default function CreateTransactionModal({ open, onClose, onSuccess, onErr
       transactionType: 'وارد',
       quantity: 0,
       supplierOrReceiver: '',
-      date: new Date().toISOString().split('T')[0],
+      date: localDateString(),
       storehouse: '',
       destStorehouse: '',
       notes: '',
@@ -135,7 +136,7 @@ export default function CreateTransactionModal({ open, onClose, onSuccess, onErr
         storehouse: globalStorehouseScope !== 'all' ? globalStorehouseScope : '',
         destStorehouse: '',
         supplierOrReceiver: '',
-        date: new Date().toISOString().split('T')[0],
+        date: localDateString(),
         notes: '',
       });
       setSavePartnerEntity(false);
@@ -527,7 +528,7 @@ export default function CreateTransactionModal({ open, onClose, onSuccess, onErr
                     </Typography>
                     {globalStorehouseScope === 'all' ? (
                       <Box sx={{ mt: 1 }}>
-                        <Typography variant="caption" sx={{ color: '#0284c7' }}>الأرصدة في المستودعات:</Typography>
+                        <Typography variant="caption" sx={{ color: '#0369a1' }}>الأرصدة في المستودعات:</Typography>
                         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 0.5 }}>
                           {settings.storehouses.map(st => {
                             const stStock = dataService.getItemStockByStorehouse(watchItem.id, st);
@@ -542,13 +543,13 @@ export default function CreateTransactionModal({ open, onClose, onSuccess, onErr
                         </Typography>
                       </Box>
                     ) : (
-                      <Typography variant="body2" sx={{ mt: 1, color: '#0284c7' }}>
+                      <Typography variant="body2" sx={{ mt: 1, color: '#0369a1' }}>
                         الرصيد في مستودع ({globalStorehouseScope}): <strong>{dataService.getItemStockByStorehouse(watchItem.id, globalStorehouseScope)} {watchItem.unit}</strong>
                       </Typography>
                     )}
                     
                     {dataService.getItemStockByStorehouse(watchItem.id, globalStorehouseScope) === 0 && ['وارد', 'افتتاحي'].includes(watchTxType) && (
-                      <Typography variant="caption" sx={{ color: '#059669', display: 'block', mt: 1 }}>
+                      <Typography variant="caption" sx={{ color: '#047857', display: 'block', mt: 1 }}>
                         لا يوجد رصيد سابق لهذا الصنف، وسيتم إنشاء أو زيادة رصيده من خلال هذه الحركة.
                       </Typography>
                     )}
@@ -775,10 +776,10 @@ export default function CreateTransactionModal({ open, onClose, onSuccess, onErr
                             <tr key={sh.name} style={{ borderBottom: '1px solid #e2e8f0', backgroundColor: sh.simulated < 0 ? '#fef2f2' : 'inherit' }}>
                               <td style={{ padding: '8px', paddingRight: '20px' }}>↳ {sh.name}</td>
                               <td style={{ padding: '8px' }}>{sh.current} {liveStockSim.unit}</td>
-                              <td style={{ padding: '8px', color: sh.diff < 0 ? '#ef4444' : (sh.diff > 0 ? '#10b981' : 'inherit') }}>
+                              <td style={{ padding: '8px', color: sh.diff < 0 ? '#c81e1e' : (sh.diff > 0 ? '#047857' : 'inherit') }}>
                                 {sh.diff === 0 ? '-' : (sh.diff > 0 ? `+${sh.diff}` : sh.diff)}
                               </td>
-                              <td style={{ padding: '8px', fontWeight: 'bold', color: sh.simulated < 0 ? '#ef4444' : 'inherit' }}>
+                              <td style={{ padding: '8px', fontWeight: 'bold', color: sh.simulated < 0 ? '#c81e1e' : 'inherit' }}>
                                 {sh.simulated} {liveStockSim.unit}
                               </td>
                             </tr>
@@ -792,7 +793,7 @@ export default function CreateTransactionModal({ open, onClose, onSuccess, onErr
                             <td style={{ padding: '8px', color: (watchTxType === 'صادر' || watchTxType === 'مستهلك' || watchTxType === 'تحويل' || (watchTxType==='تسوية'&&watchQty<0)) ? '#ef4444' : '#10b981' }}>
                               {(watchTxType === 'صادر' || watchTxType === 'مستهلك' || watchTxType === 'تحويل' || (watchTxType==='تسوية'&&watchQty<0)) ? '-' : '+'}{watchQty || 0}
                             </td>
-                            <td style={{ padding: '8px', fontWeight: 'bold', color: liveStockSim.isNegative ? '#ef4444' : 'inherit' }}>
+                            <td style={{ padding: '8px', fontWeight: 'bold', color: liveStockSim.isNegative ? '#c81e1e' : 'inherit' }}>
                               {liveStockSim.simulated} {liveStockSim.unit}
                             </td>
                           </tr>
@@ -800,7 +801,7 @@ export default function CreateTransactionModal({ open, onClose, onSuccess, onErr
                             <tr style={{ borderBottom: '1px solid #e2e8f0' }}>
                               <td style={{ padding: '8px' }}>{watchDestStorehouse}</td>
                               <td style={{ padding: '8px' }}>{dataService.getItemStockByStorehouse(watchItem.id, watchDestStorehouse)} {liveStockSim.unit}</td>
-                              <td style={{ padding: '8px', color: '#10b981' }}>+{watchQty || 0}</td>
+                              <td style={{ padding: '8px', color: '#047857' }}>+{watchQty || 0}</td>
                               <td style={{ padding: '8px', fontWeight: 'bold' }}>
                                 {dataService.getItemStockByStorehouse(watchItem.id, watchDestStorehouse) + (Number(watchQty) || 0)} {liveStockSim.unit}
                               </td>

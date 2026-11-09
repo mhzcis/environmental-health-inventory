@@ -40,8 +40,11 @@ import { useLocation } from 'react-router-dom';
 import { renderOption } from '../utils/emoji';
 import { PRODUCT_LIMITS, productLimitMessage } from '../utils/productSchema';
 import { getStorehouseByReference } from '../utils/warehouseDomain';
-import { importDate, importNumber, importTransactionId } from '../utils/importValidation';
+import { importDate, importNumber, importTransactionId, ImportRowError, ImportValidationError } from '../utils/importValidation';
+import { validateInventoryDataset } from '../utils/inventoryIntegrity';
+import { getStorehouseEntities } from '../utils/warehouseDomain';
 import type { Material, InventoryTransaction } from '../types';
+import { localDateString } from '../utils/localDate';
 
 
 const APP_PERMISSIONS = [
@@ -115,7 +118,6 @@ export default function Settings() {
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const [resetConfirmText, setResetConfirmText] = useState('');
   const [resetAdminPassword, setResetAdminPassword] = useState('');
-  const [driveBackupDialogOpen, setDriveBackupDialogOpen] = useState(false);
   const [dryRunResult, setDryRunResult] = useState<MigrationLog | null>(null);
   const [isDryRunning, setIsDryRunning] = useState(false);
   const [validatedBackupData, setValidatedBackupData] = useState<any | null>(null);
@@ -123,7 +125,6 @@ export default function Settings() {
   const [executeResult, setExecuteResult] = useState<MigrationLog | null>(null);
   const [migrationConfirmDialogOpen, setMigrationConfirmDialogOpen] = useState(false);
   const [migrationConfirmText, setMigrationConfirmText] = useState('');
-  const [driveStep, setDriveStep] = useState(0);
   const [isTestingRbac, setIsTestingRbac] = useState(false);
   const [rbacReport, setRbacReport] = useState<RbacTestReport | null>(null);
   const [isComparing, setIsComparing] = useState(false);
@@ -132,7 +133,6 @@ export default function Settings() {
   const [auditSyncResult, setAuditSyncResult] = useState<AuditLogSyncResult | null>(null);
   const [isAuditSyncing, setIsAuditSyncing] = useState(false);
   const [isAuditDryRunning, setIsAuditDryRunning] = useState(false);
-  const [driveError, setDriveError] = useState<string | null>(null);
     const [isFactoryResetting, setIsFactoryResetting] = useState(false);
   const [localDeviceClearDialogOpen, setLocalDeviceClearDialogOpen] = useState(false);
   const [localDeviceClearConfirmText, setLocalDeviceClearConfirmText] = useState('');
@@ -153,10 +153,6 @@ export default function Settings() {
   };
   const [isImporting, setIsImporting] = useState(false);
   const [isImportingTx, setIsImportingTx] = useState(false);
-  const [_googleClientIdSetting, _setGoogleClientIdSetting] = useState(() => {
-    return localStorage.getItem('google_drive_client_id_setting') || '';
-  });
-
   // Partners (Suppliers & Receivers) States
   const [partnerFormOpen, setPartnerFormOpen] = useState(false);
   const [partnerEditMode, setPartnerEditMode] = useState(false);
@@ -759,12 +755,19 @@ export default function Settings() {
     setSuccessMsg('تم تنزيل قالب إكسل للقيود والحركات بنجاح!');
   };
 
+  // QA-20261108 IMP-02: show the spreadsheet row and an Arabic reason instead of a masked internal error.
+  const rowReason = (e: unknown): string => e instanceof ImportValidationError ? e.message : 'بيانات غير صالحة في هذا السطر.';
+  const importMessage = (e: unknown): string => (e instanceof ImportRowError || e instanceof ImportValidationError) ? e.message : productLimitMessage(e);
+  const fail = (message: string): never => { throw new ImportValidationError(message); };
   const readImportRows = async (file: File): Promise<unknown[][]> => {
-    if (file.size > 2 * 1024 * 1024) throw new Error('حجم الملف أكبر من 2 ميجابايت؛ قسّمه قبل الاستيراد.');
-    const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
-    const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[workbook.SheetNames[0]], { header: 1, defval: '' });
-    if (rows.length < 2) throw new Error('الملف لا يحتوي على صفوف بيانات.');
-    if (rows.length > 451) throw new Error('الملف يتجاوز 450 صفًا؛ قسّمه قبل الاستيراد.');
+    if (file.size > 2 * 1024 * 1024) fail('حجم الملف أكبر من 2 ميجابايت؛ قسّمه قبل الاستيراد.');
+    let rows: unknown[][];
+    try {
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+      rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[workbook.SheetNames[0]], { header: 1, defval: '' });
+    } catch { throw new ImportValidationError('تعذر قراءة الملف؛ تأكد أنه ملف إكسل سليم غير تالف ثم أعد المحاولة.'); }
+    if (rows.length < 2) fail('الملف لا يحتوي على صفوف بيانات.');
+    if (rows.length > 451) fail('الملف يتجاوز 450 صفًا؛ قسّمه قبل الاستيراد.');
     return rows;
   };
 
@@ -781,13 +784,13 @@ export default function Settings() {
         try {
           const cell = (n: number) => String(row[n] ?? '').trim();
           const code = cell(0); const name = cell(1); const category = cell(2); const unit = cell(3);
-          if (!code || !name) throw new Error('كود الصنف واسمه مطلوبان.');
-          const key = code.toLowerCase(); if (codes.has(key)) throw new Error('كود الصنف مكرر داخل الملف.'); codes.add(key);
+          if (!code || !name) fail('كود الصنف واسمه مطلوبان.');
+          const key = code.toLowerCase(); if (codes.has(key)) fail('كود الصنف مكرر داخل الملف.'); codes.add(key);
           const warehouse = getStorehouseByReference(cfg, cell(6), false);
-          if (!warehouse || !cfg.units.includes(unit) || !cfg.categories.some(c => c.name === category)) throw new Error('عرّف التصنيف والوحدة والمستودع الفعال في الإعدادات قبل الاستيراد.');
+          if (!warehouse || !cfg.units.includes(unit) || !cfg.categories.some(c => c.name === category)) fail('عرّف التصنيف والوحدة والمستودع الفعال في الإعدادات قبل الاستيراد.');
           const minimumStock = importNumber(row[4], 'حد الأمان'); const opening = importNumber(row[5], 'الرصيد الافتتاحي');
           const old = existing.find(m => m.code.trim().toLowerCase() === key);
-          if (old && opening !== 0) throw new Error('تحديث صنف موجود يتطلب صفرًا في خانة الرصيد الافتتاحي؛ استخدم تسوية الجرد لتعديل الرصيد.');
+          if (old && opening !== 0) fail('تحديث صنف موجود يتطلب صفرًا في خانة الرصيد الافتتاحي؛ استخدم تسوية الجرد لتعديل الرصيد.');
           const now = new Date().toISOString();
           const type = old?.type || (code.toUpperCase().startsWith('PES') || category.includes('مبيد') ? 'pesticide' : 'material');
           const item = { ...old, id: old?.id || `mat-${crypto.randomUUID()}`, code, name, category, unit, type, minimumStock,
@@ -797,17 +800,17 @@ export default function Settings() {
             ...(type === 'pesticide' ? { manufacturer: cell(8), productionDate: cell(9) ? importDate(row[9]) : '', expiryDate: cell(10) ? importDate(row[10]) : '', hazardLevel: cell(11) } : {}),
           } as Material;
           items.push(item); if (old) updated++; else added++;
-          if (opening > 0) openings.push({ id: `tx-${crypto.randomUUID()}`, date: now.slice(0, 10), itemId: item.id,
+          if (opening > 0) openings.push({ id: `tx-${crypto.randomUUID()}`, date: localDateString(), itemId: item.id,
             itemType: item.type, itemCode: code, itemName: name, itemCategory: category, unit, quantity: opening,
             transactionType: 'افتتاحي', storehouseId: warehouse.id, storehouse: warehouse.name, stockBefore: 0, stockAfter: opening,
             executedBy: dataService.getCurrentUser().fullName, supplierOrReceiver: 'رصيد افتتاحي من استيراد الأصناف',
             notes: 'استيراد Excel ذري', createdAt: now, updatedAt: now });
-        } catch (e) { throw new Error(`السطر ${i + 1}، ${e instanceof Error ? e.message : 'بيانات غير صالحة'}`); }
+        } catch (e) { throw new ImportRowError(i + 1, rowReason(e)); }
       }
       await dataService.importMaterialsBatch(items, openings);
       setSuccessMsg(`اعتمد الخادم الدفعة كاملة: ${added} صنف جديد و${updated} تحديث و${openings.length} رصيد افتتاحي.`);
       setSettings(dataService.getSettings());
-    } catch (e) { setErrorMsg(`استيراد الأصناف: ${productLimitMessage(e)}`); }
+    } catch (e) { setErrorMsg(`استيراد الأصناف: ${importMessage(e)}`); }
     finally { setIsImporting(false); }
   };
 
@@ -817,37 +820,46 @@ export default function Settings() {
     try {
       const rows = await readImportRows(file); const cfg = dataService.getSettings();
       const materials = dataService.getMaterials(); const existing = new Map(dataService.getTransactions().map(t => [t.id, t]));
-      const transactions: InventoryTransaction[] = []; const occurrences = new Map<string, number>(); let repeated = 0;
+      const transactions: InventoryTransaction[] = []; const occurrences = new Map<string, number>(); let repeated = 0; const rowOf = new Map<string, number>();
       const types: Record<string, InventoryTransaction['transactionType']> = { 'وارد': 'وارد', 'إدخال': 'وارد', 'ادخال': 'وارد', 'تزويد': 'وارد', 'صادر': 'صادر', 'إخراج': 'صادر', 'اخراج': 'صادر', 'صرف': 'صادر', 'توزيع': 'صادر', 'مستهلك': 'مستهلك', 'إتلاف': 'مستهلك', 'اتلاف': 'مستهلك', 'استهلاك': 'مستهلك', 'افتتاحي': 'افتتاحي' };
       for (let i = 1; i < rows.length; i++) {
         const row = rows[i]; if (!row.some(v => String(v).trim())) continue;
         try {
           const cell = (n: number) => String(row[n] ?? '').trim();
           const item = materials.find(m => m.code.trim().toLowerCase() === cell(0).toLowerCase());
-          if (!item) throw new Error('كود الصنف غير مسجل.');
-          const type = types[cell(1)]; if (!type) throw new Error('نوع الحركة غير مدعوم في هذا القالب؛ استخدم المسار المخصص للتحويل والتسوية.');
-          const quantity = importNumber(row[2], 'الكمية'); if (quantity <= 0) throw new Error('الكمية يجب أن تكون أكبر من صفر.');
-          const warehouse = getStorehouseByReference(cfg, cell(3), false); if (!warehouse) throw new Error('المستودع غير موجود أو معطل.');
+          if (!item) fail('كود الصنف غير مسجل.');
+          const type = types[cell(1)]; if (!type) fail('نوع الحركة غير مدعوم في هذا القالب؛ استخدم المسار المخصص للتحويل والتسوية.');
+          const quantity = importNumber(row[2], 'الكمية'); if (quantity <= 0) fail('الكمية يجب أن تكون أكبر من صفر.');
+          const warehouse = getStorehouseByReference(cfg, cell(3), false); if (!warehouse) fail('المستودع غير موجود أو معطل.');
           const date = importDate(row[5]); const supplierOrReceiver = cell(4); const notes = cell(6);
           const fields = [item.id, type, quantity, warehouse.id, supplierOrReceiver, date, notes];
           const key = JSON.stringify(fields); const occurrence = occurrences.get(key) || 0; occurrences.set(key, occurrence + 1);
           const id = await importTransactionId(fields, occurrence);
           if (existing.has(id)) { repeated++; continue; }
           const now = new Date().toISOString();
+          rowOf.set(id, i + 1);
           transactions.push({ id, date, itemId: item.id, itemType: item.type, itemCode: item.code, itemName: item.name,
             itemCategory: item.category, unit: item.unit, transactionType: type, quantity, storehouseId: warehouse.id,
             storehouse: warehouse.name, stockBefore: 0, stockAfter: 0, executedBy: dataService.getCurrentUser().fullName,
             supplierOrReceiver, notes, createdAt: now, updatedAt: now });
-        } catch (e) { throw new Error(`السطر ${i + 1}، ${e instanceof Error ? e.message : 'بيانات غير صالحة'}`); }
+        } catch (e) { throw new ImportRowError(i + 1, rowReason(e)); }
       }
       if (transactions.length) {
-        if (transactions.length > 449) throw new Error('الحد 449 حركة في دفعة واحدة؛ قسّم الملف قبل الاستيراد.');
+        if (transactions.length > 449) fail('الحد 449 حركة في دفعة واحدة؛ قسّم الملف قبل الاستيراد.');
+        const check = validateInventoryDataset([...existing.values(), ...transactions], { materials, storehouses: getStorehouseEntities(cfg) });
+        const issue = check.errors.find(err => err.transactionId && rowOf.has(err.transactionId) && ['NEGATIVE_RUNNING_BALANCE', 'INVALID_DATE', 'INVALID_QUANTITY'].includes(err.code));
+        if (issue) {
+          const tx = transactions.find(t => t.id === issue.transactionId)!;
+          throw new ImportRowError(rowOf.get(issue.transactionId!)!, issue.code === 'NEGATIVE_RUNNING_BALANCE'
+            ? `هذه الحركة تجعل رصيد الصنف «${tx.itemCode}» في «${tx.storehouse}» سالبًا بتاريخ ${tx.date}. تحقق من الكمية أو التاريخ؛ الحركات المؤرخة قبل الرصيد الافتتاحي أو قبل وارد يغطيها تُرفض.`
+            : 'تعارض هذا السطر مع سجل الحركات (تاريخ أو مرجع أو كمية غير صالحة).');
+        }
         const result = await dataService.saveTransactionBatch(transactions);
         if (!result.success) throw new Error(presentResultMessage(result.message, 'import'));
-      } else if (!repeated) throw new Error('لا توجد حركات صالحة في الملف.');
+      } else if (!repeated) fail('لا توجد حركات صالحة في الملف.');
       setSuccessMsg(`اعتمدت ${transactions.length} حركة في دفعة واحدة؛ ${repeated} حركة من استيراد مطابق سبق تسجيله.`);
       setSettings(dataService.getSettings());
-    } catch (e) { setErrorMsg(`استيراد الحركات: ${productLimitMessage(e)}`); }
+    } catch (e) { setErrorMsg(`استيراد الحركات: ${importMessage(e)}`); }
     finally { setIsImportingTx(false); }
   };
 
@@ -1013,285 +1025,9 @@ export default function Settings() {
     }
   };
 
-  // Real Google Drive Backup Flow (JSON & Excel sheets)
-  const proceedWithDriveUpload = async (accessToken: string) => {
-    setDriveStep(2); // Generating files
-    try {
-      // 1. Gather and verify the canonical backup
-      const backupData = await createBackup();
-      const verification = await validateBackup(backupData);
-      if (!verification.success) throw new Error(verification.errors.join(' '));
-      const { materials, transactions, auditLogs, generatorLogs } = backupData;
-      const fileContent = JSON.stringify(backupData, null, 2);
-      
-      // 2. Generate Excel Buffer
-      const workbook = new ExcelJS.Workbook();
-      const fontName = 'Cairo';
+  // QA-20261108 RTL-04/UI-04: the Google Drive backup flow was never wired (no OAuth; its button actually ran
+  // «دمج بيانات الجهاز» into Supabase). Card, dialog and dead upload code removed; see owner decision.
 
-      // Sheet 1: Materials
-      const matSheet = workbook.addWorksheet('الأصناف والمواد', {
-        views: [{ showGridLines: true, rightToLeft: true }]
-      });
-      matSheet.addRow([settings.organizationName || 'الأونروا - وكالة الغوث']).font = { name: fontName, size: 12, bold: true, color: { argb: '007AB7' } };
-      matSheet.addRow(['سجل الجرد الفعلي الكلي للأصناف والمواد الكيميائية بالمستودعات']).font = { name: fontName, size: 14, bold: true, color: { argb: '0F172A' } };
-      matSheet.addRow([`تاريخ الإصدار والنسخ السحابي: ${new Date().toLocaleDateString('ar-EG')} ${new Date().toLocaleTimeString('ar-EG')}`]).font = { name: fontName, size: 10, color: { argb: '475569' } };
-      matSheet.addRow([]);
-
-      const matHeaders = ['المعرف', 'رمز الصنف', 'اسم الصنف', 'التصنيف', 'الوحدة', 'الرصيد الحالي', 'حد الأمان', 'المستودع', 'ملاحظات'];
-      const matHeaderRow = matSheet.addRow(matHeaders);
-      matHeaderRow.height = 26;
-      matHeaderRow.eachCell((cell) => {
-        cell.font = { name: fontName, size: 11, bold: true, color: { argb: 'FFFFFF' } };
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '007AB7' } };
-        cell.alignment = { horizontal: 'center', vertical: 'middle' };
-      });
-
-      materials.forEach((m: any) => {
-        const row = matSheet.addRow([
-          m.id || '',
-          m.code || '',
-          m.name || '',
-          m.category || '',
-          m.unit || '',
-          Number(m.currentStock) || 0,
-          Number(m.minimumStock) || 0,
-          m.storageLocation || '',
-          m.notes || ''
-        ]);
-        row.height = 22;
-      });
-
-      // Sheet 2: Transactions
-      const txSheet = workbook.addWorksheet('حركات المخزون', {
-        views: [{ showGridLines: true, rightToLeft: true }]
-      });
-      txSheet.addRow([settings.organizationName || 'الأونروا - وكالة الغوث']).font = { name: fontName, size: 12, bold: true, color: { argb: '007AB7' } };
-      txSheet.addRow(['سجل حركات المخزون - معاملات التوريد والصرف السنوية الكلية']).font = { name: fontName, size: 14, bold: true, color: { argb: '0F172A' } };
-      txSheet.addRow([`تاريخ الإصدار والنسخ السحابي: ${new Date().toLocaleDateString('ar-EG')} ${new Date().toLocaleTimeString('ar-EG')}`]).font = { name: fontName, size: 10, color: { argb: '475569' } };
-      txSheet.addRow([]);
-
-      const txHeaders = ['رقم الحركة', 'رمز الصنف', 'اسم الصنف', 'نوع الحركة', 'الكمية', 'التاريخ', 'رقم المستند', 'الجهة المستلمة / جهة التوريد', 'بواسطة'];
-      const txHeaderRow = txSheet.addRow(txHeaders);
-      txHeaderRow.height = 26;
-      txHeaderRow.eachCell((cell) => {
-        cell.font = { name: fontName, size: 11, bold: true, color: { argb: 'FFFFFF' } };
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '1E293B' } };
-        cell.alignment = { horizontal: 'center', vertical: 'middle' };
-      });
-
-      transactions.forEach((t: any) => {
-        const row = txSheet.addRow([
-          t.id || '',
-          t.itemCode || '',
-          t.itemName || '',
-          t.transactionType === 'وارد' ? 'توريد (+)' : t.transactionType === 'صادر' ? 'صرف (-)' : 'استهلاك (-)',
-          Number(t.quantity) || 0,
-          t.date || '',
-          t.transactionNumber || '',
-          t.supplierOrReceiver || '',
-          t.executedBy || ''
-        ]);
-        row.height = 22;
-      });
-
-      // Sheet 3: Audit Logs
-      const auditSheet = workbook.addWorksheet('سجل التدقيق والمراقبة', {
-        views: [{ showGridLines: true, rightToLeft: true }]
-      });
-      auditSheet.addRow([settings.organizationName || 'الأونروا - وكالة الغوث']).font = { name: fontName, size: 12, bold: true, color: { argb: '007AB7' } };
-      auditSheet.addRow(['سجل التدقيق التاريخي للعمليات وحركات النظام بالثانية']).font = { name: fontName, size: 14, bold: true, color: { argb: '0F172A' } };
-      auditSheet.addRow([`تاريخ الإصدار والنسخ السحابي: ${new Date().toLocaleDateString('ar-EG')} ${new Date().toLocaleTimeString('ar-EG')}`]).font = { name: fontName, size: 10, color: { argb: '475569' } };
-      auditSheet.addRow([]);
-
-      const auditHeaders = ['الوقت والتاريخ', 'المستخدم', 'الإجراء الرئيسي', 'التفاصيل والعملية الجارية', 'العنوان والملقم'];
-      const auditHeaderRow = auditSheet.addRow(auditHeaders);
-      auditHeaderRow.height = 26;
-      auditHeaderRow.eachCell((cell) => {
-        cell.font = { name: fontName, size: 11, bold: true, color: { argb: 'FFFFFF' } };
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '475569' } };
-        cell.alignment = { horizontal: 'center', vertical: 'middle' };
-      });
-
-      auditLogs.forEach((a: any) => {
-        const row = auditSheet.addRow([
-          a.timestamp || '',
-          a.user || '',
-          a.action || '',
-          a.details || '',
-          a.ipAddress || ''
-        ]);
-        row.height = 22;
-      });
-
-      // Sheet 4: Generator Logs
-      const genSheet = workbook.addWorksheet('سجل تشغيل المولد', {
-        views: [{ showGridLines: true, rightToLeft: true }]
-      });
-      genSheet.addRow([settings.organizationName || 'الأونروا - وكالة الغوث']).font = { name: fontName, size: 12, bold: true, color: { argb: '007AB7' } };
-      genSheet.addRow(['سجل قراءات وساعات تشغيل العداد التراكمي للمولد']).font = { name: fontName, size: 14, bold: true, color: { argb: '0F172A' } };
-      genSheet.addRow([`تاريخ الإصدار والنسخ السحابي: ${new Date().toLocaleDateString('ar-EG')} ${new Date().toLocaleTimeString('ar-EG')}`]).font = { name: fontName, size: 10, color: { argb: '475569' } };
-      genSheet.addRow([]);
-
-      const genHeaders = ['التاريخ', 'اليوم', 'القراءة السابقة', 'القراءة الحالية', 'ساعات التشغيل', 'الملاحظات', 'المُدخل'];
-      const genHeaderRow = genSheet.addRow(genHeaders);
-      genHeaderRow.height = 26;
-      genHeaderRow.eachCell((cell) => {
-        cell.font = { name: fontName, size: 11, bold: true, color: { argb: 'FFFFFF' } };
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0284C7' } };
-        cell.alignment = { horizontal: 'center', vertical: 'middle' };
-      });
-
-      generatorLogs.forEach((g: any) => {
-        const row = genSheet.addRow([
-          g.date || '',
-          g.dayName || '',
-          Number(g.previousReading) || 0,
-          Number(g.currentReading) || 0,
-          Number(g.operatingHours) || 0,
-          g.notes || '-',
-          g.createdBy || ''
-        ]);
-        row.height = 22;
-      });
-
-      // Auto-fit Column Widths across worksheets
-      [matSheet, txSheet, auditSheet, genSheet].forEach((ws) => {
-        ws.columns.forEach((column: any) => {
-          let maxLen = 12;
-          column.eachCell({ includeEmpty: true }, (cell: any) => {
-            if (cell.value) {
-              const strLen = cell.value.toString().length;
-              if (strLen > maxLen) {
-                maxLen = strLen;
-              }
-            }
-          });
-          column.width = Math.min(Math.max(maxLen + 4, 13), 42);
-        });
-      });
-
-      const excelBuffer = await workbook.xlsx.writeBuffer();
-
-      // 3. Start JSON upload
-      setDriveStep(3);
-      const sanitizeName = (str: string) => str.replace(/[\/\\?%*:|"<>\s]+/g, '_');
-      const orgPart = sanitizeName(settings.organizationName || 'organization');
-      const deptPart = sanitizeName(settings.departmentName || 'department');
-      const dateStr = new Date().toISOString().replace(/[:.]/g, '-');
-      
-      const jsonFileName = `${orgPart}_${deptPart}_backup_v2_${dateStr}.json`;
-      const excelFileName = `${orgPart}_${deptPart}_backup_${dateStr}.xlsx`;
-
-      // Upload JSON File
-      const jsonMetadata = {
-        name: jsonFileName,
-        mimeType: 'application/json'
-      };
-      const jsonMetadataBlob = new Blob([JSON.stringify(jsonMetadata)], { type: 'application/json' });
-      const jsonMediaBlob = new Blob([fileContent], { type: 'application/json' });
-
-      const jsonFormData = new FormData();
-      jsonFormData.append('metadata', jsonMetadataBlob);
-      jsonFormData.append('file', jsonMediaBlob);
-
-      const jsonResponse = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${accessToken}`
-        },
-        body: jsonFormData
-      });
-
-      if (!jsonResponse.ok) {
-        // Never read or surface the Drive response body (may echo request/identity details): status only.
-        throw Object.assign(new Error('DRIVE_UPLOAD_JSON_FAILED'), { httpStatus: jsonResponse.status });
-      }
-
-      // 4. Start Excel upload
-      setDriveStep(4);
-
-      const excelMetadata = {
-        name: excelFileName,
-        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      };
-      const excelMetadataBlob = new Blob([JSON.stringify(excelMetadata)], { type: 'application/json' });
-      const excelMediaBlob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-
-      const excelFormData = new FormData();
-      excelFormData.append('metadata', excelMetadataBlob);
-      excelFormData.append('file', excelMediaBlob);
-
-      const excelResponse = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${accessToken}`
-        },
-        body: excelFormData
-      });
-
-      if (!excelResponse.ok) {
-        throw Object.assign(new Error('DRIVE_UPLOAD_EXCEL_FAILED'), { httpStatus: excelResponse.status });
-      }
-
-      // 5. Completion!
-      setDriveStep(5);
-      dataService.recordGoogleDriveBackupTime();
-      
-      // Log audit
-      await dataService.logAudit(
-        'نسخ احتياطي سحابي حقيقي', 
-        `تم بنجاح تصدير وتأمين وحفظ ملفين (JSON و Excel للتقرير الكلي) في حساب Google Drive الخاص بالمستخدم`, 
-        'إعدادات'
-      );
-
-    } catch (err: any) {
-
-      console.error('Drive backup failed:', safeErrorDetail(err));
-      setDriveError(safeUserMessage(err, 'drive', { allowAppText: true, fallback: 'حدث خطأ غير متوقع أثناء توليد أو رفع كشوف النسخ السحابي.' }));
-    }
-  };
-
-  const handleGoogleDriveBackup = async () => {
-    setDriveBackupDialogOpen(true);
-    setDriveStep(1);
-    setDriveError(null);
-
-    try {
-      if (!isFirebaseAvailable || !auth) {
-        throw new Error('خدمة المزامنة السحابية غير متوفرة حالياً.');
-      }
-
-      const uploadRes = await dataService.uploadAllLocalDataToCloud();
-      if (!uploadRes.success) {
-        throw new Error(uploadRes.message);
-      }
-      setDriveStep(5);
-      dataService.recordGoogleDriveBackupTime();
-      await dataService.logAudit(
-        'دمج بيانات الجهاز بالسحابة',
-        'اعتُمد دمج السجلات التشغيلية والإعدادات في Supabase. هذا الإجراء ليس نسخة احتياطية مستقلة ولا استعادة كاملة.',
-        'إعدادات'
-      );
-    } catch (err: any) {
-
-      console.error('Google Drive sign-in failed:', safeErrorDetail(err));
-      setDriveError(safeUserMessage(err, 'drive', { allowAppText: true, fallback: 'حدث خطأ غير متوقع أثناء الاتصال بـ Google.' }));
-    }
-  };
-
-  const location = useLocation();
-
-  useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    if (params.get('triggerBackup') === 'true') {
-      // Trigger backup
-      handleGoogleDriveBackup();
-      // Remove query param to prevent re-triggering
-      window.history.replaceState(null, '', window.location.pathname);
-    }
-  }, [location.search]);
-
-  
   // Factory reset trigger
   const handlePerformFactoryReset = async () => {
     const cleanStr = resetConfirmText.trim().toLowerCase();
@@ -1386,7 +1122,7 @@ export default function Settings() {
         <Typography variant="h5" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
           إعدادات النظام وإدارة الصلاحيات
         </Typography>
-        <Typography variant="body2" sx={{ color: '#64748b', mt: 0.5, fontFamily: '"Cairo", sans-serif' }}>
+        <Typography variant="body2" sx={{ color: '#566375', mt: 0.5, fontFamily: '"Cairo", sans-serif' }}>
           تخصيص هوية المؤسسة لترويسات الفواتير والتقارير، وإدارة مستودعات التوزيع، وتحرير مصفوفات الأمان والمستخدمين والتبديل بينهم
         </Typography>
       </Box>
@@ -1406,16 +1142,17 @@ export default function Settings() {
           '& .Mui-selected': { color: '#007ab7 !important' }
         }}
       >
-        <Tab icon={<BusinessIcon sx={{ fontSize: 20 }} />} iconPosition="start" label="الهوية المؤسسية والتوقيعات" />
-        <Tab icon={<LayersIcon sx={{ fontSize: 20 }} />} iconPosition="start" label="خيارات تهيئة المستودعات والأصناف" />
-        <Tab icon={<PeopleIcon sx={{ fontSize: 20 }} />} iconPosition="start" label="الجهات والموردين" />
-        <Tab icon={<SecurityIcon sx={{ fontSize: 20 }} />} iconPosition="start" label="الحسابات والصلاحيات" />
-        <Tab icon={<BackupIcon sx={{ fontSize: 20 }} />} iconPosition="start" label="النسخ الاحتياطي والاستعادة" />
+        <Tab id="settings-tab-0" aria-controls="settings-tabpanel-0" icon={<BusinessIcon sx={{ fontSize: 20 }} />} iconPosition="start" label="الهوية المؤسسية والتوقيعات" />
+        <Tab id="settings-tab-1" aria-controls="settings-tabpanel-1" icon={<LayersIcon sx={{ fontSize: 20 }} />} iconPosition="start" label="خيارات تهيئة المستودعات والأصناف" />
+        <Tab id="settings-tab-2" aria-controls="settings-tabpanel-2" icon={<PeopleIcon sx={{ fontSize: 20 }} />} iconPosition="start" label="الجهات والموردين" />
+        <Tab id="settings-tab-3" aria-controls="settings-tabpanel-3" icon={<SecurityIcon sx={{ fontSize: 20 }} />} iconPosition="start" label="الحسابات والصلاحيات" />
+        <Tab id="settings-tab-4" aria-controls="settings-tabpanel-4" icon={<BackupIcon sx={{ fontSize: 20 }} />} iconPosition="start" label="النسخ الاحتياطي والاستعادة" />
       </Tabs>
 
       {/* Info messages */}
       
 
+      <Box role="tabpanel" id={`settings-tabpanel-${activeTab}`} aria-labelledby={`settings-tab-${activeTab}`}>
       {/* Tab 0: Core Reference Settings */}
       {activeTab === 0 && (
         <Grid container spacing={3} sx={{ pt: 1 }}>
@@ -1423,7 +1160,7 @@ export default function Settings() {
           <Grid size={{ xs: 12, md: 10, lg: 8 }} sx={{ mx: 'auto' }}>
             <Paper sx={{ p: 3, border: '1px solid #f1f5f9' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 3 }}>
-                <BusinessIcon sx={{ color: '#007ab7' }} />
+                <BusinessIcon sx={{ color: '#006da3' }} />
                 <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
                   هوية ومسميات الجهة والمؤسسة لترويسة التقارير
                 </Typography>
@@ -1507,7 +1244,7 @@ export default function Settings() {
                             checked={settings.showStorekeeperSignature !== false}
                             onChange={(e) => setSettings({ ...settings, showStorekeeperSignature: e.target.checked })}
                             size="small"
-                            sx={{ color: '#007ab7', '&.Mui-checked': { color: '#007ab7' } }}
+                            sx={{ color: '#006da3', '&.Mui-checked': { color: '#006da3' } }}
                           />
                         }
                         label={
@@ -1549,7 +1286,7 @@ export default function Settings() {
                             checked={settings.showSystemManagerSignature !== false}
                             onChange={(e) => setSettings({ ...settings, showSystemManagerSignature: e.target.checked })}
                             size="small"
-                            sx={{ color: '#007ab7', '&.Mui-checked': { color: '#007ab7' } }}
+                            sx={{ color: '#006da3', '&.Mui-checked': { color: '#006da3' } }}
                           />
                         }
                         label={
@@ -1591,7 +1328,7 @@ export default function Settings() {
                             checked={settings.showHealthDirectorSignature !== false}
                             onChange={(e) => setSettings({ ...settings, showHealthDirectorSignature: e.target.checked })}
                             size="small"
-                            sx={{ color: '#007ab7', '&.Mui-checked': { color: '#007ab7' } }}
+                            sx={{ color: '#006da3', '&.Mui-checked': { color: '#006da3' } }}
                           />
                         }
                         label={
@@ -1626,12 +1363,12 @@ export default function Settings() {
           <Grid size={{ xs: 12, md: 6 }}>
             <Paper sx={{ p: 3, border: '1px solid #f1f5f9' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1 }}>
-                <LayersIcon sx={{ color: '#007ab7' }} />
+                <LayersIcon sx={{ color: '#006da3' }} />
                 <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
                   خيارات وتصنيفات أصناف المخازن
                 </Typography>
               </Box>
-              <Typography variant="body2" sx={{ color: '#64748b', mb: 3, fontFamily: '"Cairo", sans-serif' }}>
+              <Typography variant="body2" sx={{ color: '#566375', mb: 3, fontFamily: '"Cairo", sans-serif' }}>
                 قم بتخصيص مدى البادئة والترميز الرقمي لضمان توليد الكود آلياً عند إدخال كرت صنف جديد (مثال: MAT من 1000 إلى 2000)
               </Typography>
 
@@ -1735,8 +1472,8 @@ export default function Settings() {
                         {cat.name}
                       </Typography>
                       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                        <Chip label={`البادئة: ${cat.prefix}`} size="small" variant="outlined" sx={{ height: 20, fontSize: '10px', color: '#007ab7', borderColor: '#b3d7ea', fontFamily: '"Cairo", sans-serif' }} />
-                        <Chip label={`المدى: ${cat.startRange} - ${cat.endRange}`} size="small" variant="outlined" sx={{ height: 20, fontSize: '10px', color: '#10b981', borderColor: '#a7f3d0', fontFamily: '"Cairo", sans-serif' }} />
+                        <Chip label={`البادئة: ${cat.prefix}`} size="small" variant="outlined" sx={{ height: 20, fontSize: '10px', color: '#006da3', borderColor: '#b3d7ea', fontFamily: '"Cairo", sans-serif' }} />
+                        <Chip label={`المدى: ${cat.startRange} - ${cat.endRange}`} size="small" variant="outlined" sx={{ height: 20, fontSize: '10px', color: '#047857', borderColor: '#a7f3d0', fontFamily: '"Cairo", sans-serif' }} />
                       </Box>
                     </Box>
                   </ListItem>
@@ -1749,12 +1486,12 @@ export default function Settings() {
           <Grid size={{ xs: 12, md: 6 }}>
             <Paper sx={{ p: 3, border: '1px solid #f1f5f9' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2 }}>
-                <StoreIcon sx={{ color: '#007ab7' }} />
+                <StoreIcon sx={{ color: '#006da3' }} />
                 <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
                   مستودعات ومخازن التوزيع للأصناف بالجهة
                 </Typography>
               </Box>
-              <Typography variant="body2" sx={{ color: '#64748b', mb: 2.5, fontFamily: '"Cairo", sans-serif' }}>
+              <Typography variant="body2" sx={{ color: '#566375', mb: 2.5, fontFamily: '"Cairo", sans-serif' }}>
                 إضافة وإقصاء مخازن الدائرة لتوزيع مواقع الحفظ
               </Typography>
 
@@ -1810,12 +1547,12 @@ export default function Settings() {
           <Grid size={{ xs: 12, md: 6 }}>
             <Paper sx={{ p: 3, border: '1px solid #f1f5f9' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2 }}>
-                <TuneIcon sx={{ color: '#007ab7' }} />
+                <TuneIcon sx={{ color: '#006da3' }} />
                 <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
                   وحدات التوزيع والمقاييس القياسية
                 </Typography>
               </Box>
-              <Typography variant="body2" sx={{ color: '#64748b', mb: 2.5, fontFamily: '"Cairo", sans-serif' }}>
+              <Typography variant="body2" sx={{ color: '#566375', mb: 2.5, fontFamily: '"Cairo", sans-serif' }}>
                 إدارة وحدات التعبئة والتوزيع في الكشوفات اليومية والتقارير العامة
               </Typography>
 
@@ -1877,7 +1614,7 @@ export default function Settings() {
               <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
                 قاعدة بيانات الجهات والموردين الشركاء 🤝
               </Typography>
-              <Typography variant="body2" sx={{ color: '#64748b', mt: 0.5, fontFamily: '"Cairo", sans-serif' }}>
+              <Typography variant="body2" sx={{ color: '#566375', mt: 0.5, fontFamily: '"Cairo", sans-serif' }}>
                 إدارة شركاء التوريد والجهات الحكومية والأهلية المستلمة لتنظيم وتسهيل توثيق حركات الصرف والوارد
               </Typography>
             </Box>
@@ -1966,7 +1703,7 @@ export default function Settings() {
                         </Typography>
                       )}
                       {p.notes ? (
-                        <Typography variant="body2" sx={{ color: '#64748b', fontFamily: '"Cairo", sans-serif', fontSize: '0.85rem', bgcolor: '#f8fafc', p: 1.5, borderRadius: '8px', border: '1px solid #f1f5f9' }}>
+                        <Typography variant="body2" sx={{ color: '#566375', fontFamily: '"Cairo", sans-serif', fontSize: '0.85rem', bgcolor: '#f8fafc', p: 1.5, borderRadius: '8px', border: '1px solid #f1f5f9' }}>
                           {p.notes}
                         </Typography>
                       ) : (
@@ -1981,7 +1718,7 @@ export default function Settings() {
                         size="small"
                         onClick={() => handleOpenEditPartner(p)}
                         startIcon={<EditIcon sx={{ ml: 0.5, mr: -0.5, fontSize: 16 }} />}
-                        sx={{ fontFamily: '"Cairo", sans-serif', fontWeight: 'bold', color: '#007ab7' }}
+                        sx={{ fontFamily: '"Cairo", sans-serif', fontWeight: 'bold', color: '#006da3' }}
                       >
                         تعديل
                       </Button>
@@ -2001,7 +1738,7 @@ export default function Settings() {
             {(settings.partners || []).length === 0 && (
               <Grid size={12}>
                 <Box sx={{ textAlign: 'center', py: 8 }}>
-                  <Typography variant="body1" sx={{ color: '#64748b', fontFamily: '"Cairo", sans-serif' }}>
+                  <Typography variant="body1" sx={{ color: '#566375', fontFamily: '"Cairo", sans-serif' }}>
                     لم يتم تسجيل أي جهة شريكة أو مورد حتى الآن في النظام.
                   </Typography>
                 </Box>
@@ -2018,7 +1755,7 @@ export default function Settings() {
             <Typography variant="h6" sx={{ fontWeight: 'bold', fontFamily: '"Cairo", sans-serif', color: '#1e293b' }}>
               إدارة شؤون الموظفين ومصفوفة التفويضات محمية بالكامل
             </Typography>
-            <Typography variant="body2" sx={{ color: '#64748b', mt: 1.5, fontFamily: '"Cairo", sans-serif', maxWidth: '500px', mx: 'auto', lineHeight: 1.6 }}>
+            <Typography variant="body2" sx={{ color: '#566375', mt: 1.5, fontFamily: '"Cairo", sans-serif', maxWidth: '500px', mx: 'auto', lineHeight: 1.6 }}>
               يتطلب عرض حسابات الموظفين وتعديل صلاحياتها الحصول على صلاحية <strong>إدارة المستخدمين</strong>. تواصل مع مدير النظام لمنحك الوصول المناسب.
             </Typography>
           </Paper>
@@ -2031,7 +1768,7 @@ export default function Settings() {
                 <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
                   حسابات المستخدمين ({users.length})
                 </Typography>
-                <Typography variant="body2" sx={{ color: '#64748b', mt: 0.5, fontFamily: '"Cairo", sans-serif' }}>
+                <Typography variant="body2" sx={{ color: '#566375', mt: 0.5, fontFamily: '"Cairo", sans-serif' }}>
                   {users.filter(user => user.active !== false).length} نشط — {users.filter(user => user.active === false).length} معطّل. اختر حسابًا لتعديل بياناته وصلاحياته.
                 </Typography>
               </Box>
@@ -2069,7 +1806,7 @@ export default function Settings() {
                                 </Typography>
                                 {isSelf && <Chip label="أنت حالياً" size="small" color="primary" sx={{ height: 18, fontSize: '9px', fontWeight: 'bold', fontFamily: '"Cairo", sans-serif' }} />}
                               </Box>
-                              <Typography variant="caption" sx={{ color: '#64748b', display: 'block', mt: 0, fontFamily: '"Cairo", sans-serif', direction: 'ltr', textAlign: 'right', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              <Typography variant="caption" sx={{ color: '#566375', display: 'block', mt: 0, fontFamily: '"Cairo", sans-serif', direction: 'ltr', textAlign: 'right', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                                 {u.username} 
                               </Typography>
                             </Box>
@@ -2095,7 +1832,7 @@ export default function Settings() {
                           </Box>
                         </Box>
                         
-                        <Typography variant="caption" sx={{ display: 'block', color: '#64748b', mb: 1, fontFamily: '"Cairo", sans-serif', textAlign: 'start' }}>
+                        <Typography variant="caption" sx={{ display: 'block', color: '#566375', mb: 1, fontFamily: '"Cairo", sans-serif', textAlign: 'start' }}>
                           الصلاحيات المفعّلة: ({u.permissions.length} من {APP_PERMISSIONS.length})
                         </Typography>
                         
@@ -2108,7 +1845,7 @@ export default function Settings() {
                                 label={pInfo ? pInfo.name.split(' - ')[1] || pInfo.name : pId} 
                                 size="small" 
                                 variant="outlined"
-                                sx={{ fontSize: '10px', height: 20, color: '#007ab7', borderColor: '#b3d7ea', fontFamily: '"Cairo", sans-serif' }} 
+                                sx={{ fontSize: '10px', height: 20, color: '#006da3', borderColor: '#b3d7ea', fontFamily: '"Cairo", sans-serif' }} 
                               />
                             );
                           })}
@@ -2153,7 +1890,7 @@ export default function Settings() {
           <Grid size={{ xs: 12, md: 7 }}>
             <Paper sx={{ p: 3, border: '1px solid #f1f5f9' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 3 }}>
-                <KeyIcon sx={{ color: '#007ab7' }} />
+                <KeyIcon sx={{ color: '#006da3' }} />
                 <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
                   {editingUser ? `تعديل حساب: ${editingUser.fullName}` : 'إنشاء حساب موظف'}
                 </Typography>
@@ -2319,7 +2056,7 @@ export default function Settings() {
                         <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
                           صلاحيات الحساب
                         </Typography>
-                        <Typography variant="caption" sx={{ color: '#64748b', fontFamily: '"Cairo", sans-serif' }}>
+                        <Typography variant="caption" sx={{ color: '#566375', fontFamily: '"Cairo", sans-serif' }}>
                           اختر الصلاحيات المحددة التي يُسمح لهذا الحساب بالقيام بها على النظام.
                         </Typography>
                       </Box>
@@ -2366,7 +2103,7 @@ export default function Settings() {
                                 <Typography variant="body2" sx={{ fontWeight: 'bold', color: '#1e293b', fontSize: '0.8rem', fontFamily: '"Cairo", sans-serif' }}>
                                   {p.name}
                                 </Typography>
-                                <Typography variant="caption" sx={{ color: '#64748b', fontSize: '0.75rem', lineHeight: 1.7, display: 'block', mt: 0.2, fontFamily: '"Cairo", sans-serif' }}>
+                                <Typography variant="caption" sx={{ color: '#566375', fontSize: '0.75rem', lineHeight: 1.7, display: 'block', mt: 0.2, fontFamily: '"Cairo", sans-serif' }}>
                                   {p.desc}
                                 </Typography>
                               </Box>
@@ -2415,13 +2152,13 @@ export default function Settings() {
             <Paper sx={{ p: 4, borderRadius: '20px', display: 'flex', flexDirection: 'column', height: '100%' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 3 }}>
                 <Box sx={{ p: 1, bgcolor: '#f0f9ff', borderRadius: '12px', display: 'flex', alignItems: 'center' }}>
-                  <BackupIcon sx={{ color: '#007ab7' }} />
+                  <BackupIcon sx={{ color: '#006da3' }} />
                 </Box>
                 <Box sx={{ textAlign: 'start' }}>
                   <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
                     النسخ الاحتياطي المحلي واستيراد البيانات
                   </Typography>
-                  <Typography variant="caption" sx={{ color: '#64748b', fontFamily: '"Cairo", sans-serif' }}>
+                  <Typography variant="caption" sx={{ color: '#566375', fontFamily: '"Cairo", sans-serif' }}>
                     تصدير سجل المستودعات الحالي وحفظه كملف جيسون (JSON)
                   </Typography>
                 </Box>
@@ -2482,69 +2219,18 @@ export default function Settings() {
             </Paper>
           </Grid>
 
-          {/* Card 2: Google Drive Cloud Backup */}
-          <Grid size={{ xs: 12, md: 6 }}>
-            <Paper sx={{ p: 4, borderRadius: '20px', display: 'flex', flexDirection: 'column', height: '100%' }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 3 }}>
-                <Box sx={{ p: 1, bgcolor: '#f0fdf4', borderRadius: '12px', display: 'flex', alignItems: 'center' }}>
-                  <AutorenewIcon sx={{ color: '#16a34a' }} />
-                </Box>
-                <Box sx={{ textAlign: 'start' }}>
-                  <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
-                    مُزامنة التخزين السحابي (Google Drive)
-                  </Typography>
-                  <Typography variant="caption" sx={{ color: '#64748b', fontFamily: '"Cairo", sans-serif' }}>
-                    تأمين الأرصدة عبر الرفع المباشر لسجل الجرد إلى حساب غوغل درايف
-                  </Typography>
-                </Box>
-              </Box>
-
-              <Divider sx={{ mb: 3 }} />
-
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, flexGrow: 1, textAlign: 'start' }}>
-                <Typography variant="body2" sx={{ color: '#475569', lineHeight: 1.6, fontFamily: '"Cairo", sans-serif' }}>
-                  تتيح لك هذه الميزة تسجيل الدخول المباشر والآمن بحساب Google Drive الخاص بك (أو أي حساب ترغب بالرفع إليه) لرفع وحفظ كشوف الحركات والأصناف تلقائياً؛ كإجراء وقائي ضد تلف الأجهزة المحلية. يقوم النظام برفع ملفين معاً بضغطة زر واحدة: نسخة قاعدة البيانات الشاملة لغرض الاسترجاع (JSON)، وتقرير الجرد السنوي الكلي المنسق كجدول إلكتروني (Excel).
-                </Typography>
-
-
-
-                <Box sx={{ mt: 'auto', pt: 2, display: 'flex', width: '100%' }}>
-                  <Button
-                    variant="contained"
-                    onClick={handleGoogleDriveBackup}
-                    startIcon={<CloudUploadIcon sx={{ ml: 1, mr: -0.5 }} />}
-                    sx={{ 
-                      bgcolor: '#16a34a', 
-                      fontWeight: 'bold', 
-                      color: 'white',
-                      fontFamily: '"Cairo", sans-serif', 
-                      borderRadius: '12px', 
-                      px: 3, 
-                      py: 1.5, 
-                      width: '100%',
-                      '&:hover': { bgcolor: '#15803d' },
-                      boxShadow: '0 4px 12px rgba(22, 163, 74, 0.15)'
-                    }}
-                  >
-                    تصدير ومزامنة لـ Google Drive السحابي
-                  </Button>
-                </Box>
-              </Box>
-            </Paper>
-          </Grid>
-
           {/* Card 2.5: Dry Run Migration */}
           <Grid size={{ xs: 12, md: 12 }}>
             <Paper sx={{ p: 4, borderRadius: '20px', display: 'flex', flexDirection: 'column', bgcolor: 'white' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 3 }}>
                 <Box sx={{ p: 1, bgcolor: '#fef3c7', borderRadius: '12px', display: 'flex', alignItems: 'center' }}>
-                  <CloudUploadIcon sx={{ color: '#d97706' }} />
+                  <CloudUploadIcon sx={{ color: '#b45309' }} />
                 </Box>
                 <Box sx={{ textAlign: 'start' }}>
                   <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
                     فحص جاهزية النسخة الاحتياطية للترحيل السحابي
                   </Typography>
-                  <Typography variant="caption" sx={{ color: '#64748b', fontFamily: '"Cairo", sans-serif' }}>
+                  <Typography variant="caption" sx={{ color: '#566375', fontFamily: '"Cairo", sans-serif' }}>
                     تحقق من توافق النسخة الاحتياطية قبل الترحيل (Dry Run)
                   </Typography>
                 </Box>
@@ -2553,7 +2239,7 @@ export default function Settings() {
               <Divider sx={{ mb: 3 }} />
 
               <Box sx={{ textAlign: 'start' }}>
-                <Typography variant="body2" sx={{ color: '#d97706', fontWeight: 'bold', mb: 2, fontFamily: '"Cairo", sans-serif' }}>
+                <Typography variant="body2" sx={{ color: '#b45309', fontWeight: 'bold', mb: 2, fontFamily: '"Cairo", sans-serif' }}>
                   هذا فحص فقط؛ لا يرفع البيانات إلى السحابة ولا يعدّلها.
                 </Typography>
                 
@@ -2590,13 +2276,13 @@ export default function Settings() {
                           <Typography variant="body2">الإعدادات: {dryRunResult.expectedCounts.settings}</Typography>
                           <Typography variant="body2">سجلات التدقيق: {dryRunResult.expectedCounts.auditLogs}</Typography>
                           <Typography variant="body2">سجلات المولد: {dryRunResult.expectedCounts.generatorLogs}</Typography>
-                          <Typography variant="body2" sx={{ color: '#007ab7', fontWeight: 'bold' }}>الإجمالي: {Object.values(dryRunResult.expectedCounts).reduce((a, b) => a + b, 0)} مستند</Typography>
+                          <Typography variant="body2" sx={{ color: '#006da3', fontWeight: 'bold' }}>الإجمالي: {Object.values(dryRunResult.expectedCounts).reduce((a, b) => a + b, 0)} مستند</Typography>
                         </Box>
                       </Grid>
 
                       {dryRunResult.errorMessage && (
                         <Grid size={{ xs: 12 }}>
-                          <Typography variant="body2" sx={{ color: '#ef4444', mt: 1, fontWeight: 'bold' }}>رسالة الخطأ: {dryRunResult.errorMessage}</Typography>
+                          <Typography variant="body2" sx={{ color: '#c81e1e', mt: 1, fontWeight: 'bold' }}>رسالة الخطأ: {dryRunResult.errorMessage}</Typography>
                         </Grid>
                       )}
                     </Grid>
@@ -2649,13 +2335,13 @@ export default function Settings() {
                               <Typography variant="body2">الإعدادات: {executeResult.writtenCounts.settings}</Typography>
                               <Typography variant="body2">سجلات التدقيق: {executeResult.writtenCounts.auditLogs}</Typography>
                               <Typography variant="body2">سجلات المولد: {executeResult.writtenCounts.generatorLogs}</Typography>
-                              <Typography variant="body2" sx={{ color: '#007ab7', fontWeight: 'bold' }}>الإجمالي: {Object.values(executeResult.writtenCounts).reduce((a, b) => a + b, 0)} مستند</Typography>
+                              <Typography variant="body2" sx={{ color: '#006da3', fontWeight: 'bold' }}>الإجمالي: {Object.values(executeResult.writtenCounts).reduce((a, b) => a + b, 0)} مستند</Typography>
                             </Box>
                           </Grid>
 
                           {executeResult.errorMessage && (
                             <Grid size={{ xs: 12 }}>
-                              <Typography variant="body2" sx={{ color: '#ef4444', mt: 1, fontWeight: 'bold' }}>رسالة الخطأ: {executeResult.errorMessage}</Typography>
+                              <Typography variant="body2" sx={{ color: '#c81e1e', mt: 1, fontWeight: 'bold' }}>رسالة الخطأ: {executeResult.errorMessage}</Typography>
                             </Grid>
                           )}
                         </Grid>
@@ -2681,7 +2367,7 @@ export default function Settings() {
                   <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
                     فحص صلاحيات الوصول السحابي
                   </Typography>
-                  <Typography variant="caption" sx={{ color: '#64748b', fontFamily: '"Cairo", sans-serif' }}>
+                  <Typography variant="caption" sx={{ color: '#566375', fontFamily: '"Cairo", sans-serif' }}>
                     أداة فحص RBAC للقراءة فقط
                   </Typography>
                 </Box>
@@ -2713,11 +2399,11 @@ export default function Settings() {
                         <Grid size={{ xs: 12 }} key={idx}>
                           <Box sx={{ p: 2, bgcolor: 'white', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
                             <Typography variant="body2" sx={{ fontWeight: 'bold' }}>المسار: {t.path}</Typography>
-                            <Typography variant="body2" sx={{ color: '#64748b' }}>الصلاحية المطلوبة: {t.requiredPermission}</Typography>
+                            <Typography variant="body2" sx={{ color: '#566375' }}>الصلاحية المطلوبة: {t.requiredPermission}</Typography>
                             <Typography variant="body2" sx={{ mt: 1 }}>
                               النتيجة: {t.status === 'allowed' ? '✅ مسموح (allowed)' : t.status === 'permission-denied' ? '⛔ مرفوض (permission-denied)' : '❌ خطأ (unexpected-error)'}
                             </Typography>
-                            {t.details && <Typography variant="caption" sx={{ color: '#ef4444' }}>{t.details}</Typography>}
+                            {t.details && <Typography variant="caption" sx={{ color: '#c81e1e' }}>{t.details}</Typography>}
                           </Box>
                         </Grid>
                       ))}
@@ -2737,7 +2423,7 @@ export default function Settings() {
                   <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#1e293b', fontFamily: '"Cairo", sans-serif' }}>
                     مقارنة البيانات المحلية والسحابية
                   </Typography>
-                  <Typography variant="caption" sx={{ color: '#64748b', fontFamily: '"Cairo", sans-serif' }}>
+                  <Typography variant="caption" sx={{ color: '#566375', fontFamily: '"Cairo", sans-serif' }}>
                     مقارنة بيانات هذا الجهاز بالبيانات السحابية دون تعديلها.
                   </Typography>
                 </Box>
@@ -2867,7 +2553,7 @@ export default function Settings() {
                       </Grid>
                       {(comparisonReport.stockMismatchLocal?.length > 0 || comparisonReport.stockMismatchCloud?.length > 0) && (
                       <Grid size={{ xs: 12 }}>
-                        <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 1, color: '#ef4444' }}>أخطاء حساب الأرصدة (CurrentStock vs Sum):</Typography>
+                        <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 1, color: '#c81e1e' }}>أخطاء حساب الأرصدة (CurrentStock vs Sum):</Typography>
                         <pre style={{ fontSize: '12px', whiteSpace: 'pre-wrap', backgroundColor: '#fee2e2', padding: '10px', borderRadius: '8px', margin: 0 }}>
                           {JSON.stringify({ localMismatch: comparisonReport.stockMismatchLocal, cloudMismatch: comparisonReport.stockMismatchCloud }, null, 2)}
                         </pre>
@@ -2895,7 +2581,7 @@ export default function Settings() {
             <Paper sx={{ p: 4, borderRadius: '20px', bgcolor: 'white', display: 'flex', flexDirection: 'column' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 3 }}>
                 <Box sx={{ p: 1, bgcolor: '#f0fdf4', borderRadius: '12px', display: 'flex', alignItems: 'center' }}>
-                  <CloudDownloadIcon sx={{ color: '#16a34a' }} />
+                  <CloudDownloadIcon sx={{ color: '#15803d' }} />
                 </Box>
                 <Box sx={{ textAlign: 'start' }}>
                   <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#111827', fontFamily: '"Cairo", sans-serif' }}>
@@ -2916,7 +2602,7 @@ export default function Settings() {
                     <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: 1, color: '#0f172a', fontFamily: '"Cairo", sans-serif' }}>
                       ١. مصفوفة بطاقات الأصناف والمواد
                     </Typography>
-                    <Typography variant="body2" sx={{ color: '#64748b', mb: 3, fontSize: '0.82rem', fontFamily: '"Cairo", sans-serif', lineHeight: 1.6 }}>
+                    <Typography variant="body2" sx={{ color: '#566375', mb: 3, fontSize: '0.82rem', fontFamily: '"Cairo", sans-serif', lineHeight: 1.6 }}>
                       تنزيل الملف القياسي لتعبئة الأصناف والمواد المخزنية والمستودعات بشكل جماعي، ثم إعادة رفعه لتأسيس الأرصدة التلقائية دون الحاجة لإدخالها فرادى.
                     </Typography>
 
@@ -2925,7 +2611,7 @@ export default function Settings() {
                         variant="outlined"
                         onClick={handleDownloadItemsTemplate}
                         startIcon={<CloudDownloadIcon sx={{ ml: 1, mr: -0.5 }} />}
-                        sx={{ borderColor: '#007ab7', color: '#007ab7', borderRadius: '12px', fontWeight: 'bold', fontFamily: '"Cairo", sans-serif', py: 1.5, flex: 1, '&:hover': { bgcolor: 'rgba(0,122,183,0.05)', borderColor: '#006293' } }}
+                        sx={{ borderColor: '#007ab7', color: '#006da3', borderRadius: '12px', fontWeight: 'bold', fontFamily: '"Cairo", sans-serif', py: 1.5, flex: 1, '&:hover': { bgcolor: 'rgba(0,122,183,0.05)', borderColor: '#006293' } }}
                       >
                         تنزيل قالب الأصناف
                       </Button>
@@ -2955,7 +2641,7 @@ export default function Settings() {
                     <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: 1, color: '#0f172a', fontFamily: '"Cairo", sans-serif' }}>
                       ٢. قيود المعاملات والحركات المخزنية (توريد وصرف)
                     </Typography>
-                    <Typography variant="body2" sx={{ color: '#64748b', mb: 3, fontSize: '0.82rem', fontFamily: '"Cairo", sans-serif', lineHeight: 1.6 }}>
+                    <Typography variant="body2" sx={{ color: '#566375', mb: 3, fontSize: '0.82rem', fontFamily: '"Cairo", sans-serif', lineHeight: 1.6 }}>
                       تنزيل القالب المعد لتسجيل عمليات التوريد والصرف والاستهلاك جماعياً. تأكد من مطابقة أكواد الأصناف المكتوبة هنا بما هو معرف مسبقاً بقاعدة بيانات النظام لإجراء محاسبة الرصيد بدقة.
                     </Typography>
 
@@ -2964,7 +2650,7 @@ export default function Settings() {
                         variant="outlined"
                         onClick={handleDownloadTransactionsTemplate}
                         startIcon={<CloudDownloadIcon sx={{ ml: 1, mr: -0.5 }} />}
-                        sx={{ borderColor: '#16a34a', color: '#16a34a', borderRadius: '12px', fontWeight: 'bold', fontFamily: '"Cairo", sans-serif', py: 1.5, flex: 1, '&:hover': { bgcolor: 'rgba(22,163,74,0.05)', borderColor: '#15803d' } }}
+                        sx={{ borderColor: '#16a34a', color: '#15803d', borderRadius: '12px', fontWeight: 'bold', fontFamily: '"Cairo", sans-serif', py: 1.5, flex: 1, '&:hover': { bgcolor: 'rgba(22,163,74,0.05)', borderColor: '#15803d' } }}
                       >
                         تنزيل قالب الحركات
                       </Button>
@@ -3008,7 +2694,7 @@ export default function Settings() {
             >
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
                 <Box sx={{ p: 1.5, bgcolor: '#ffedd5', borderRadius: '14px', display: 'flex', alignItems: 'center' }}>
-                  <DeleteForeverIcon sx={{ color: '#ea580c', fontSize: 28 }} />
+                  <DeleteForeverIcon sx={{ color: '#c2410c', fontSize: 28 }} />
                 </Box>
                 <Box sx={{ textAlign: 'start' }}>
                   <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#9a3412', fontFamily: '"Cairo", sans-serif' }}>
@@ -3101,107 +2787,7 @@ export default function Settings() {
           )}
         </Grid>
       )}
-
-      {/* Google Drive Status Dialog */}
-      <Dialog 
-        open={driveBackupDialogOpen} 
-        onClose={() => {
-          if (driveStep === 5 || driveError) {
-            setDriveBackupDialogOpen(false);
-          }
-        }}
-        sx={{
-          '& .MuiDialog-paper': {
-            borderRadius: '20px',
-            p: 1,
-            maxWidth: '460px',
-            width: '100%',
-            direction: 'rtl'
-          }
-        }}
-      >
-        <DialogTitle sx={{ fontFamily: '"Cairo", sans-serif', fontWeight: 'bold', textAlign: 'center', color: driveError ? '#ef4444' : '#16a34a' }}>
-          {driveError ? '⚠️ فشل الاتصال أو الرفع السحابي' : '📤 تصدير ومزامنة البيانات سحابياً'}
-        </DialogTitle>
-        <DialogContent sx={{ textAlign: 'center' }}>
-          <Box sx={{ my: 2, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-            <Box sx={{ position: 'relative', display: 'inline-flex', justifyContent: 'center', mb: 3 }}>
-              {driveError ? (
-                <Box 
-                  sx={{ 
-                    width: 64, 
-                    height: 64, 
-                    borderRadius: '50%', 
-                    bgcolor: '#fef2f2', 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    justifyContent: 'center',
-                    border: '3px solid #ef4444'
-                  }}
-                >
-                  <Typography variant="h4" sx={{ color: '#ef4444' }}>✕</Typography>
-                </Box>
-              ) : driveStep < 5 ? (
-                <LoadingSpinner message="جاري تجهيز النسخة الاحتياطية..." />
-              ) : (
-                <Box 
-                  sx={{ 
-                    width: 64, 
-                    height: 64, 
-                    borderRadius: '50%', 
-                    bgcolor: '#f0fdf4', 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    justifyContent: 'center',
-                    border: '3px solid #16a34a'
-                  }}
-                >
-                  <Typography variant="h4" sx={{ color: '#16a34a' }}>✓</Typography>
-                </Box>
-              )}
-            </Box>
-
-            {driveError ? (
-              <Alert severity="error" sx={{ width: '100%', fontFamily: '"Cairo", sans-serif', textAlign: 'start', borderRadius: '12px', mb: 2 }}>
-                {driveError}
-              </Alert>
-            ) : (
-              <>
-                <Typography variant="body2" sx={{ fontWeight: 'bold', color: '#334155', mb: 1, fontFamily: '"Cairo", sans-serif' }}>
-                  {driveStep === 1 && 'جاري التحقق من الهوية وفتح نافذة تسجيل الدخول من Google...'}
-                  {driveStep === 2 && 'جاري توليد ملفات النسخ الاحتياطي (JSON و Excel)...'}
-                  {driveStep === 3 && 'جاري رفع ملف البيانات الشامل (JSON) إلى Google Drive...'}
-                  {driveStep === 4 && 'جاري رفع تقرير الجرد المنسق (Excel) إلى Google Drive...'}
-                  {driveStep === 5 && 'اكتمل النسخ السحابي بنجاح وتأمين الكشوفات! 🎉'}
-                </Typography>
-
-                <Typography variant="caption" sx={{ color: '#64748b', display: 'block', mb: 2, fontFamily: '"Cairo", sans-serif' }}>
-                  {driveStep < 5 
-                    ? 'يرجى عدم إغلاق هذه النافذة ريثما تكتمل جميع خطوات الرفع والتأمين السحابي...' 
-                    : `تم حفظ وتأمين ملفات البيانات والتقارير بنجاح باسم: ${settings.organizationName || 'backup'}_${new Date().toISOString().split('T')[0]}.xlsx / .json`}
-                </Typography>
-              </>
-            )}
-          </Box>
-        </DialogContent>
-        <DialogActions sx={{ justifyContent: 'center', pb: 3 }}>
-          <Button 
-            onClick={() => setDriveBackupDialogOpen(false)} 
-            variant="contained"
-            disabled={driveStep < 5 && !driveError}
-            sx={{ 
-              bgcolor: driveError ? '#ef4444' : '#16a34a', 
-              fontWeight: 'bold', 
-              fontFamily: '"Cairo", sans-serif', 
-              borderRadius: '10px', 
-              px: 4, 
-              '&:hover': { bgcolor: driveError ? '#dc2626' : '#15803d' } 
-            }}
-          >
-            إغلاق النافذة
-          </Button>
-        </DialogActions>
-      </Dialog>
+      </Box>
 
       {/* Pure Local Device Clear Confirm Dialog */}
       <Dialog
@@ -3373,14 +2959,14 @@ export default function Settings() {
           <DialogContentText sx={{ fontFamily: '"Cairo", sans-serif', color: '#475569', fontSize: '0.95rem', mt: 1, lineHeight: 1.7 }}>
             هل أنت متأكد من رغبتك في تعطيل وصول الموظف <strong>"{userToDelete?.fullName}"</strong> إلى النظام؟ سيبقى ملفه محفوظاً ويمكن إعادة تفعيله لاحقاً.
             <br />
-            <span style={{ color: '#ef4444', fontWeight: 'bold' }}>تنبيه:</span> سيُمنع هذا الحساب من الوصول إلى بيانات التطبيق. تبقى بياناته محفوظة ويمكن إعادة تفعيله لاحقًا (الحساب: <code>{userToDelete?.username}</code>).
+            <span style={{ color: '#c81e1e', fontWeight: 'bold' }}>تنبيه:</span> سيُمنع هذا الحساب من الوصول إلى بيانات التطبيق. تبقى بياناته محفوظة ويمكن إعادة تفعيله لاحقًا (الحساب: <code>{userToDelete?.username}</code>).
           </DialogContentText>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 3, gap: 1.5, direction: 'rtl' }}>
           <Button 
             onClick={() => setDeleteUserDialogOpen(false)} 
             variant="outlined"
-            sx={{ borderRadius: '10px', fontFamily: '"Cairo", sans-serif', flexGrow: 1, color: '#64748b', borderColor: '#cbd5e1' }}
+            sx={{ borderRadius: '10px', fontFamily: '"Cairo", sans-serif', flexGrow: 1, color: '#566375', borderColor: '#cbd5e1' }}
           >
             إلغاء الأمر 🛡️
           </Button>
@@ -3489,7 +3075,7 @@ export default function Settings() {
           <Button
             onClick={() => setPartnerFormOpen(false)}
             variant="outlined"
-            sx={{ borderRadius: '10px', fontFamily: '"Cairo", sans-serif', flexGrow: 1, color: '#64748b', borderColor: '#cbd5e1' }}
+            sx={{ borderRadius: '10px', fontFamily: '"Cairo", sans-serif', flexGrow: 1, color: '#566375', borderColor: '#cbd5e1' }}
           >
             إلغاء التعديل 🛡️
           </Button>
@@ -3543,7 +3129,7 @@ export default function Settings() {
         <DialogActions sx={{ px: 3, pb: 3, pt: 0, gap: 1 }}>
           <Button
             onClick={() => setMigrationConfirmDialogOpen(false)}
-            sx={{ fontFamily: '"Cairo", sans-serif', fontWeight: 'bold', color: '#64748b' }}
+            sx={{ fontFamily: '"Cairo", sans-serif', fontWeight: 'bold', color: '#566375' }}
             disabled={isExecutingMigration}
           >
             إلغاء
@@ -3586,14 +3172,14 @@ export default function Settings() {
           <DialogContentText sx={{ fontFamily: '"Cairo", sans-serif', color: '#475569', fontSize: '0.95rem', mt: 1, lineHeight: 1.7 }}>
             هل أنت متأكد من رغبتك في حذف الشريك <strong>"{partnerToDelete?.name}"</strong> بالكامل من النظام وسجل العناوين الرئيسي؟
             <br />
-            <span style={{ color: '#ef4444', fontWeight: 'bold' }}>تنبيه:</span> هذا الإجراء لن يحذف الحركات السابقة المرتبطة بهذا الاسم، ولكنه سيزيله من خيارات التعبئة التلقائية عند إنشاء الحركات الجديدة.
+            <span style={{ color: '#c81e1e', fontWeight: 'bold' }}>تنبيه:</span> هذا الإجراء لن يحذف الحركات السابقة المرتبطة بهذا الاسم، ولكنه سيزيله من خيارات التعبئة التلقائية عند إنشاء الحركات الجديدة.
           </DialogContentText>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 3, gap: 1.5, direction: 'rtl' }}>
           <Button
             onClick={() => setDeletePartnerDialogOpen(false)}
             variant="outlined"
-            sx={{ borderRadius: '10px', fontFamily: '"Cairo", sans-serif', flexGrow: 1, color: '#64748b', borderColor: '#cbd5e1' }}
+            sx={{ borderRadius: '10px', fontFamily: '"Cairo", sans-serif', flexGrow: 1, color: '#566375', borderColor: '#cbd5e1' }}
           >
             إلغاء الأمر 🛡️
           </Button>

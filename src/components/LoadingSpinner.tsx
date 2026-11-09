@@ -16,11 +16,11 @@ const LoadingSpinner: React.FC<LoadingSpinnerProps> = ({ message = "جاري ا�
         justifyContent: 'center',
         minHeight,
         p: 3,
-        color: '#64748b',
+        color: '#566375',
         textAlign: 'center',
       }}
     >
-      <CircularProgress size={40} thickness={4} sx={{ mb: 2, color: '#007ab7' }} />
+      <CircularProgress size={40} thickness={4} sx={{ mb: 2, color: '#006da3' }} />
       <Typography variant="body2" sx={{ fontFamily: '"Cairo", sans-serif', fontWeight: 600, animation: 'pulse 1.5s infinite ease-in-out' }}>
         {message}
       </Typography>

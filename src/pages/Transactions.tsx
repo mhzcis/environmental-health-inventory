@@ -36,6 +36,7 @@ import { useStorehouse } from '../context/StorehouseContext';
 
 import { InventoryTransaction, Material } from '../types';
 import { renderOption } from '../utils/emoji';
+import { localDateString } from '../utils/localDate';
 
 
 // Zod form validation for transaction
@@ -77,7 +78,7 @@ export default function Transactions() {
 
   const handleSmartDateChange = (range: string) => {
     setSmartDateRange(range);
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = localDateString();
     
     if (range === 'all') {
       setDateFrom('');
@@ -88,19 +89,19 @@ export default function Transactions() {
     } else if (range === 'yesterday') {
       const yesterday = new Date();
       yesterday.setDate(yesterday.getDate() - 1);
-      const yesterdayStr = yesterday.toISOString().split('T')[0];
+      const yesterdayStr = localDateString(yesterday);
       setDateFrom(yesterdayStr);
       setDateTo(yesterdayStr);
     } else if (range === 'last7') {
       const last7 = new Date();
       last7.setDate(last7.getDate() - 7);
-      const last7Str = last7.toISOString().split('T')[0];
+      const last7Str = localDateString(last7);
       setDateFrom(last7Str);
       setDateTo(todayStr);
     } else if (range === 'last30') {
       const last30 = new Date();
       last30.setDate(last30.getDate() - 30);
-      const last30Str = last30.toISOString().split('T')[0];
+      const last30Str = localDateString(last30);
       setDateFrom(last30Str);
       setDateTo(todayStr);
     } else if (range === 'currentMonth') {
@@ -201,13 +202,13 @@ export default function Transactions() {
       const selectedItems = ledgerTransactions.filter(t => selectedTransactionIds.includes(t.id));
       
       const titleHeader = 'كشف وسجل الحركات المخزنية المحددة جماعياً';
-      const filename = `كشف_حركات_المواد_المحددة_${new Date().toISOString().split('T')[0]}.pdf`;
+      const filename = `كشف_حركات_المواد_المحددة_${localDateString()}.pdf`;
       const headers = ['رقم السند', 'تاريخ العمل', 'المستودع', 'اسم وصنف المادة', 'كود الصنف', 'نظام الحركة', 'الكمية', 'الرصيد قبل', 'الرصيد بعد', 'جهة التعامل / المورد / المستلم'];
       
       const rows = selectedItems.flatMap(t => {
         let badgeColor = { bg: '#e2e8f0', text: '#334155' };
         if (t.transactionType === 'افتتاحي') badgeColor = { bg: '#dcfce7', text: '#15803d' };
-        else if (t.transactionType === 'وارد') badgeColor = { bg: '#e0f2fe', text: '#007ab7' };
+        else if (t.transactionType === 'وارد') badgeColor = { bg: '#e0f2fe', text: '#006da3' };
         else if (t.transactionType === 'صادر') badgeColor = { bg: '#fee2e2', text: '#b91c1c' };
         else if (t.transactionType === 'مستهلك') badgeColor = { bg: '#fffbeb', text: '#b45309' };
         else if (t.transactionType === 'تحويل') badgeColor = { bg: '#f3e8ff', text: '#6b21a8' };
@@ -296,7 +297,7 @@ export default function Transactions() {
       const selectedItems = ledgerTransactions.filter(t => selectedTransactionIds.includes(t.id));
       
       const titleHeader = 'كشف وسجل الحركات المخزنية المحددة جماعياً';
-      const filename = `كشف_حركات_المواد_المحددة_${new Date().toISOString().split('T')[0]}.xlsx`;
+      const filename = `كشف_حركات_المواد_المحددة_${localDateString()}.xlsx`;
       const headers = ['رقم السند', 'تاريخ العمل', 'المستودع', 'اسم وصنف المادة', 'كود الصنف', 'نظام الحركة', 'الكمية', 'الرصيد قبل', 'الرصيد بعد', 'جهة التعامل / المورد / المستلم'];
       
       const rows = selectedItems.flatMap(t => {
@@ -622,7 +623,7 @@ export default function Transactions() {
           <Typography variant="h5" sx={{ fontWeight: 'bold', color: '#1e293b' }}>
             الحركات وإيصالات التدفق المخزني
           </Typography>
-          <Typography variant="body2" sx={{ color: '#64748b', mt: 0.5 }}>
+          <Typography variant="body2" sx={{ color: '#566375', mt: 0.5 }}>
             تسجيل وإدارة عمليات التوريد والصرف والاستهلاك اليومي والسنوي مع تطبيق قيود التوازن المالي
           </Typography>
         </Box>
@@ -823,7 +824,7 @@ export default function Transactions() {
 
           {/* Results count indicator */}
           <Box className="col-span-1 md:col-span-12" sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 1, borderTop: '1px solid #f1f5f9', pt: 1.5, direction: 'rtl' }}>
-            <Typography variant="body2" sx={{ fontWeight: 'bold', color: '#64748b', fontFamily: '"Cairo", sans-serif' }}>
+            <Typography variant="body2" sx={{ fontWeight: 'bold', color: '#566375', fontFamily: '"Cairo", sans-serif' }}>
               وجدت: {filteredTransactions.length} حركة مطابقة للتصفية الحالية
             </Typography>
             <Tooltip title="تفريغ كافة فلاتر البحث وإعادتها للافتراضي">
@@ -942,6 +943,7 @@ export default function Transactions() {
               <TableCell padding="checkbox">
                 <Checkbox
                   id="select-all-transactions"
+                  slotProps={{ input: { 'aria-label': 'تحديد كل الحركات الظاهرة' } }}
                   indeterminate={selectedTransactionIds.length > 0 && selectedTransactionIds.length < filteredTransactions.length}
                   checked={filteredTransactions.length > 0 && selectedTransactionIds.length === filteredTransactions.length}
                   onChange={(e) => {
@@ -974,7 +976,7 @@ export default function Transactions() {
                 if (tx.transactionType === 'افتتاحي') {
                   badgeColor = { bg: '#dcfce7', text: '#15803d' };
                 } else if (tx.transactionType === 'وارد') {
-                  badgeColor = { bg: '#e0f2fe', text: '#007ab7' };
+                  badgeColor = { bg: '#e0f2fe', text: '#006da3' };
                 } else if (tx.transactionType === 'صادر') {
                   badgeColor = { bg: '#fee2e2', text: '#b91c1c' };
                 } else if (tx.transactionType === 'مستهلك') {
@@ -997,6 +999,7 @@ export default function Transactions() {
                     <TableCell padding="checkbox">
                       <Checkbox
                         id={`select-transaction-${tx.id}`}
+                        slotProps={{ input: { 'aria-label': `تحديد الحركة ${tx.transactionNumber || ''}`.trim() } }}
                         checked={selectedTransactionIds.includes(tx.id)}
                         onChange={(e) => {
                           if (e.target.checked) {
@@ -1007,7 +1010,7 @@ export default function Transactions() {
                         }}
                       />
                     </TableCell>
-                    <TableCell sx={{ fontFamily: 'monospace', fontWeight: 'bold', color: '#007ab7' }}><span dir="ltr">{tx.transactionNumber || '---'}</span></TableCell>
+                    <TableCell sx={{ fontFamily: 'monospace', fontWeight: 'bold', color: '#006da3' }}><span dir="ltr">{tx.transactionNumber || '---'}</span></TableCell>
                     <TableCell sx={{ fontFamily: 'monospace' }}>{tx.date}</TableCell>
                     <TableCell sx={{ color: '#475569', fontSize: '0.85rem', fontWeight: selectedStorehouse === 'all' ? 'bold' : 'normal' }}>
                       {selectedStorehouse === 'all' ? 'جميع المستودعات (الإجمالي)' : (tx.storehouse || '')}
@@ -1015,22 +1018,22 @@ export default function Transactions() {
                     <TableCell >
                       <Box>
                         <Typography variant="body2" sx={{ fontWeight: 'bold', color: '#1e293b' }}>{tx.itemName}</Typography>
-                        <Typography variant="caption" sx={{ color: '#0284c7', fontWeight: 600 }}>📦 {tx.itemCategory || tx.itemType || 'تصنيف عام'}</Typography>
+                        <Typography variant="caption" sx={{ color: '#0369a1', fontWeight: 600 }}>📦 {tx.itemCategory || tx.itemType || 'تصنيف عام'}</Typography>
                       </Box>
                     </TableCell>
-                    <TableCell sx={{ fontFamily: 'monospace', fontWeight: 'bold', color: '#64748b' }}>{tx.itemCode}</TableCell>
+                    <TableCell sx={{ fontFamily: 'monospace', fontWeight: 'bold', color: '#566375' }}>{tx.itemCode}</TableCell>
                     <TableCell align="center">
                       <Box sx={{ px: 1.5, py: 0.5, borderRadius: '12px', bgcolor: badgeColor.bg, color: badgeColor.text, display: 'inline-block', fontSize: '11px', fontWeight: 'bold' }}>
                         {tx.transactionType}
                       </Box>
                     </TableCell>
-                    <TableCell align="center" sx={{ fontWeight: 'bold', color: isInbound ? '#15803d' : '#ef4444' }}>
+                    <TableCell align="center" sx={{ fontWeight: 'bold', color: isInbound ? '#15803d' : '#c81e1e' }}>
                       <span dir="ltr">{isInbound ? '+' : '-'}{tx.quantity}</span> {tx.unit || 'وحدة'}
                     </TableCell>
-                    <TableCell align="center" sx={{ color: '#64748b' }}>{tx.displayStockBefore}</TableCell>
+                    <TableCell align="center" sx={{ color: '#566375' }}>{tx.displayStockBefore}</TableCell>
                     <TableCell align="center" sx={{ fontWeight: 'bold', color: '#111827' }}>{tx.displayStockAfter}</TableCell>
                     <TableCell sx={{ fontSize: '0.82rem', color: '#475569' }}>{tx.supplierOrReceiver}</TableCell>
-                    <TableCell sx={{ fontSize: '0.8rem', color: '#64748b' }}>{tx.executedBy}</TableCell>
+                    <TableCell sx={{ fontSize: '0.8rem', color: '#566375' }}>{tx.executedBy}</TableCell>
                     <TableCell align="center" sx={{ position: 'sticky', right: 0, zIndex: 1, bgcolor: 'inherit', boxShadow: '2px 0 5px -2px rgba(0,0,0,0.1)', borderLeft: '1px solid #e2e8f0' }}>
                       <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 1, minWidth: '160px' }}>
                         {/* Slot 1: Attachment (Width: 36px) */}
@@ -1039,7 +1042,7 @@ export default function Transactions() {
                             <Tooltip title="عرض كرت الاستلام / مستند الحركة المرفق">
                               <IconButton 
                                 size="small" 
-                                sx={{ color: '#059669' }} 
+                                sx={{ color: '#047857' }} 
                                 onClick={() => {
                                   setViewingAttachment(tx.attachment || null);
                                   setOpenAttachmentDialog(true);
@@ -1054,7 +1057,7 @@ export default function Transactions() {
                         {/* Slot 2: Print (Width: 36px) */}
                         <Box sx={{ width: 36, display: 'flex', justifyContent: 'center' }}>
                           <Tooltip title="معاينة وطباعة السند المخزني">
-                            <IconButton size="small" disabled={!dataService.hasPermission('reports_print')} sx={{ color: '#0284c7' }} onClick={() => handleOpenVoucher(tx)}>
+                            <IconButton size="small" disabled={!dataService.hasPermission('reports_print')} sx={{ color: '#0369a1' }} onClick={() => handleOpenVoucher(tx)}>
                               <PrintIcon fontSize="small" />
                             </IconButton>
                           </Tooltip>
@@ -1069,7 +1072,7 @@ export default function Transactions() {
                               </IconButton>
                             </Tooltip>
                           ) : (
-                            <Chip label="الحذف غير مسموح" size="small" sx={{ height: 20, fontSize: '9px', fontWeight: 'bold', bgcolor: '#f1f5f9', color: '#64748b' }} />
+                            <Chip label="الحذف غير مسموح" size="small" sx={{ height: 20, fontSize: '9px', fontWeight: 'bold', bgcolor: '#f1f5f9', color: '#566375' }} />
                           )}
                         </Box>
                       </Box>
@@ -1082,14 +1085,14 @@ export default function Transactions() {
                         <TableCell padding="checkbox" />
                         <TableCell />
                         <TableCell />
-                        <TableCell sx={{ color: '#0284c7', fontWeight: 'bold' }}>↳ {warehouse}</TableCell>
-                        <TableCell sx={{ color: '#64748b' }}>↳ تفصيل رصيد {tx.itemName}</TableCell>
+                        <TableCell sx={{ color: '#0369a1', fontWeight: 'bold' }}>↳ {warehouse}</TableCell>
+                        <TableCell sx={{ color: '#566375' }}>↳ تفصيل رصيد {tx.itemName}</TableCell>
                         <TableCell />
                         <TableCell align="center"><Chip label="تفصيل" size="small" variant="outlined" /></TableCell>
-                        <TableCell align="center" sx={{ color: warehouse === tx.storehouse ? (isInbound ? '#15803d' : '#ef4444') : '#94a3b8' }}>
+                        <TableCell align="center" sx={{ color: warehouse === tx.storehouse ? (isInbound ? '#15803d' : '#c81e1e') : '#566375' }}>
                           {warehouse === tx.storehouse ? <><span dir="ltr">{isInbound ? '+' : '-'}{tx.quantity}</span> {tx.unit || 'وحدة'}</> : '—'}
                         </TableCell>
-                        <TableCell align="center" sx={{ color: '#64748b' }}>{tx.displayWarehouseStockBefore?.[warehouse] ?? 0}</TableCell>
+                        <TableCell align="center" sx={{ color: '#566375' }}>{tx.displayWarehouseStockBefore?.[warehouse] ?? 0}</TableCell>
                         <TableCell align="center" sx={{ fontWeight: 'bold' }}>{tx.displayWarehouseStockAfter?.[warehouse] ?? 0}</TableCell>
                         <TableCell colSpan={3} />
                       </TableRow>
@@ -1140,7 +1143,7 @@ export default function Transactions() {
         onClose={() => setOpenDeleteDialog(false)}
         slotProps={{ paper: { sx: { p: 1, direction: 'rtl' } } }}
       >
-        <DialogTitle sx={{ fontWeight: 'bold', color: '#ef4444' }}>تحذير محاسبي هام</DialogTitle>
+        <DialogTitle sx={{ fontWeight: 'bold', color: '#c81e1e' }}>تحذير محاسبي هام</DialogTitle>
         <DialogContent>
           <Typography variant="body1" sx={{ mb: 2 }}>
             هل أنت متأكد تماماً من رغبتك في حذف وإلغاء الحركة المخزنية رقم: <strong>{transactionToDelete?.transactionNumber || transactionToDelete?.id}</strong> على صنف: <strong>{transactionToDelete?.itemName}</strong>؟
@@ -1177,7 +1180,7 @@ export default function Transactions() {
         onClose={() => setOpenBulkDeleteDialog(false)}
         slotProps={{ paper: { sx: { p: 1, direction: 'rtl' } } }}
       >
-        <DialogTitle sx={{ fontWeight: 'bold', color: '#ef4444' }}>تحذير إلغاء جماعي هام</DialogTitle>
+        <DialogTitle sx={{ fontWeight: 'bold', color: '#c81e1e' }}>تحذير إلغاء جماعي هام</DialogTitle>
         <DialogContent>
           <Typography variant="body1" sx={{ mb: 2 }}>
             هل أنت متأكد من التراجع عن وحذف <strong>{selectedTransactionIds.length}</strong> من الحركات المخزنية المحددة نهائياً؟
@@ -1251,7 +1254,7 @@ export default function Transactions() {
               {/* General Voucher Info Grid */}
               <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2 }}>
                 <Box sx={{ p: 1.5, bgcolor: '#f8fafc', borderRadius: '8px' }}>
-                  <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 'bold', display: 'block' }}>
+                  <Typography variant="caption" sx={{ color: '#566375', fontWeight: 'bold', display: 'block' }}>
                     {getSupplierOrReceiverLabel(transactionToPrint.transactionType)}:
                   </Typography>
                   <Typography variant="body1" sx={{ fontWeight: 'bold', color: '#1e293b', mt: 0.5 }}>
@@ -1259,7 +1262,7 @@ export default function Transactions() {
                   </Typography>
                 </Box>
                 <Box sx={{ p: 1.5, bgcolor: '#f8fafc', borderRadius: '8px' }}>
-                  <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 'bold', display: 'block' }}>مسجّل العملية في النظام:</Typography>
+                  <Typography variant="caption" sx={{ color: '#566375', fontWeight: 'bold', display: 'block' }}>مسجّل العملية في النظام:</Typography>
                   <Typography variant="body1" sx={{ fontWeight: 'bold', color: '#1e293b', mt: 0.5 }}>
                     {transactionToPrint.executedBy}
                   </Typography>
@@ -1375,7 +1378,7 @@ export default function Transactions() {
 
               {/* Notes */}
               <Box>
-                <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 'bold', display: 'block', mb: 0.5 }}>المبررات وملاحظات الصرف والتشغيل المدونة:</Typography>
+                <Typography variant="caption" sx={{ color: '#566375', fontWeight: 'bold', display: 'block', mb: 0.5 }}>المبررات وملاحظات الصرف والتشغيل المدونة:</Typography>
                 <Typography variant="body2" sx={{ p: 2, bg: '#f8fafc', borderRadius: '8px', minHeight: '60px', color: '#1e293b' }}>
                   {transactionToPrint.notes || 'لا يوجد ملاحظات إدارية أو إرشادية مسجلة في هذا السند.'}
                 </Typography>
@@ -1394,7 +1397,7 @@ export default function Transactions() {
                 
                 return (
                   <Box>
-                    <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 'bold', display: 'block', mb: 0.5 }}>مستند الاستلام أو التسليم المرفق مخزنياً:</Typography>
+                    <Typography variant="caption" sx={{ color: '#566375', fontWeight: 'bold', display: 'block', mb: 0.5 }}>مستند الاستلام أو التسليم المرفق مخزنياً:</Typography>
                     <Box sx={{ p: 1, borderRadius: '8px', bgcolor: '#fff', display: 'flex', justifyContent: 'center' }}>
                       <img 
                         src={hasAttachment} 
@@ -1408,7 +1411,7 @@ export default function Transactions() {
 
               {/* Fake aesthetic barcode */}
               <Box sx={{ textAlign: 'center', pt: 1 }}>
-                <Typography sx={{ fontFamily: 'monospace', letterSpacing: '4px', color: '#64748b', fontSize: '10px' }}>
+                <Typography sx={{ fontFamily: 'monospace', letterSpacing: '4px', color: '#566375', fontSize: '10px' }}>
                   ||||| | |||| || ||| | ||| |||| | | | {transactionToPrint.id}
                 </Typography>
               </Box>
@@ -1662,7 +1665,7 @@ export default function Transactions() {
                 ||||| | |||| || ||| | ||| |||| | | | {transactionToPrint.transactionNumber || transactionToPrint.id}
               </Typography>
               <Typography sx={{ fontFamily: 'monospace', color: '#000', fontSize: '11px', fontWeight: 'bold' }}>
-                سند رسمي مشفر ومؤرشف إلكترونياً - رقم {transactionToPrint.transactionNumber || transactionToPrint.id}
+                سند صادر من نظام إدارة المخزون - رقم {transactionToPrint.transactionNumber || transactionToPrint.id}
               </Typography>
             </Box>
           </Box>
@@ -1696,7 +1699,7 @@ export default function Transactions() {
               }}
             />
           ) : (
-            <Typography variant="body2" sx={{ color: '#64748b', fontStyle: 'italic', fontFamily: '"Cairo", sans-serif' }}>
+            <Typography variant="body2" sx={{ color: '#566375', fontStyle: 'italic', fontFamily: '"Cairo", sans-serif' }}>
               لا يوجد مستند مرفق لهذه الحركة.
             </Typography>
           )}

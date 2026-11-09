@@ -11,16 +11,17 @@ import { Material, InventoryTransaction } from '../types';
 import { dataService } from '../services/dataService';
 import { useStorehouse } from '../context/StorehouseContext';
 import { renderOption } from '../utils/emoji';
+import { localDateString } from '../utils/localDate';
 
 
 export const materialSchema = zod.object({
-  category: zod.string().min(1, { message: 'يرجى اختيار تصنيف صالح' }),
+  category: zod.string().trim().min(1, { message: 'يرجى اختيار تصنيف صالح' }),
   code: zod.string().optional(),
-  name: zod.string().min(3, { message: 'الاسم يجب أن يكون 3 حروف على الأقل' }),
+  name: zod.string().trim().min(3, { message: 'الاسم يجب أن يكون 3 حروف على الأقل' }),
   initialStock: zod.coerce.number({ message: 'الرصيد الابتدائي يجب أن يكون رقماً' }),
   minimumStock: zod.coerce.number({ message: 'الحد الأدنى يجب أن يكون رقماً' }).min(0, { message: 'الحد الأدنى يجب أن يكون صفر أو أكثر' }),
-  storageLocation: zod.string().min(1, { message: 'يرجى تحديد المستودع' }),
-  unit: zod.string().min(1, { message: 'يرجى تحديد وحدة القياس' }),
+  storageLocation: zod.string().trim().min(1, { message: 'يرجى تحديد المستودع' }),
+  unit: zod.string().trim().min(1, { message: 'يرجى تحديد وحدة القياس' }),
   notes: zod.string().optional(),
   productionDate: zod.string().optional(),
   expiryDate: zod.string().optional(),
@@ -222,7 +223,7 @@ export default function MaterialFormDialog({ open, onClose, selectedMaterial, on
           if (isNew && data.initialStock > 0) {
             const initTx: InventoryTransaction = {
               id: `tr-init-${itemId}`,
-              date: new Date().toISOString().split('T')[0],
+              date: localDateString(),
               itemType: (data.category?.includes('مبيد') || data.category?.includes('مبيدات')) ? 'مبيد' : 'مادة',
               itemCategory: data.category,
               itemId,
@@ -321,7 +322,7 @@ export default function MaterialFormDialog({ open, onClose, selectedMaterial, on
                   bgcolor: '#f8fafc',
                   '& .MuiInputBase-root': {
                     pointerEvents: 'none',
-                    color: '#64748b'
+                    color: '#566375'
                   },
                   '& .MuiOutlinedInput-notchedOutline': {
                     borderColor: '#e2e8f0 !important'
@@ -348,6 +349,7 @@ export default function MaterialFormDialog({ open, onClose, selectedMaterial, on
                 placeholder="مثال: 100"
                 disabled={!!selectedMaterial}
                 {...register('initialStock')}
+                slotProps={{ htmlInput: { step: 'any' } }}
                 error={!!errors.initialStock}
                 helperText={selectedMaterial ? "الرصيد الابتدائي مسجل مسبقاً" : errors.initialStock?.message || "سيقوم النظام بتوريد رصيد بداية أوتوماتيكي"}
                 onFocus={(e) => e.target.select()}
@@ -360,6 +362,7 @@ export default function MaterialFormDialog({ open, onClose, selectedMaterial, on
                 label="حد الأمان الأدنى"
                 placeholder="مثال: 10"
                 {...register('minimumStock', { valueAsNumber: true })}
+                slotProps={{ htmlInput: { step: 'any' } }}
                 onFocus={(e) => e.target.select()}
                 error={!!errors.minimumStock}
                 helperText={errors.minimumStock?.message || "كمية التنبيه للاستنفاد"}
@@ -384,7 +387,7 @@ export default function MaterialFormDialog({ open, onClose, selectedMaterial, on
             {watchInitialStock > 0 && (
               <Grid size={12}>
                 <Box sx={{ p: 2, bgcolor: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '10px' }}>
-                  <Typography variant="body2" sx={{ color: '#0284c7', fontWeight: 'bold', mb: 0.5 }}>
+                  <Typography variant="body2" sx={{ color: '#0369a1', fontWeight: 'bold', mb: 0.5 }}>
                     بيان الرصيد الافتتاحي
                   </Typography>
                   <Typography variant="body1" sx={{ color: '#0369a1' }}>
@@ -414,7 +417,7 @@ export default function MaterialFormDialog({ open, onClose, selectedMaterial, on
               </TextField>
             </Grid>
             <Grid size={12}>
-              <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: '#64748b', mb: 1, mt: 1 }}>بيانات الجودة والسلامة (اختياري)</Typography>
+              <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: '#566375', mb: 1, mt: 1 }}>بيانات الجودة والسلامة (اختياري)</Typography>
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
               <TextField
@@ -479,7 +482,7 @@ export default function MaterialFormDialog({ open, onClose, selectedMaterial, on
                       onChange={(e) => setSaveNewSupplier(e.target.checked)}
                       style={{ marginLeft: '8px' }}
                     />
-                    <label htmlFor="saveSupplier" style={{ fontSize: '14px', color: '#64748b', cursor: 'pointer' }}>حفظ هذا المورد في الإعدادات</label>
+                    <label htmlFor="saveSupplier" style={{ fontSize: '14px', color: '#566375', cursor: 'pointer' }}>حفظ هذا المورد في الإعدادات</label>
                   </Box>
                 </Box>
               )}
@@ -525,7 +528,7 @@ export default function MaterialFormDialog({ open, onClose, selectedMaterial, on
           <Button 
             onClick={onClose} 
             variant="outlined" 
-            sx={{ px: 3, py: 1.5, borderRadius: '10px', color: '#64748b', borderColor: '#e2e8f0', '&:hover': { borderColor: '#cbd5e1', bgcolor: '#f8fafc' } }}
+            sx={{ px: 3, py: 1.5, borderRadius: '10px', color: '#566375', borderColor: '#e2e8f0', '&:hover': { borderColor: '#cbd5e1', bgcolor: '#f8fafc' } }}
           >
             إلغاء
           </Button>

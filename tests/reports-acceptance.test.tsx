@@ -10,7 +10,7 @@ vi.mock('../src/context/StorehouseContext',()=>({useStorehouse:()=>({selectedSto
 vi.mock('../src/utils/printHtml',()=>({requireStableStringPart:(s:any)=>{if(typeof s!=='string'||!s.trim())throw new Error('invalid id');return s.trim();},exportToPDF:(...a:any[])=>fake.pdf(...a)}));
 vi.mock('file-saver',()=>({saveAs:(...a:any[])=>fake.save(...a)}));
 vi.mock('../src/components/CreateTransactionModal',()=>({default:()=>null}));
-vi.mock('../src/services/supabaseOutbox',()=>({subscribeInventoryOutbox:()=>()=>{},InventoryPendingError:class extends Error {constructor(readonly mutationId:string,readonly blocked:boolean){super('QA pending');}}}));
+vi.mock('../src/services/supabaseOutbox',()=>({subscribeInventoryOutbox:()=>()=>{},inventoryRequestLabelAr:()=>'طلب محفوظ',rejectedGroup:(rows:any[])=>rows.filter((r:any)=>r.status==='blocked'),InventoryPendingError:class extends Error {constructor(readonly mutationId:string,readonly blocked:boolean){super('QA pending');}}}));
 import InventorySyncPanel from '../src/components/InventorySyncPanel';
 import {InventoryPendingError} from '../src/services/supabaseOutbox';
 import Reports from '../src/pages/Reports';

@@ -1,4 +1,4 @@
-import { type InventorySyncOperation, runInventoryDeviceReset, getInventoryOutboxCounts, subscribeInventoryOutbox, cancelRejectedInventoryOutbox, enqueueInventoryMutation, enqueueInventoryRestore, InventoryPendingError, listInventoryOutbox, resumeInventoryProjection, retryInventoryOutbox } from './supabaseOutbox';
+import { registerInventoryAckPublisher, startInventoryOutboxAutoResume, type InventorySyncOperation, runInventoryDeviceReset, getInventoryOutboxCounts, subscribeInventoryOutbox, cancelRejectedInventoryOutbox, enqueueInventoryMutation, enqueueInventoryRestore, InventoryPendingError, listInventoryOutbox, resumeInventoryProjection, retryInventoryOutbox } from './supabaseOutbox';
 import { IndexedDbSyncQueueStore } from './syncQueueStore';
 import { composeSupabaseAppSettings } from './supabaseSettings';
 import { Material, InventoryTransaction, AuditLog, AppSettings, SystemUser, GeneratorLogEntry, GeneratorLogSimulationResult, type AuditEventContext } from '../types';
@@ -171,6 +171,7 @@ import {
 import { bindDiagnosticsSession, classifyError, recordDiagnostic } from './operationalDiagnostics';
 import { safeErrorDetail, safeResultMessage, safeUserMessage } from './safeUserMessage';
 import { clearUnattributedRuntimeAlert } from './unattributedRuntimeAlert';
+import { localDateString } from '../utils/localDate';
 
 const localStorage = offlineProjectionStorage;
 
@@ -1888,7 +1889,7 @@ export const dataService = {
     }
 
     const warehouseEntities = getStorehouseEntities(dataService.getSettings());
-    const integrity = validateInventoryDataset(nextTransactions, { materials: rawMaterials, storehouses: warehouseEntities });
+    const integrity = validateInventoryDataset(nextTransactions, { materials: rawMaterials, storehouses: warehouseEntities, materialReferencesUnreadable: !dataService.hasPermission('materials_view') });
     const legacyTransferIds = new Set(nextTransactions.filter((tx) => tx.transactionType === 'تحويل' && !tx.operationId && !tx.pairedTransactionId).map((tx) => tx.id));
     const blockingErrors = integrity.errors.filter((error) =>
       !(error.code === 'TRANSFER_OPERATION_REQUIRED' && !!error.transactionId && legacyTransferIds.has(error.transactionId))
@@ -2212,6 +2213,10 @@ export const dataService = {
         await resumeInventoryProjection(applyInventoryProjection);
         return { success: true, status: 'pending-local', message: 'توجد طلبات محفوظة على الجهاز تنتظر الإقرار؛ راجع لوحة المزامنة.' };
       }
+      // QA-20261108 SES-06: requests queued by ANOTHER account stay with their owner (never sent as, nor deletable by, this account).
+      if (await new IndexedDbSyncQueueStore().countAll() > 0) {
+        throw new Error('على هذا الجهاز طلبات محفوظة لحساب آخر لم يؤكدها الخادم بعد. لن تُرسل باسمك ولن تُحذف. اطلب من صاحب تلك الطلبات تسجيل الدخول على هذا الجهاز لإرسالها، ثم سجّل دخولك.');
+      }
       await assertNoOutstandingSyncWork(false);
       let materials: Material[] = [];
       let transactions: InventoryTransaction[] = [];
@@ -2281,6 +2286,7 @@ export const dataService = {
           const integrity = validateInventoryDataset(transactions as IntegrityTransaction[], {
             materials,
             storehouses: getStorehouseEntities(settings),
+            materialReferencesUnreadable: !user.permissions.includes('materials_view'),
           });
           if (!integrity.valid) {
             return {
@@ -2300,20 +2306,29 @@ export const dataService = {
 
       await assertNoOutstandingSyncWork(false);
       if (getCurrentAuthUser()?.uid !== authUser.uid) throw new Error('INVENTORY_SESSION_CHANGED');
+      // QA-20261106 SES-03: never leave a previous account's cache for a collection this account may not read.
       if (user.permissions.includes('materials_view')) {
         localStorage.setItem(STORAGE_KEYS.MATERIALS, JSON.stringify(materials));
+      } else {
+        localStorage.removeItem(STORAGE_KEYS.MATERIALS);
       }
       if (user.permissions.includes('transactions_view')) {
         localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
+      } else {
+        localStorage.removeItem(STORAGE_KEYS.TRANSACTIONS);
       }
       if (settings) {
         localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
       }
       if (user.permissions.includes('audit_view')) {
         localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify(auditLogs));
+      } else {
+        localStorage.removeItem(STORAGE_KEYS.AUDIT_LOGS);
       }
       if (user.permissions.includes('generator_log')) {
         localStorage.setItem(STORAGE_KEYS.GENERATOR_LOGS, JSON.stringify(generatorLogs));
+      } else {
+        localStorage.removeItem(STORAGE_KEYS.GENERATOR_LOGS);
       }
       localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
 
@@ -2379,6 +2394,12 @@ export const dataService = {
       try {
         sessionStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
         localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
+        // QA-20261106 SES-03: do not leave the signed-out account's business data readable on a shared device.
+        // Pending writes live in the IndexedDB outbox (not these keys) and are untouched.
+        for (const key of [STORAGE_KEYS.MATERIALS, STORAGE_KEYS.PESTICIDES, STORAGE_KEYS.TRANSACTIONS,
+          STORAGE_KEYS.AUDIT_LOGS, STORAGE_KEYS.USERS, STORAGE_KEYS.GENERATOR_LOGS]) {
+          localStorage.removeItem(key);
+        }
       } catch {
         // Ignore storage errors
       }
@@ -3215,7 +3236,7 @@ export const dataService = {
       baseNumber = `T-${String(seq).padStart(4, '0')}`;
     } while (existingNumbers.has(`${baseNumber}-OUT`) || existingNumbers.has(`${baseNumber}-IN`));
 
-    const dateStr = transactionDate || new Date().toISOString().split('T')[0];
+    const dateStr = transactionDate || localDateString();
     const now = Date.now();
     const operationId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
       ? `transfer-${crypto.randomUUID()}`
@@ -3843,3 +3864,18 @@ export async function initCloudSync() {
 
 // A local queue change refreshes health without a network request or timer.
 subscribeInventoryOutbox(() => dataService.notify());
+
+// QA-20261108 SYNC-03: queued requests resume automatically (reconnect, focus,
+// sign-in/app reopen, backoff). Acks from any drain update the local audit view;
+// when the queue becomes empty the canonical server snapshot is reloaded.
+registerInventoryAckPublisher(ack => { try { publishInventoryAck(ack); } catch { /* ack already recorded server-side */ } });
+startInventoryOutboxAutoResume(result => {
+  if (!result.sent) return;
+  lastCloudWriteError = null; lastCloudWriteErrorPersistence = 'unknown';
+  dataService.notify();
+  void listInventoryOutbox().then(async rows => {
+    const current = dataService.getCurrentUser();
+    if (!rows.length && current) await dataService.bootstrapFreshDeviceData(current);
+    dataService.notify();
+  }).catch(() => undefined);
+});

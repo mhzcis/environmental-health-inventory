@@ -36,6 +36,7 @@ import { dataService } from '../services/dataService';
 import { GeneratorLogEntry, GeneratorLogSimulationResult } from '../types';
 import { exportToExcel } from '../utils/exportExcel';
 import { exportToPDF } from '../utils/printHtml';
+import { localDateString } from '../utils/localDate';
 
 const ARABIC_DAYS = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
 
@@ -115,7 +116,7 @@ export default function GeneratorLog() {
     // Last 30 days
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const thirtyDaysAgoStr = thirtyDaysAgo.toISOString().split('T')[0];
+    const thirtyDaysAgoStr = localDateString(thirtyDaysAgo);
 
     const logsLast30Days = sortedLogs.filter((item) => item.date >= thirtyDaysAgoStr);
     const maxHoursLast30Days = logsLast30Days.reduce((max, item) => Math.max(max, item.operatingHours), 0);
@@ -138,7 +139,7 @@ export default function GeneratorLog() {
   const lineChartData = useMemo(() => {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const thirtyDaysAgoStr = thirtyDaysAgo.toISOString().split('T')[0];
+    const thirtyDaysAgoStr = localDateString(thirtyDaysAgo);
 
     return logs
       .filter((item) => item.date >= thirtyDaysAgoStr)
@@ -188,7 +189,7 @@ export default function GeneratorLog() {
 
   // Handle open add modal
   const handleOpenAdd = () => {
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = localDateString();
     const latest = dataService.getLatestGeneratorLog();
     const prevReading = latest ? latest.currentReading : 0;
 
@@ -273,7 +274,7 @@ export default function GeneratorLog() {
     }
 
     // Future date check
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = localDateString();
     if (formDate > todayStr && !ignoreFutureCheck) {
       setFutureDateWarningOpen(true);
       return;
@@ -368,7 +369,7 @@ export default function GeneratorLog() {
         title: 'سجل تشغيل ومتابعة عداد المولد',
         organizationName: settings.organizationName,
         departmentName: settings.departmentName,
-        filename: `generator_log_${new Date().toISOString().split('T')[0]}.xlsx`,
+        filename: `generator_log_${localDateString()}.xlsx`,
         metaFields: [
           { label: 'عدد السجلات المشمولة:', value: `${filteredLogs.length} سجل` },
           { label: 'إجمالي ساعات التشغيل المعروضة:', value: `${filteredLogs.reduce((s, i) => s + i.operatingHours, 0).toFixed(2)} ساعة` },
@@ -386,7 +387,7 @@ export default function GeneratorLog() {
   // Handle PDF Export
   const handleExportPDF = async () => {
     try {
-      const stampStr = new Date().toISOString().split('T')[0];
+      const stampStr = localDateString();
       const headers = ['التاريخ', 'اليوم', 'القراءة السابقة', 'القراءة الحالية', 'ساعات التشغيل', 'الملاحظات', 'المُدخل'];
       const rows = filteredLogs.map((item) => [
         item.date,
@@ -548,9 +549,9 @@ export default function GeneratorLog() {
             <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700, fontFamily: 'Cairo, sans-serif' }}>
               إجمالي التشغيل (التراكمي)
             </Typography>
-            <FunctionsIcon sx={{ color: '#0284c7' }} />
+            <FunctionsIcon sx={{ color: '#0369a1' }} />
           </Box>
-          <Typography variant="h5" sx={{ fontWeight: 800, color: '#0284c7', fontFamily: 'Cairo, sans-serif' }}>
+          <Typography variant="h5" sx={{ fontWeight: 800, color: '#0369a1', fontFamily: 'Cairo, sans-serif' }}>
             {stats.totalHours} <Typography component="span" variant="caption" sx={{ color: 'text.secondary' }}>ساعة</Typography>
           </Typography>
         </Paper>
@@ -561,9 +562,9 @@ export default function GeneratorLog() {
             <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700, fontFamily: 'Cairo, sans-serif' }}>
               تشغيل الشهر الحالي
             </Typography>
-            <CalendarMonthIcon sx={{ color: '#059669' }} />
+            <CalendarMonthIcon sx={{ color: '#047857' }} />
           </Box>
-          <Typography variant="h5" sx={{ fontWeight: 800, color: '#059669', fontFamily: 'Cairo, sans-serif' }}>
+          <Typography variant="h5" sx={{ fontWeight: 800, color: '#047857', fontFamily: 'Cairo, sans-serif' }}>
             {stats.monthHours} <Typography component="span" variant="caption" sx={{ color: 'text.secondary' }}>ساعة</Typography>
           </Typography>
         </Paper>
@@ -574,9 +575,9 @@ export default function GeneratorLog() {
             <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700, fontFamily: 'Cairo, sans-serif' }}>
               ساعات آخر تشغيل
             </Typography>
-            <HistoryToggleOffIcon sx={{ color: '#d97706' }} />
+            <HistoryToggleOffIcon sx={{ color: '#b45309' }} />
           </Box>
-          <Typography variant="h5" sx={{ fontWeight: 800, color: '#d97706', fontFamily: 'Cairo, sans-serif' }}>
+          <Typography variant="h5" sx={{ fontWeight: 800, color: '#b45309', fontFamily: 'Cairo, sans-serif' }}>
             {stats.lastRunHours} <Typography component="span" variant="caption" sx={{ color: 'text.secondary' }}>ساعة</Typography>
           </Typography>
         </Paper>
@@ -587,9 +588,9 @@ export default function GeneratorLog() {
             <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700, fontFamily: 'Cairo, sans-serif' }}>
               أعلى تشغيل (آخر 30 يوماً)
             </Typography>
-            <ShowChartIcon sx={{ color: '#ea580c' }} />
+            <ShowChartIcon sx={{ color: '#c2410c' }} />
           </Box>
-          <Typography variant="h5" sx={{ fontWeight: 800, color: '#ea580c', fontFamily: 'Cairo, sans-serif' }}>
+          <Typography variant="h5" sx={{ fontWeight: 800, color: '#c2410c', fontFamily: 'Cairo, sans-serif' }}>
             {stats.maxHoursLast30Days} <Typography component="span" variant="caption" sx={{ color: 'text.secondary' }}>ساعة</Typography>
           </Typography>
         </Paper>
@@ -639,9 +640,9 @@ export default function GeneratorLog() {
             <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700, fontFamily: 'Cairo, sans-serif' }}>
               آخر قراءة مسجلة للعداد
             </Typography>
-            <SpeedIcon sx={{ color: '#16a34a' }} />
+            <SpeedIcon sx={{ color: '#15803d' }} />
           </Box>
-          <Typography variant="h5" sx={{ fontWeight: 800, color: '#16a34a', fontFamily: 'Cairo, sans-serif' }}>
+          <Typography variant="h5" sx={{ fontWeight: 800, color: '#15803d', fontFamily: 'Cairo, sans-serif' }}>
             {stats.lastRecordedReading}
           </Typography>
         </Paper>
@@ -1042,11 +1043,11 @@ export default function GeneratorLog() {
                     <TableRow key={item.id}>
                       <TableCell sx={{ fontWeight: 700 }}>{item.date}</TableCell>
                       <TableCell>
-                        {item.oldPreviousReading} ➔ <strong style={{ color: '#0284c7' }}>{item.newPreviousReading}</strong>
+                        {item.oldPreviousReading} ➔ <strong style={{ color: '#0369a1' }}>{item.newPreviousReading}</strong>
                       </TableCell>
                       <TableCell>{item.newCurrentReading}</TableCell>
                       <TableCell>
-                        {item.oldOperatingHours} س ➔ <strong style={{ color: '#059669' }}>{item.newOperatingHours} س</strong>
+                        {item.oldOperatingHours} س ➔ <strong style={{ color: '#047857' }}>{item.newOperatingHours} س</strong>
                       </TableCell>
                     </TableRow>
                   ))}
