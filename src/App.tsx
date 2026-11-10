@@ -107,11 +107,11 @@ export default function App() {
 
           const bootstrapRes = await dataService.bootstrapCurrentFirebaseUser();
           if (!isCurrentAttempt()) return;
-          if (!bootstrapRes.success || !bootstrapRes.user) {
+          if (!bootstrapRes.success || !bootstrapRes.user) {const isNetErr = String(bootstrapRes.message || '').startsWith('NETWORK_UNAVAILABLE:');
             await failClosed(
               bootstrapRes.message
                 ? presentResultMessage(bootstrapRes.message, 'sync')
-                : 'تعذر التحقق من ملف المستخدم على الخادم.',
+                : 'تعذر التحقق من ملف المستخدم على الخادم.', isNetErr
             );
             return;
           }
@@ -128,7 +128,7 @@ export default function App() {
 
           const deviceBootstrap = await dataService.bootstrapFreshDeviceData(found);
           if (!isCurrentAttempt()) return;
-          if (!deviceBootstrap.success && deviceBootstrap.status !== 'already-initialized') {
+          if (!deviceBootstrap.success && deviceBootstrap.status !== 'already-initialized && deviceBootstrap.status !== 'offline-cached'') {
             await failClosed(deviceBootstrap.message || 'فشلت التهيئة التشغيلية الأولية.');
             return;
           }
