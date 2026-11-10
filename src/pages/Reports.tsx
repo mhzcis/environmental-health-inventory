@@ -112,6 +112,17 @@ export default function Reports() {
 
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(15);
+  const [deactivatedReportWarehouse, setDeactivatedReportWarehouse] = useState<string | null>(null);
+  const [prevReportStorehouse, setPrevReportStorehouse] = useState<string>(selectedStorehouse);
+  useEffect(() => {
+    if (prevReportStorehouse && prevReportStorehouse !== 'all' && selectedStorehouse === 'all') {
+      const inactive = (settings.storehouseEntities || []).some((w) => w.name === prevReportStorehouse && w.active === false);
+      if (inactive) setDeactivatedReportWarehouse(prevReportStorehouse);
+    } else if (selectedStorehouse !== 'all') {
+      setDeactivatedReportWarehouse(null);
+    }
+    setPrevReportStorehouse(selectedStorehouse);
+  }, [selectedStorehouse, prevReportStorehouse, settings.storehouseEntities]);
   const [density, setDensity] = useState<'compact' | 'comfortable' | 'spacious'>('comfortable');
   const [successMessage, _setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, _setErrorMessage] = useState<string | null>(null);
@@ -1555,7 +1566,11 @@ export default function Reports() {
       <NotificationToast open={!!successMessage} message={successMessage} severity="success" onClose={() => setSuccessMessage('')} />
 
       <NotificationToast open={!!errorMessage} message={errorMessage} severity="error" onClose={() => setErrorMessage('')} />
-
+      {deactivatedReportWarehouse && (
+        <Alert severity="warning" data-testid="report-deactivated-warehouse-alert" onClose={() => setDeactivatedReportWarehouse(null)} sx={{ mb: 2, borderRadius: '12px', fontFamily: '"Cairo", sans-serif', fontWeight: 'bold' }}>
+          تنبيه: المستودع الذي كان محدداً للتقرير ({deactivatedReportWarehouse}) تم تعطيله، وتم تحويل نطاق التقرير إلى «جميع المستودعات».
+        </Alert>
+      )}
       {/* Printable Report Zone */}
       <Paper id="printable-reportZone" className="printable-report-sheet" sx={{ p: { xs: 2, sm: 5 }, bgcolor: '#fff', boxShadow: 'none' }}>
         
