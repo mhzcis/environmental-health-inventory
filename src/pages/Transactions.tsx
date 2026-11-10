@@ -86,7 +86,7 @@ export default function Transactions() {
 
   const loadData = () => {
     setTransactions(dataService.getTransactions());
-    setMaterials(dataService.getMaterials());
+    setMaterials(dataService.getMaterials({ includeArchived: true }));
     setSettings(dataService.getSettings());
   };
 
@@ -703,7 +703,7 @@ export default function Transactions() {
               size="small"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              slotProps={{
+              slotProps={htmlInput: { 'aria-label': 'البحث في الحركات بالصنف أو الكود أو المستلم' }, {
                 input: {
                   startAdornment: <SearchIcon sx={{ color: '#94a3b8', mr: 1 }} />,
                   style: { borderRadius: '10px' }
@@ -1157,7 +1157,7 @@ export default function Transactions() {
             )}
           </TableBody>
         </Table>
-        <TablePagination
+        <TablePagination sx={{ '& .MuiTablePagination-toolbar': { flexWrap: 'wrap', justifyContent: { xs: 'center', sm: 'flex-end' } } }}
           rowsPerPageOptions={[5, 10, 25]}
           component="div"
           count={filteredTransactions.length}
