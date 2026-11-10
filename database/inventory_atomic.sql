@@ -29,6 +29,24 @@ BEGIN
     OR EXISTS(SELECT 1 FROM jsonb_array_elements(cfg->'storehouseEntities') w GROUP BY w->>'id' HAVING count(*)>1)
     OR EXISTS(SELECT 1 FROM jsonb_array_elements(cfg->'storehouseEntities') w GROUP BY lower(btrim(w->>'name')) HAVING count(*)>1)
  THEN RAISE EXCEPTION 'INVENTORY_WAREHOUSE_INVALID' USING ERRCODE='23514'; END IF;
+ -- QA-20261109 R8 CFG-02: validate category names, prefixes, and non-overlapping numeric ranges when configured.
+ IF jsonb_array_length(cfg->'categories')=0 OR jsonb_array_length(cfg->'categories')>6
+    OR EXISTS(SELECT 1 FROM jsonb_array_elements(cfg->'categories') c
+      WHERE jsonb_typeof(c) IS DISTINCT FROM 'object' OR nullif(btrim(c->>'name'),'') IS NULL
+        OR (c ? 'prefix' AND (jsonb_typeof(c->'prefix') IS DISTINCT FROM 'string' OR btrim(c->>'prefix') !~ '^[A-Za-z0-9]{2,12}$'))
+        OR ((c ? 'startRange' OR c ? 'endRange') AND (
+            jsonb_typeof(c->'startRange') IS DISTINCT FROM 'number' OR jsonb_typeof(c->'endRange') IS DISTINCT FROM 'number'
+            OR (c->>'startRange')::numeric <> trunc((c->>'startRange')::numeric)
+            OR (c->>'endRange')::numeric <> trunc((c->>'endRange')::numeric)
+            OR (c->>'startRange')::numeric < 0 OR (c->>'startRange')::numeric > (c->>'endRange')::numeric)))
+    OR EXISTS(SELECT 1 FROM jsonb_array_elements(cfg->'categories') c GROUP BY lower(btrim(c->>'name')) HAVING count(*)>1)
+    OR EXISTS(SELECT 1 FROM jsonb_array_elements(cfg->'categories') c WHERE nullif(btrim(c->>'prefix'),'') IS NOT NULL GROUP BY lower(btrim(c->>'prefix')) HAVING count(*)>1)
+    OR EXISTS(SELECT 1 FROM jsonb_array_elements(cfg->'categories') WITH ORDINALITY a(c,i)
+      JOIN jsonb_array_elements(cfg->'categories') WITH ORDINALITY b(c,j) ON a.i < b.j
+      WHERE a.c ? 'startRange' AND a.c ? 'endRange' AND b.c ? 'startRange' AND b.c ? 'endRange'
+        AND (a.c->>'startRange')::numeric <= (b.c->>'endRange')::numeric
+        AND (a.c->>'endRange')::numeric >= (b.c->>'startRange')::numeric)
+ THEN RAISE EXCEPTION 'INVENTORY_CATEGORY_INVALID' USING ERRCODE='23514'; END IF;  -- QA-20261109 R8 CFG-02: validate category names, prefixes, and non-overlapping numeric ranges when configured.  IF jsonb_array_length(cfg->'categories')=0 OR jsonb_array_length(cfg->'categories')>6     OR EXISTS(SELECT 1 FROM jsonb_array_elements(cfg->'categories') c       WHERE jsonb_typeof(c) IS DISTINCT FROM 'object' OR nullif(btrim(c->>'name'),'') IS NULL         OR (c ? 'prefix' AND (jsonb_typeof(c->'prefix') IS DISTINCT FROM 'string' OR btrim(c->>'prefix') !~ '^[A-Za-z0-9]{2,12}$'))         OR ((c ? 'startRange' OR c ? 'endRange') AND (             jsonb_typeof(c->'startRange') IS DISTINCT FROM 'number' OR jsonb_typeof(c->'endRange') IS DISTINCT FROM 'number'             OR (c->>'startRange')::numeric <> trunc((c->>'startRange')::numeric)             OR (c->>'endRange')::numeric <> trunc((c->>'endRange')::numeric)             OR (c->>'startRange')::numeric < 0 OR (c->>'startRange')::numeric > (c->>'endRange')::numeric)))     OR EXISTS(SELECT 1 FROM jsonb_array_elements(cfg->'categories') c GROUP BY lower(btrim(c->>'name')) HAVING count(*)>1)     OR EXISTS(SELECT 1 FROM jsonb_array_elements(cfg->'categories') c WHERE nullif(btrim(c->>'prefix'),'') IS NOT NULL GROUP BY lower(btrim(c->>'prefix')) HAVING count(*)>1)     OR EXISTS(SELECT 1 FROM jsonb_array_elements(cfg->'categories') WITH ORDINALITY a(c,i)       JOIN jsonb_array_elements(cfg->'categories') WITH ORDINALITY b(c,j) ON a.i < b.j       WHERE a.c ? 'startRange' AND a.c ? 'endRange' AND b.c ? 'startRange' AND b.c ? 'endRange'         AND (a.c->>'startRange')::numeric <= (b.c->>'endRange')::numeric         AND (a.c->>'endRange')::numeric >= (b.c->>'startRange')::numeric)  THEN RAISE EXCEPTION 'INVENTORY_CATEGORY_INVALID' USING ERRCODE='23514'; END IF;
  IF EXISTS(SELECT 1 FROM public.materials m WHERE nullif(btrim(m.data->>'code'),'') IS NULL
      OR nullif(btrim(m.data->>'name'),'') IS NULL OR nullif(btrim(m.data->>'category'),'') IS NULL
      OR nullif(btrim(m.data->>'unit'),'') IS NULL OR m.data->>'id' IS DISTINCT FROM m.id
@@ -36,7 +54,13 @@ BEGIN
      OR (m.data ? 'initialStock' AND (jsonb_typeof(m.data->'initialStock') IS DISTINCT FROM 'number' OR (m.data->>'initialStock')::numeric<0))
      OR NOT EXISTS(SELECT 1 FROM jsonb_array_elements(cfg->'storehouseEntities') w WHERE w->>'id'=m.data->>'primaryStorehouseId')
      OR NOT (cfg->'units' @> jsonb_build_array(m.data->>'unit'))
-     OR NOT EXISTS(SELECT 1 FROM jsonb_array_elements(cfg->'categories') c WHERE c->>'name'=m.data->>'category'))
+       OR (m.data ? 'archived' AND jsonb_typeof(m.data->'archived') IS DISTINCT FROM 'boolean')
+     OR NOT EXISTS(SELECT 1 FROM jsonb_array_elements(cfg->'categories') c WHERE c->>'name'=m.data->>'category'
+        AND (NOT (c ? 'prefix' AND c ? 'startRange' AND c ? 'endRange') OR (
+          upper(split_part(btrim(m.data->>'code'),'-',1))=upper(btrim(c->>'prefix'))
+          AND split_part(btrim(m.data->>'code'),'-',2) ~ '^[0-9]+$'
+          AND split_part(btrim(m.data->>'code'),'-',3)=''
+          AND (split_part(btrim(m.data->>'code'),'-',2))::numeric BETWEEN (c->>'startRange')::numeric AND (c->>'endRange')::numeric))))
  THEN RAISE EXCEPTION 'INVENTORY_MATERIAL_INVALID' USING ERRCODE='23514'; END IF;
  FOR row_data IN SELECT data FROM public.transactions LOOP
    v_date:=row_data->>'date';
@@ -155,7 +179,12 @@ BEGIN
    IF mode<>'restore' AND (NOT op ? 'expected' OR coalesce(op->'expected'->>'kind','') NOT IN ('present','missing') OR (op->'expected'->>'kind'='present' AND NOT op->'expected' ? 'data')) THEN RAISE EXCEPTION 'INVENTORY_BASELINE_REQUIRED' USING ERRCODE='40001'; END IF;
    IF mode<>'restore' AND op ? 'expected' THEN
      IF (op->'expected'->>'kind'='missing' AND old IS NOT NULL)
-        OR (op->'expected'->>'kind'='present' AND (old IS NULL OR (op->'expected' ? 'data' AND op->'expected'->'data' IS DISTINCT FROM old)))
+                OR (op->'expected'->>'kind'='present' AND (old IS NULL OR (op->'expected' ? 'data' AND (
+            CASE WHEN col='materials' THEN (op->'expected'->'data')-'currentStock'-'warehouseStocks'-'warehouseStocksById'-'updatedAt'
+                 ELSE op->'expected'->'data' END
+            IS DISTINCT FROM
+            CASE WHEN col='materials' THEN old-'currentStock'-'warehouseStocks'-'warehouseStocksById'-'updatedAt'
+                 ELSE old END))))
      THEN RAISE EXCEPTION 'INVENTORY_CONFLICT' USING ERRCODE='40001'; END IF;
    END IF;
    IF kind='set' AND (jsonb_typeof(val) IS DISTINCT FROM 'object' OR val->>'id' IS DISTINCT FROM doc)
@@ -242,7 +271,139 @@ BEGIN
        AND (r->>'quantity')::numeric IS NOT DISTINCT FROM (c->>'originalQuantity')::numeric))
  THEN RAISE EXCEPTION 'INVENTORY_CORRECTION_LINK_INVALID' USING ERRCODE='23514'; END IF;
  IF mode<>'audit' THEN
-   PERFORM inventory_private.validate_inventory();
+           PERFORM inventory_private.validate_inventory();
+   SELECT data INTO cfg FROM public.settings WHERE id='app_config';
+   UPDATE public.materials m
+   SET data = jsonb_set(
+         jsonb_set(m.data, '{currentStock}', to_jsonb(coalesce(calc.total_stock, 0)), true),
+         '{warehouseStocks}', coalesce(calc.wh_stocks, '{}'::jsonb), true
+       ),
+       updated_at = now()
+   FROM (
+     SELECT m2.id AS mat_id,
+       coalesce(sum(wh.bal) FILTER (WHERE wh.active), 0) AS total_stock,
+       coalesce(jsonb_object_agg(wh.name, wh.bal) FILTER (WHERE wh.active AND wh.name IS NOT NULL), '{}'::jsonb) AS wh_stocks
+     FROM public.materials m2
+     LEFT JOIN LATERAL (
+       SELECT w->>'id' AS wid, w->>'name' AS name, (w->'active'='true'::jsonb) AS active,
+         sum(e.delta) AS bal
+       FROM (
+         SELECT t.data->>'storehouseId' AS storehouse_id,
+           (t.data->>'quantity')::numeric * CASE WHEN t.data->>'transactionType' IN ('وارد','افتتاحي')
+             OR (t.data->>'transactionType' IN ('تسوية','تحويل') AND t.data->>'transferType'='in') THEN 1 ELSE -1 END AS delta
+         FROM public.transactions t WHERE t.data->>'itemId'=m2.id
+         UNION ALL
+         SELECT m2.data->>'primaryStorehouseId', coalesce((m2.data->>'initialStock')::numeric, 0)
+         WHERE coalesce((m2.data->>'initialStock')::numeric, 0) > 0
+           AND NOT EXISTS(SELECT 1 FROM public.transactions t0 WHERE t0.data->>'itemId'=m2.id AND (t0.data->>'transactionType'='افتتاحي' OR t0.id LIKE 'tr-init%'))
+       ) e
+       JOIN jsonb_array_elements(cfg->'storehouseEntities') w ON w->>'id'=e.storehouse_id
+       GROUP BY w->>'id', w->>'name', (w->'active'='true'::jsonb)
+     ) wh ON true
+     GROUP BY m2.id
+   ) calc
+   WHERE m.id = calc.mat_id
+     AND (m.data->'currentStock' IS DISTINCT FROM to_jsonb(coalesce(calc.total_stock, 0))
+          OR m.data->'warehouseStocks' IS DISTINCT FROM coalesce(calc.wh_stocks, '{}'::jsonb));
+   SELECT data INTO cfg FROM public.settings WHERE id='app_config';
+   UPDATE public.materials m
+   SET data = jsonb_set(
+         jsonb_set(m.data, '{currentStock}', to_jsonb(coalesce(calc.total_stock, 0)), true),
+         '{warehouseStocks}', coalesce(calc.wh_stocks, '{}'::jsonb), true
+       ),
+       updated_at = now()
+   FROM (
+     SELECT m2.id AS mat_id,
+       coalesce(sum(wh.bal) FILTER (WHERE wh.active), 0) AS total_stock,
+       coalesce(jsonb_object_agg(wh.name, wh.bal) FILTER (WHERE wh.active AND wh.name IS NOT NULL), '{}'::jsonb) AS wh_stocks
+     FROM public.materials m2
+     LEFT JOIN LATERAL (
+       SELECT w->>'id' AS wid, w->>'name' AS name, (w->'active'='true'::jsonb) AS active,
+         sum(e.delta) AS bal
+       FROM (
+         SELECT t.data->>'storehouseId' AS storehouse_id,
+           (t.data->>'quantity')::numeric * CASE WHEN t.data->>'transactionType' IN ('وارد','افتتاحي')
+             OR (t.data->>'transactionType' IN ('تسوية','تحويل') AND t.data->>'transferType'='in') THEN 1 ELSE -1 END AS delta
+         FROM public.transactions t WHERE t.data->>'itemId'=m2.id
+         UNION ALL
+         SELECT m2.data->>'primaryStorehouseId', coalesce((m2.data->>'initialStock')::numeric, 0)
+         WHERE coalesce((m2.data->>'initialStock')::numeric, 0) > 0
+           AND NOT EXISTS(SELECT 1 FROM public.transactions t0 WHERE t0.data->>'itemId'=m2.id AND (t0.data->>'transactionType'='افتتاحي' OR t0.id LIKE 'tr-init%'))
+       ) e
+       JOIN jsonb_array_elements(cfg->'storehouseEntities') w ON w->>'id'=e.storehouse_id
+       GROUP BY w->>'id', w->>'name', (w->'active'='true'::jsonb)
+     ) wh ON true
+     GROUP BY m2.id
+   ) calc
+   WHERE m.id = calc.mat_id
+     AND (m.data->'currentStock' IS DISTINCT FROM to_jsonb(coalesce(calc.total_stock, 0))
+          OR m.data->'warehouseStocks' IS DISTINCT FROM coalesce(calc.wh_stocks, '{}'::jsonb));
+   SELECT data INTO cfg FROM public.settings WHERE id='app_config';
+   UPDATE public.materials m
+   SET data = jsonb_set(
+         jsonb_set(m.data, '{currentStock}', to_jsonb(coalesce(calc.total_stock, 0)), true),
+         '{warehouseStocks}', coalesce(calc.wh_stocks, '{}'::jsonb), true
+       ),
+       updated_at = now()
+   FROM (
+     SELECT m2.id AS mat_id,
+       coalesce(sum(wh.bal) FILTER (WHERE wh.active), 0) AS total_stock,
+       coalesce(jsonb_object_agg(wh.name, wh.bal) FILTER (WHERE wh.active AND wh.name IS NOT NULL), '{}'::jsonb) AS wh_stocks
+     FROM public.materials m2
+     LEFT JOIN LATERAL (
+       SELECT w->>'id' AS wid, w->>'name' AS name, (w->'active'='true'::jsonb) AS active,
+         sum(e.delta) AS bal
+       FROM (
+         SELECT t.data->>'storehouseId' AS storehouse_id,
+           (t.data->>'quantity')::numeric * CASE WHEN t.data->>'transactionType' IN ('وارد','افتتاحي')
+             OR (t.data->>'transactionType' IN ('تسوية','تحويل') AND t.data->>'transferType'='in') THEN 1 ELSE -1 END AS delta
+         FROM public.transactions t WHERE t.data->>'itemId'=m2.id
+         UNION ALL
+         SELECT m2.data->>'primaryStorehouseId', coalesce((m2.data->>'initialStock')::numeric, 0)
+         WHERE coalesce((m2.data->>'initialStock')::numeric, 0) > 0
+           AND NOT EXISTS(SELECT 1 FROM public.transactions t0 WHERE t0.data->>'itemId'=m2.id AND (t0.data->>'transactionType'='افتتاحي' OR t0.id LIKE 'tr-init%'))
+       ) e
+       JOIN jsonb_array_elements(cfg->'storehouseEntities') w ON w->>'id'=e.storehouse_id
+       GROUP BY w->>'id', w->>'name', (w->'active'='true'::jsonb)
+     ) wh ON true
+     GROUP BY m2.id
+   ) calc
+   WHERE m.id = calc.mat_id
+     AND (m.data->'currentStock' IS DISTINCT FROM to_jsonb(coalesce(calc.total_stock, 0))
+          OR m.data->'warehouseStocks' IS DISTINCT FROM coalesce(calc.wh_stocks, '{}'::jsonb));
+   SELECT data INTO cfg FROM public.settings WHERE id='app_config';
+   UPDATE public.materials m
+   SET data = jsonb_set(
+         jsonb_set(m.data, '{currentStock}', to_jsonb(coalesce(calc.total_stock, 0)), true),
+         '{warehouseStocks}', coalesce(calc.wh_stocks, '{}'::jsonb), true
+       ),
+       updated_at = now()
+   FROM (
+     SELECT m2.id AS mat_id,
+       coalesce(sum(wh.bal) FILTER (WHERE wh.active), 0) AS total_stock,
+       coalesce(jsonb_object_agg(wh.name, wh.bal) FILTER (WHERE wh.active AND wh.name IS NOT NULL), '{}'::jsonb) AS wh_stocks
+     FROM public.materials m2
+     LEFT JOIN LATERAL (
+       SELECT w->>'id' AS wid, w->>'name' AS name, (w->'active'='true'::jsonb) AS active,
+         sum(e.delta) AS bal
+       FROM (
+         SELECT t.data->>'storehouseId' AS storehouse_id,
+           (t.data->>'quantity')::numeric * CASE WHEN t.data->>'transactionType' IN ('وارد','افتتاحي')
+             OR (t.data->>'transactionType' IN ('تسوية','تحويل') AND t.data->>'transferType'='in') THEN 1 ELSE -1 END AS delta
+         FROM public.transactions t WHERE t.data->>'itemId'=m2.id
+         UNION ALL
+         SELECT m2.data->>'primaryStorehouseId', coalesce((m2.data->>'initialStock')::numeric, 0)
+         WHERE coalesce((m2.data->>'initialStock')::numeric, 0) > 0
+           AND NOT EXISTS(SELECT 1 FROM public.transactions t0 WHERE t0.data->>'itemId'=m2.id AND (t0.data->>'transactionType'='افتتاحي' OR t0.id LIKE 'tr-init%'))
+       ) e
+       JOIN jsonb_array_elements(cfg->'storehouseEntities') w ON w->>'id'=e.storehouse_id
+       GROUP BY w->>'id', w->>'name', (w->'active'='true'::jsonb)
+     ) wh ON true
+     GROUP BY m2.id
+   ) calc
+   WHERE m.id = calc.mat_id
+     AND (m.data->'currentStock' IS DISTINCT FROM to_jsonb(coalesce(calc.total_stock, 0))
+          OR m.data->'warehouseStocks' IS DISTINCT FROM coalesce(calc.wh_stocks, '{}'::jsonb));
    IF NOT EXISTS(SELECT 1 FROM public.users WHERE active AND permissions @> '["users_manage","settings_edit","system_reset"]'::jsonb)
    THEN RAISE EXCEPTION 'INVENTORY_LAST_ADMIN_REQUIRED' USING ERRCODE='23514'; END IF;
  END IF;
