@@ -170,6 +170,11 @@ export interface InventoryRestorePreview {
   diffs: Record<string, { current: number; backup: number; added: number; removed: number; changed: number }>;
   auditHistory: 'preserved';
   authIdentities: 'preserved';
+  registry?: {
+    ok: boolean; missingCodeRegistry: boolean; error?: string | null; warnings: unknown;
+    rejected: unknown; newReservations: unknown; tailReservations: unknown;
+    maxReferenced: unknown; conservativeMax: unknown; willRefuse?: boolean;
+  };
 }
 
 const encode = (table: SupabaseTableName, id: string, payload: Record<string, unknown>): Row => {

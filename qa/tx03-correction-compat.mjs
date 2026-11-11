@@ -44,7 +44,7 @@ await test('TX03-C5 candidate: editing a non-ledger field of an existing replace
   assert.equal((await db.query("select data->>'notes' n from transactions where id='t-repl'")).rows[0].n,'n');});
 await test('TX03-C6 candidate: restore of a backup that contains a correction row is not blocked by the link check',CANDIDATE,async()=>{
   await commit(correction(),'qa-corr-0006');const users=(await db.query('select data from users order by id')).rows.map(x=>x.data);
-  const b={settings:cfg,materials:[mat],transactions:[replacement],generatorLogs:[],users};
+  const b={settings:cfg,materials:[mat],transactions:[replacement],generatorLogs:[],users,codeRegistry:[{code:'QA-1001',materialId:'m1',deleted:false}]};
   const pre=(await asUser(db,ids.admin,tx=>tx.query('select public.inventory_restore_preview($1) p',[JSON.stringify(b)]))).rows[0].p;
   await commit({mode:'restore',label:'QA restore',backup:b,expectedState:pre.expectedState},'qa-corr-0006r');assert.deepEqual(await ids_('transactions'),['t-repl']);});
 await test('TX03-R1 #8 SQL (rollback target): queued correction is rejected atomically, no partial commit, no audit row',PR8,async()=>{

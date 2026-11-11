@@ -56,12 +56,15 @@ type SafeUser = SystemUser & { authUid?: string };
 export interface CodeRegistryEntry { code: string; materialId: string; deleted?: boolean }
 export interface BackupV2 {
   materials: Material[]; transactions: InventoryTransaction[]; users: SafeUser[]; settings: AppSettings;
-  /** Optional for compatibility with older files; a cloud backup always carries it (covered by the checksum). */
+  /** Optional for pre-R8 files; a complete cloud backup always carries it (covered by the checksum). */
   codeRegistry?: CodeRegistryEntry[];
   auditLogs: AuditLog[]; generatorLogs: GeneratorLogEntry[]; backupVersion: typeof BACKUP_VERSION; exportedAt: string;
+  /** Set when the file was exported without the central code registry (local-only, or a labelled partial). */
+  partial?: boolean;
   manifest: { format: typeof BACKUP_FORMAT; version: typeof BACKUP_VERSION; backupId: string; exportedAt: string;
     counts: { materials:number; transactions:number; users:number; auditLogs:number; generatorLogs:number; storehouses:number; codeRegistry?:number };
-    selectedStorehouse:string; selectedStorehouseId?:string; warehouseTotals:Record<string,number>; checksumAlgorithm:'SHA-256'; checksum:string };
+    selectedStorehouse:string; selectedStorehouseId?:string; warehouseTotals:Record<string,number>; checksumAlgorithm:'SHA-256'; checksum:string;
+    registryStatus:'complete'|'absent'; };
 }
 const read = <T>(key:string, fallback:T):T => { const raw=localStorage.getItem(key); return raw ? JSON.parse(raw) as T : fallback; };
 const canonical = (v:unknown):string => v===null||typeof v!=='object' ? JSON.stringify(v) : Array.isArray(v) ? `[${v.map(canonical).join(',')}]` : `{${Object.keys(v as object).sort().map(k=>`${JSON.stringify(k)}:${canonical((v as Record<string,unknown>)[k])}`).join(',')}}`;
@@ -94,13 +97,69 @@ export async function createBackup(options:{codeRegistry?:CodeRegistryEntry[]}={
  const warehouseCheck=calculateWarehouseTotals(materials,storehouses);
  if(storeErrors.length||warehouseCheck.errors.length)throw new Error(['تعذر إنشاء نسخة احتياطية بسبب أخطاء سلامة البيانات.',...storeErrors,...warehouseCheck.errors].join(' '));
  const codeRegistry=options.codeRegistry?.map(r=>({code:r.code,materialId:r.materialId,deleted:r.deleted===true}));
+ const registryPresent=Array.isArray(codeRegistry);
+ const registryStatus:'complete'|'absent'=registryPresent?'complete':'absent';
  const base= {materials,transactions,users,settings,auditLogs,generatorLogs,...(codeRegistry?{codeRegistry}:{}),backupVersion:BACKUP_VERSION,exportedAt,
+  ...(registryPresent?{}:{partial:true as const}),
  manifest:{format:BACKUP_FORMAT,version:BACKUP_VERSION,backupId:crypto.randomUUID?.()||`backup-${Date.now()}`,exportedAt,
  counts:{materials:materials.length,transactions:transactions.length,users:users.length,auditLogs:auditLogs.length,generatorLogs:generatorLogs.length,storehouses:storehouses.length,...(codeRegistry?{codeRegistry:codeRegistry.length}:{})},
- selectedStorehouse:warehouseProjection.selectedStorehouseName,selectedStorehouseId:warehouseProjection.selectedStorehouseId,warehouseTotals:warehouseCheck.totals,checksumAlgorithm:'SHA-256' as const,checksum:''}};
+ selectedStorehouse:warehouseProjection.selectedStorehouseName,selectedStorehouseId:warehouseProjection.selectedStorehouseId,warehouseTotals:warehouseCheck.totals,checksumAlgorithm:'SHA-256' as const,registryStatus,checksum:''}};
  if (hasForbiddenCredentialKey(base)) throw new Error('تم إيقاف إنشاء النسخة الاحتياطية لوجود حقل بيانات اعتماد محظور.');
  const checksum=await hash({...base,manifest:((({checksum:_c,...m})=>m)(base.manifest))}); return {...base,manifest:{...base.manifest,checksum}};
 }
+
+const CODE_RE=/^[A-Za-z]{2,6}-[1-9][0-9]{0,8}$/;
+const codeParts=(code:string):{prefix:string;number:number}|null=>{
+ const t=String(code||'').trim(); if(!CODE_RE.test(t)) return null;
+ return {prefix:t.split('-')[0].toUpperCase(),number:Number(t.split('-')[1])};
+};
+/**
+ * R8-R2 (R2-R8-D02 / RT-R8-D03): client-side twin of inventory_private.evaluate_backup_registry.
+ * Evidence = materials + transactions + auditLogs in the file. Ghost / out-of-range / gapped entries are errors.
+ * A contiguous tail above the highest evidenced code (a just-deleted latest material) is accepted with a warning.
+ * A missing registry is a warning, not an error (the server rebuilds it conservatively).
+ */
+export function evaluateBackupRegistry(b:Pick<BackupV2,'materials'|'transactions'|'auditLogs'|'codeRegistry'|'settings'>):{ok:boolean;errors:string[];warnings:string[]}{
+ const errors:string[]=[],warnings:string[]=[];
+ const evidence=new Map<string,number>();
+ const note=(code:string|undefined)=>{const p=code?codeParts(code):null;if(!p)return;const cur=evidence.get(p.prefix);if(cur===undefined||p.number>cur)evidence.set(p.prefix,p.number);};
+ for(const m of b.materials||[]) note(m.code);
+ for(const t of b.transactions||[]) note((t as {itemCode?:string}).itemCode);
+ const harvest=(v:unknown)=>{if(typeof v==='string'){for(const m of v.match(/[A-Za-z]{2,6}-[1-9][0-9]{0,8}/g)||[])note(m);}else if(v&&typeof v==='object')Object.values(v as object).forEach(harvest);};
+ harvest(b.auditLogs);
+ const ranges=new Map<string,{start:number;end:number}>();
+ for(const c of (b.settings?.categories||[]) as Array<{prefix?:string;startRange?:number;endRange?:number}>){
+  if(c.prefix&&Number.isFinite(Number(c.startRange))&&Number.isFinite(Number(c.endRange))) ranges.set(String(c.prefix).toUpperCase(),{start:Number(c.startRange),end:Number(c.endRange)});
+ }
+ if(!Array.isArray(b.codeRegistry)||b.codeRegistry.length===0){
+  warnings.push('النسخة لا تحتوي سجل الأكواد المركزي (ملف أقدم من R8 أو تصدير جزئي). عند الاستعادة يُعاد بناء السجل تحفظاً حتى أعلى كود ظاهر في المواد والحركات وإيصالات التدقيق، مع تحذير في المعاينة والإيصال.');
+  return {ok:true,errors,warnings};
+ }
+ const byPrefix=new Map<string,Set<number>>();
+ for(const r of b.codeRegistry){
+  const p=codeParts(r.code);
+  if(!p){errors.push(`سجل الأكواد: كود غير قياسي ${r.code}.`);continue;}
+  if(!byPrefix.has(p.prefix)) byPrefix.set(p.prefix,new Set());
+  byPrefix.get(p.prefix)!.add(p.number);
+ }
+ for(const r of b.codeRegistry){
+  const p=codeParts(r.code); if(!p) continue;
+  const range=ranges.get(p.prefix);
+  if(range&&(p.number<range.start||p.number>range.end)){errors.push(`سجل الأكواد: كود خارج المدى ${r.code}.`);continue;}
+  const owner=(b.materials||[]).find(m=>String(m.code||'').trim().toLowerCase()===r.code.trim().toLowerCase());
+  if(owner&&owner.id!==r.materialId){errors.push(`سجل الأكواد: الكود ${r.code} لا يطابق المادة الحاملة له.`);continue;}
+  const mx=evidence.get(p.prefix);
+  const floor=mx===undefined?(range?range.start-1:undefined):mx;
+  if(floor===undefined){errors.push(`سجل الأكواد: حجز غير مستند لأي أثر ${r.code}.`);continue;}
+  if(p.number<=floor) continue;
+  const have=byPrefix.get(p.prefix)||new Set<number>();
+  let gap=false; for(let k=floor+1;k<=p.number;k++) if(!have.has(k)){gap=true;break;}
+  if(gap) errors.push(`سجل الأكواد: حجز غير متصل/وهمي ${r.code} (أعلى كود مستند ${p.prefix}-${floor}).`);
+  else warnings.push(`سجل الأكواد: حجز متتابع غير ظاهر في المواد ${r.code} (عادةً آخر صنف محذوف).`);
+ }
+ return {ok:errors.length===0,errors,warnings};
+}
+
 export async function validateBackup(value:unknown):Promise<{success:boolean;errors:string[];warnings:string[];backup?:BackupV2}>{
  const errors:string[]=[],warnings:string[]=[]; if(!value||typeof value!=='object')return{success:false,errors:['ملف JSON غير صالح.'],warnings}; const b=value as BackupV2;
  for(const key of ['materials','transactions','users','auditLogs','generatorLogs'] as const) if(!Array.isArray(b[key])) errors.push(`${key} يجب أن يكون مصفوفة.`);
@@ -118,6 +177,8 @@ export async function validateBackup(value:unknown):Promise<{success:boolean;err
   else{const keys=new Set<string>();for(const r of b.codeRegistry){const key=r.code.trim().toLowerCase();if(keys.has(key))errors.push(`سجل الأكواد: كود مكرر ${r.code}.`);keys.add(key);}
    if(b.manifest.counts.codeRegistry!==b.codeRegistry.length)errors.push('عدد أكواد السجل المركزي لا يطابق بيان النسخة.');}
  } else if(b.manifest.counts.codeRegistry!==undefined)errors.push('بيان النسخة يذكر سجل أكواد غير موجود.');
+ const registryCheck=evaluateBackupRegistry(b); errors.push(...registryCheck.errors); warnings.push(...registryCheck.warnings);
+ if(b.manifest.registryStatus==='absent'||b.partial) warnings.push('هذه نسخة جزئية: صُدِّرت بدون سجل الأكواد المركزي.');
  const warehouseProjection=buildWarehouseBackupProjection({settings:b.settings,materials:b.materials,transactions:b.transactions,selectedStorehouse:b.manifest.selectedStorehouseId||b.manifest.selectedStorehouse});
  errors.push(...warehouseProjection.errors); warnings.push(...warehouseProjection.warnings);
  errors.push(...validateStorehouses(warehouseProjection.settings));

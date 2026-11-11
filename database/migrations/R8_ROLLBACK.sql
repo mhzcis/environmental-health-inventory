@@ -11,9 +11,16 @@
 -- archived, unless the operator first reactivates it with the audited lifecycle mode, OR confirms a write hold by
 -- running in the same session:
 --     SET r8.rollback_hold_writes = 'confirmed';
--- On that path the hold is ENFORCED: EXECUTE on public.inventory_commit is revoked from authenticated at the end of
--- this file, so no device can write until roll-forward (which re-grants it) or an explicit, approved re-grant:
+-- On that path the hold is ENFORCED on EVERY write path main exposes (R8-R2 / RT-R8-D02): EXECUTE on the public
+-- wrapper public.inventory_commit AND on the definer inventory_private.commit_inventory (which also carries main's
+-- audit/login/logout receipts) is revoked from authenticated at the end of this file. Direct table DML is already
+-- revoked from authenticated/anon by main. No device or direct RPC can write until roll-forward (which re-grants both)
+-- or an explicit, approved re-grant of BOTH:
+--     GRANT EXECUTE ON FUNCTION inventory_private.commit_inventory(text,jsonb) TO authenticated;
 --     GRANT EXECUTE ON FUNCTION public.inventory_commit(text,jsonb) TO authenticated;
+-- The file also prints (NOTICE R8_ROLLBACK_HOLD_OTHER_EXECUTABLE) any other VOLATILE function in public or
+-- inventory_private still executable by authenticated, for the operator to review (expected: only the read-only
+-- restore preview). Confirm in the dashboard (API -> Exposed schemas) that inventory_private is NOT exposed.
 BEGIN;
 SET LOCAL lock_timeout = '5s';
 SELECT pg_advisory_xact_lock(824671520);
@@ -323,6 +330,7 @@ REVOKE ALL ON public.materials,public.transactions,public.generator_logs,public.
 -- Existing read RLS remains in force. Service role and Auth provisioning are unchanged.
 
 DROP FUNCTION IF EXISTS public.inventory_code_registry();
+DROP FUNCTION IF EXISTS inventory_private.evaluate_backup_registry(jsonb);
 DROP FUNCTION IF EXISTS inventory_private.code_registry_export();
 DROP FUNCTION IF EXISTS inventory_private.projection_status(jsonb,jsonb);
 DROP FUNCTION IF EXISTS public.inventory_projection_drift();
@@ -345,7 +353,11 @@ DO $r8_rb_hold$
 BEGIN
  IF EXISTS(SELECT 1 FROM public.materials WHERE data->>'lifecycleStatus'='archived') THEN
    REVOKE EXECUTE ON FUNCTION public.inventory_commit(text,jsonb) FROM authenticated;
-   RAISE NOTICE 'R8_ROLLBACK_WRITE_HOLD_ENFORCED: inventory_commit revoked from authenticated until roll-forward or approved re-grant';
+   REVOKE EXECUTE ON FUNCTION inventory_private.commit_inventory(text,jsonb) FROM authenticated;
+   RAISE NOTICE 'R8_ROLLBACK_WRITE_HOLD_ENFORCED: public.inventory_commit and inventory_private.commit_inventory revoked from authenticated until roll-forward or approved re-grant';
+   RAISE NOTICE 'R8_ROLLBACK_HOLD_OTHER_EXECUTABLE %',(SELECT coalesce(jsonb_agg(n.nspname||'.'||p.proname ORDER BY n.nspname,p.proname),'[]'::jsonb)
+     FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+     WHERE n.nspname IN ('public','inventory_private') AND p.provolatile='v' AND has_function_privilege('authenticated',p.oid,'EXECUTE'));
  END IF;
 END $r8_rb_hold$;
 

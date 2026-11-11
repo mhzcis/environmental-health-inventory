@@ -303,7 +303,7 @@ DECLARE actor public.users%ROWTYPE; op jsonb; ops jsonb; receipt jsonb; digest t
  touched text[]:='{}'; ledger_items text[]:='{}'; strict_codes text[]:='{}'; restore_codes text[]:='{}'; all_materials boolean:=false;
  proj_ids text[]; proj_changes jsonb:='[]'; extra jsonb:='{}'; lc jsonb; cur_lc jsonb:='{}'; lc_preserved jsonb:='[]';
  mid text; before_d jsonb; after_d jsonb; lc_from text; lc_ver numeric; total numeric; business_equal boolean;
- pre_drift text[]:='{}'; direct text[]:='{}'; held jsonb:='[]'; is_admin boolean;
+ pre_drift text[]:='{}'; direct text[]:='{}'; held jsonb:='[]'; is_admin boolean; reg_plan jsonb;
 BEGIN
  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'INVENTORY_AUTH_REQUIRED' USING ERRCODE='42501'; END IF;
  -- One short serializable writer boundary. This also fences permission revocation through users.
@@ -436,12 +436,31 @@ BEGIN
      END LOOP;
    END LOOP;
    all_materials:=true;
-   -- R8-R1 (RT-R8-04): reservations carried by the backup are merged union-only (never dropped, never re-owned).
-   IF backup ? 'codeRegistry' THEN
-     IF jsonb_typeof(backup->'codeRegistry') IS DISTINCT FROM 'array' OR jsonb_array_length(backup->'codeRegistry')>100000
-        OR EXISTS(SELECT 1 FROM jsonb_array_elements(backup->'codeRegistry') r WHERE jsonb_typeof(r) IS DISTINCT FROM 'object'
-          OR nullif(btrim(r->>'code'),'') IS NULL OR length(r->>'code')>120 OR nullif(btrim(r->>'materialId'),'') IS NULL OR length(r->>'materialId')>200)
-     THEN RAISE EXCEPTION 'INVENTORY_BACKUP_INVALID' USING ERRCODE='22023'; END IF;
+   -- R8-R2 (R2-R8-D02 / RT-R8-D01 / RT-R8-D03): validate registry rows (range, material match, contiguity).
+   -- Ghost or out-of-range entries refuse the whole restore (nothing written). A file without a registry never
+   -- silently re-opens a deleted code: we rebuild conservatively, reserving every number from the prefix start
+   -- (or the lowest evidenced number) up to the highest code seen in materials, transactions and audit receipts,
+   -- and the receipt/preview carries a warning. Chosen approach is documented in docs/R8_BACKUP_RESTORE_DRILL_AR.md.
+   reg_plan:=inventory_private.evaluate_backup_registry(backup);
+   entry:=reg_plan;
+   IF NOT coalesce((entry->>'ok')::boolean,false) THEN
+     RAISE EXCEPTION '%',coalesce(nullif(entry->>'error',''),'INVENTORY_RESTORE_REGISTRY_INVALID') USING ERRCODE='23514';
+   END IF;
+   -- Chosen safe option (RT-R8-D01): a registry-less backup is NEVER applied to an empty registry (fresh
+   -- environment), where it would let a deleted code be re-issued. Same-environment restore keeps the live
+   -- reservations (union-only) and still conservative-fills up to the highest evidenced code, with a warning.
+   IF coalesce((entry->>'missingRegistry')::boolean,false)
+      AND NOT EXISTS (SELECT 1 FROM inventory_private.material_code_registry) THEN
+     RAISE EXCEPTION 'INVENTORY_RESTORE_REGISTRY_REQUIRED' USING ERRCODE='23514';
+   END IF;
+   extra:=extra||jsonb_build_object('registryEvaluation',jsonb_build_object(
+     'missingCodeRegistry',coalesce((entry->>'missingRegistry')::boolean,false),
+     'warnings',coalesce(entry->'warnings','[]'::jsonb),
+     'newReservations',coalesce(entry->'newReservations','[]'::jsonb),
+     'tailReservations',coalesce(entry->'tailReservations','[]'::jsonb),
+     'maxReferenced',coalesce(entry->'maxReferenced','{}'::jsonb),
+     'conservativeMax',coalesce(entry->'conservativeMax','{}'::jsonb)));
+   IF backup ? 'codeRegistry' AND jsonb_typeof(backup->'codeRegistry')='array' AND jsonb_array_length(backup->'codeRegistry')>0 THEN
      INSERT INTO inventory_private.material_code_registry(code_key,code,prefix,number,material_id,source,deleted_at)
      SELECT lower(btrim(r->>'code')),btrim(r->>'code'),p->>'prefix',(p->>'number')::numeric,r->>'materialId','restore-backup',
        CASE WHEN EXISTS(SELECT 1 FROM jsonb_array_elements(backup->'materials') bm WHERE bm->>'id'=r->>'materialId'
@@ -634,6 +653,40 @@ BEGIN
      SELECT data INTO val FROM public.materials WHERE id=mid;
      IF val IS NOT NULL THEN PERFORM inventory_private.reserve_material_code(mid,val,cfg,false,'restore'); END IF;
    END LOOP;
+   IF mode='restore' AND reg_plan IS NOT NULL THEN
+   -- Conservative fill (always, union-only): startRange..max evidenced for pinned prefixes, min..max for others.
+   INSERT INTO inventory_private.material_code_registry(code_key,code,prefix,number,material_id,source,deleted_at)
+   SELECT lower(pol.prefix||'-'||g.n),pol.prefix||'-'||g.n,pol.prefix,g.n,
+     coalesce((SELECT bm->>'id' FROM jsonb_array_elements(backup->'materials') bm
+       WHERE lower(btrim(bm->>'code'))=lower(pol.prefix||'-'||g.n) LIMIT 1),'conservative-hold:'||pol.prefix||'-'||g.n),
+     'restore-conservative',
+     CASE WHEN EXISTS(SELECT 1 FROM jsonb_array_elements(backup->'materials') bm
+       WHERE lower(btrim(bm->>'code'))=lower(pol.prefix||'-'||g.n)) THEN NULL ELSE now() END
+   FROM inventory_private.category_policy pol
+   JOIN LATERAL generate_series(pol.start_range,(reg_plan->'conservativeMax'->>pol.prefix)::numeric) g(n) ON TRUE
+   WHERE (reg_plan->'conservativeMax' ? pol.prefix) AND (reg_plan->'conservativeMax'->>pol.prefix)::numeric>=pol.start_range
+   ON CONFLICT DO NOTHING;
+   INSERT INTO inventory_private.material_code_registry(code_key,code,prefix,number,material_id,source,deleted_at)
+   SELECT lower(s.pref||'-'||g.n),s.pref||'-'||g.n,s.pref,g.n,
+     coalesce((SELECT bm->>'id' FROM jsonb_array_elements(backup->'materials') bm
+       WHERE lower(btrim(bm->>'code'))=lower(s.pref||'-'||g.n) LIMIT 1),'conservative-hold:'||s.pref||'-'||g.n),
+     'restore-conservative',
+     CASE WHEN EXISTS(SELECT 1 FROM jsonb_array_elements(backup->'materials') bm
+       WHERE lower(btrim(bm->>'code'))=lower(s.pref||'-'||g.n)) THEN NULL ELSE now() END
+   FROM (
+     SELECT p->>'prefix' AS pref,
+       min((p->>'number')::numeric) AS lo,
+       max((p->>'number')::numeric) AS hi
+     FROM (
+       SELECT inventory_private.code_parts(m->>'code') p FROM jsonb_array_elements(CASE WHEN jsonb_typeof(backup->'materials')='array' THEN backup->'materials' ELSE '[]'::jsonb END) m
+       UNION ALL
+       SELECT inventory_private.code_parts(t->>'itemCode') FROM jsonb_array_elements(CASE WHEN jsonb_typeof(backup->'transactions')='array' THEN backup->'transactions' ELSE '[]'::jsonb END) t
+     ) u
+     WHERE p->>'prefix' IS NOT NULL AND NOT EXISTS (SELECT 1 FROM inventory_private.category_policy pol WHERE pol.prefix=p->>'prefix')
+     GROUP BY 1
+   ) s JOIN LATERAL generate_series(s.lo,s.hi) g(n) ON TRUE
+   ON CONFLICT DO NOTHING;
+   END IF;
    IF mode='restore' THEN
      UPDATE inventory_private.material_code_registry r SET deleted_at=now()
      WHERE r.deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM public.materials m WHERE m.id=r.material_id AND lower(btrim(m.data->>'code'))=r.code_key);
@@ -684,9 +737,160 @@ $$;
 CREATE OR REPLACE FUNCTION public.inventory_commit(p_mutation_id text,p_payload jsonb) RETURNS jsonb
 LANGUAGE sql SECURITY INVOKER SET search_path = '' AS $$ SELECT inventory_private.commit_inventory(p_mutation_id,p_payload); $$;
 
+-- R8-R2 (R2-R8-D02 / RT-R8-D01 / RT-R8-D03): inspect a backup's codeRegistry (or its absence) against
+-- materials, transactions, audit receipts and the pinned category ranges. Private; no client GRANT.
+CREATE OR REPLACE FUNCTION inventory_private.evaluate_backup_registry(p_backup jsonb) RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $$
+DECLARE
+  ev jsonb := '[]';
+  max_ref jsonb := '{}';
+  rejected jsonb := '[]';
+  accepted jsonb := '[]';
+  tail jsonb := '[]';
+  warnings jsonb := '[]';
+  missing boolean;
+  r jsonb;
+  p jsonb;
+  pref text;
+  n numeric;
+  ev_max numeric;
+  start_n numeric;
+  end_n numeric;
+  codes jsonb := '[]';
+  mid_conflict boolean;
+  ok boolean := true;
+  err text;
+  new_res jsonb := '[]';
+BEGIN
+  IF p_backup IS NULL OR jsonb_typeof(p_backup) IS DISTINCT FROM 'object' THEN
+    RETURN jsonb_build_object('ok',false,'error','INVENTORY_BACKUP_INVALID','missingRegistry',true,
+      'warnings','[]'::jsonb,'rejected','[]'::jsonb,'accepted','[]'::jsonb,'tailReservations','[]'::jsonb,
+      'maxReferenced','{}'::jsonb,'conservativeMax','{}'::jsonb,'newReservations','[]'::jsonb);
+  END IF;
+
+  SELECT coalesce(jsonb_agg(jsonb_build_object('prefix',x.prefix,'number',x.number,'code',x.code,'materialId',x.material_id)),'[]'::jsonb)
+  INTO ev
+  FROM (
+    SELECT (inventory_private.code_parts(m->>'code')->>'prefix') AS prefix,
+           (inventory_private.code_parts(m->>'code')->>'number')::numeric AS number,
+           btrim(m->>'code') AS code,
+           m->>'id' AS material_id
+    FROM jsonb_array_elements(CASE WHEN jsonb_typeof(p_backup->'materials')='array' THEN p_backup->'materials' ELSE '[]'::jsonb END) m
+    WHERE inventory_private.code_parts(m->>'code')->>'prefix' IS NOT NULL
+    UNION ALL
+    SELECT (inventory_private.code_parts(t->>'itemCode')->>'prefix'),
+           (inventory_private.code_parts(t->>'itemCode')->>'number')::numeric,
+           btrim(t->>'itemCode'),
+           t->>'itemId'
+    FROM jsonb_array_elements(CASE WHEN jsonb_typeof(p_backup->'transactions')='array' THEN p_backup->'transactions' ELSE '[]'::jsonb END) t
+    WHERE inventory_private.code_parts(t->>'itemCode')->>'prefix' IS NOT NULL
+    UNION ALL
+    SELECT (inventory_private.code_parts(u[1])->>'prefix'),
+           (inventory_private.code_parts(u[1])->>'number')::numeric,
+           (inventory_private.code_parts(u[1])->>'prefix')||'-'||(inventory_private.code_parts(u[1])->>'number'),
+           NULL
+    FROM (
+      SELECT regexp_matches(s.doc,'[A-Za-z]{2,6}-[1-9][0-9]{0,8}','g') u
+      FROM (
+        SELECT value::text AS doc FROM jsonb_array_elements(CASE WHEN jsonb_typeof(p_backup->'auditLogs')='array' THEN p_backup->'auditLogs' ELSE '[]'::jsonb END)
+        UNION ALL
+        SELECT data::text FROM public.audit_logs
+      ) s
+    ) q
+    WHERE inventory_private.code_parts(u[1])->>'prefix' IS NOT NULL
+  ) x;
+
+  SELECT coalesce(jsonb_object_agg(prefix, mx),'{}'::jsonb) INTO max_ref
+  FROM (SELECT e->>'prefix' AS prefix, max((e->>'number')::numeric) AS mx FROM jsonb_array_elements(ev) e GROUP BY 1) s;
+
+  missing := (NOT (p_backup ? 'codeRegistry')) OR jsonb_typeof(p_backup->'codeRegistry') IS DISTINCT FROM 'array'
+             OR jsonb_array_length(p_backup->'codeRegistry')=0;
+  IF missing THEN
+    warnings := warnings || jsonb_build_array('INVENTORY_RESTORE_REGISTRY_ABSENT: registry is rebuilt conservatively up to the highest code seen in materials, transactions and audit receipts; a deleted code with no remaining trace will not be reserved');
+    RETURN jsonb_build_object('ok',true,'missingRegistry',true,'warnings',warnings,'rejected','[]'::jsonb,'accepted','[]'::jsonb,
+      'tailReservations','[]'::jsonb,'maxReferenced',max_ref,'conservativeMax',max_ref,'newReservations','[]'::jsonb,'error',NULL);
+  END IF;
+
+  IF jsonb_array_length(p_backup->'codeRegistry')>100000
+     OR EXISTS(SELECT 1 FROM jsonb_array_elements(p_backup->'codeRegistry') x WHERE jsonb_typeof(x) IS DISTINCT FROM 'object'
+       OR nullif(btrim(x->>'code'),'') IS NULL OR length(x->>'code')>120 OR nullif(btrim(x->>'materialId'),'') IS NULL OR length(x->>'materialId')>200)
+  THEN
+    RETURN jsonb_build_object('ok',false,'error','INVENTORY_BACKUP_INVALID','missingRegistry',false,'warnings',warnings,
+      'rejected','[]'::jsonb,'accepted','[]'::jsonb,'tailReservations','[]'::jsonb,'maxReferenced',max_ref,'conservativeMax','{}'::jsonb,'newReservations','[]'::jsonb);
+  END IF;
+
+  SELECT coalesce(jsonb_agg(jsonb_build_object('prefix',(inventory_private.code_parts(x->>'code'))->>'prefix',
+      'number',((inventory_private.code_parts(x->>'code'))->>'number')::numeric,
+      'code',btrim(x->>'code'),'materialId',x->>'materialId')), '[]'::jsonb)
+  INTO codes
+  FROM jsonb_array_elements(p_backup->'codeRegistry') x;
+
+  FOR r IN SELECT value FROM jsonb_array_elements(p_backup->'codeRegistry') LOOP
+    p := inventory_private.code_parts(r->>'code');
+    IF p IS NULL OR p->>'prefix' IS NULL THEN
+      IF EXISTS (SELECT 1 FROM jsonb_array_elements(ev) e WHERE lower(e->>'code')=lower(btrim(r->>'code'))) THEN
+        accepted := accepted || jsonb_build_array(r);
+      ELSE
+        rejected := rejected || jsonb_build_array(r||jsonb_build_object('reason','noncanonical'));
+        ok := false; err := 'INVENTORY_RESTORE_REGISTRY_INVALID';
+      END IF;
+      CONTINUE;
+    END IF;
+    pref := p->>'prefix';
+    n := (p->>'number')::numeric;
+    start_n := NULL; end_n := NULL;
+    SELECT start_range, end_range INTO start_n, end_n FROM inventory_private.category_policy WHERE prefix=pref;
+    IF start_n IS NOT NULL AND (n<start_n OR n>end_n) THEN
+      rejected := rejected || jsonb_build_array(r||jsonb_build_object('reason','out-of-range'));
+      ok := false; err := 'INVENTORY_RESTORE_REGISTRY_INVALID';
+      CONTINUE;
+    END IF;
+    SELECT EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(p_backup->'materials')='array' THEN p_backup->'materials' ELSE '[]'::jsonb END) m
+                   WHERE lower(btrim(m->>'code'))=lower(btrim(r->>'code')) AND m->>'id' IS DISTINCT FROM r->>'materialId')
+      INTO mid_conflict;
+    IF mid_conflict THEN
+      rejected := rejected || jsonb_build_array(r||jsonb_build_object('reason','material-mismatch'));
+      ok := false; err := 'INVENTORY_RESTORE_REGISTRY_INVALID';
+      CONTINUE;
+    END IF;
+    ev_max := NULL;
+    IF max_ref ? pref THEN ev_max := (max_ref->>pref)::numeric; END IF;
+    IF ev_max IS NULL THEN
+      IF start_n IS NOT NULL THEN ev_max := start_n-1; ELSE
+        rejected := rejected || jsonb_build_array(r||jsonb_build_object('reason','unreferenced-prefix'));
+        ok := false; err := 'INVENTORY_RESTORE_REGISTRY_INVALID';
+        CONTINUE;
+      END IF;
+    END IF;
+    IF n <= ev_max THEN
+      accepted := accepted || jsonb_build_array(r);
+    ELSIF NOT EXISTS (
+      SELECT 1 FROM generate_series(ev_max+1, n) g(k)
+      WHERE NOT EXISTS (SELECT 1 FROM jsonb_array_elements(codes) c WHERE c->>'prefix'=pref AND (c->>'number')::numeric=g.k)
+    ) THEN
+      accepted := accepted || jsonb_build_array(r);
+      tail := tail || jsonb_build_array(r);
+    ELSE
+      rejected := rejected || jsonb_build_array(r||jsonb_build_object('reason','gap-or-ghost'));
+      ok := false; err := 'INVENTORY_RESTORE_REGISTRY_INVALID';
+    END IF;
+  END LOOP;
+
+  IF jsonb_array_length(tail)>0 THEN
+    warnings := warnings || jsonb_build_array('INVENTORY_RESTORE_REGISTRY_TAIL: '||jsonb_array_length(tail)::text||' unreferenced contiguous reservation(s) above the highest evidenced code (typically a just-deleted latest material)');
+  END IF;
+
+  SELECT coalesce(jsonb_agg(a),'[]'::jsonb) INTO new_res FROM jsonb_array_elements(accepted) a
+    WHERE NOT EXISTS (SELECT 1 FROM inventory_private.material_code_registry reg WHERE reg.code_key=lower(btrim(a->>'code')));
+
+  RETURN jsonb_build_object('ok',ok,'error',err,'missingRegistry',false,'warnings',warnings,'rejected',rejected,'accepted',accepted,
+    'tailReservations',tail,'maxReferenced',max_ref,'conservativeMax',max_ref,'newReservations',coalesce(new_res,'[]'::jsonb));
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION inventory_private.restore_preview(p_backup jsonb) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
-DECLARE actor public.users%ROWTYPE; diffs jsonb:='{}'; col text; key text; old_count int; new_count int; added int; removed int; changed int;
+DECLARE actor public.users%ROWTYPE; diffs jsonb:='{}'; col text; key text; old_count int; new_count int; added int; removed int; changed int; entry jsonb;
 BEGIN
  SELECT * INTO actor FROM public.users WHERE auth_uid=auth.uid()::text AND active;
  IF actor.id IS NULL OR NOT actor.permissions @> '["users_manage","settings_edit","system_reset"]'::jsonb
@@ -702,7 +906,15 @@ BEGIN
    diffs:=diffs||jsonb_build_object(col,jsonb_build_object('current',old_count,'backup',jsonb_array_length(p_backup->key),'added',added,'removed',removed,'changed',changed));
  END LOOP;
  diffs:=diffs||jsonb_build_object('settings',jsonb_build_object('current',(SELECT count(*) FROM public.settings WHERE id='app_config'),'backup',1,'added',0,'removed',0,'changed',CASE WHEN (SELECT data-'id' FROM public.settings WHERE id='app_config') IS DISTINCT FROM ((p_backup->'settings')-'id') THEN 1 ELSE 0 END));
- RETURN jsonb_build_object('expectedState',inventory_private.state_hash(),'diffs',diffs,'auditHistory','preserved','authIdentities','preserved');
+ -- R8-R2: surface registry integrity (ghosts, missing registry, new/tail reservations) before the admin confirms.
+ entry:=inventory_private.evaluate_backup_registry(p_backup);
+ RETURN jsonb_build_object('expectedState',inventory_private.state_hash(),'diffs',diffs,'auditHistory','preserved','authIdentities','preserved',
+   'registry',jsonb_build_object('ok',coalesce((entry->>'ok')::boolean,false),'missingCodeRegistry',coalesce((entry->>'missingRegistry')::boolean,false),
+     'error',entry->>'error','warnings',coalesce(entry->'warnings','[]'::jsonb),'rejected',coalesce(entry->'rejected','[]'::jsonb),
+     'newReservations',coalesce(entry->'newReservations','[]'::jsonb),'tailReservations',coalesce(entry->'tailReservations','[]'::jsonb),
+     'maxReferenced',coalesce(entry->'maxReferenced','{}'::jsonb),'conservativeMax',coalesce(entry->'conservativeMax','{}'::jsonb),
+     'willRefuse',(NOT coalesce((entry->>'ok')::boolean,false))
+       OR (coalesce((entry->>'missingRegistry')::boolean,false) AND NOT EXISTS (SELECT 1 FROM inventory_private.material_code_registry))));
 END;
 $$;
 CREATE OR REPLACE FUNCTION public.inventory_restore_preview(p_backup jsonb) RETURNS jsonb
@@ -773,7 +985,7 @@ REVOKE ALL ON FUNCTION inventory_private.derived_material_keys(),inventory_priva
   inventory_private.code_parts(text),inventory_private.material_projection(text),inventory_private.material_ledger_hash(text),inventory_private.stored_projection(jsonb),
   inventory_private.material_rows(jsonb),inventory_private.validate_category_config(jsonb),inventory_private.code_matches_category(text,text,jsonb),
   inventory_private.reserve_material_code(text,jsonb,jsonb,boolean,text),inventory_private.projection_drift(),inventory_private.next_material_code(text),
-  inventory_private.projection_status(jsonb,jsonb),inventory_private.code_registry_export() FROM PUBLIC,anon,authenticated;
+  inventory_private.projection_status(jsonb,jsonb),inventory_private.code_registry_export(),inventory_private.evaluate_backup_registry(jsonb) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION inventory_private.commit_inventory(text,jsonb),inventory_private.restore_preview(jsonb),inventory_private.projection_drift(),inventory_private.next_material_code(text),inventory_private.code_registry_export() TO authenticated;
 REVOKE ALL ON FUNCTION public.inventory_commit(text,jsonb),public.inventory_restore_preview(jsonb),public.inventory_projection_drift(),public.inventory_next_material_code(text),public.inventory_code_registry() FROM PUBLIC,anon;
 GRANT EXECUTE ON FUNCTION public.inventory_commit(text,jsonb),public.inventory_restore_preview(jsonb),public.inventory_projection_drift(),public.inventory_next_material_code(text),public.inventory_code_registry() TO authenticated;

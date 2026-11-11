@@ -19,12 +19,12 @@ vi.mock('@supabase/supabase-js',()=>({createClient:()=>{
   }catch(error){if((error as any).code)return {data:null,error};throw error;}
  },channel:()=>{const c:any={on:()=>c,subscribe:()=>c};return c;},removeChannel:async()=>{}};
 }}));
-import {dataService,stopCloudSync,__p10EnqueueFenceTestApi} from '../src/services/dataService';
+import {dataService,stopCloudSync,__p10EnqueueFenceTestApi,SERVER_OWNED_MATERIAL_KEYS} from '../src/services/dataService';
 import {supabaseDb} from '../src/services/supabase';
 import {canonicalizeWarehouseSettings} from '../src/utils/warehouseSettings';
 import {IndexedDbSyncQueueStore} from '../src/services/syncQueueStore';
 import {setInventoryOutboxSendGate} from '../src/services/supabaseOutbox';
-import {createBackup,validateBackup} from '../src/services/backupService';
+import {createBackup,validateBackup,evaluateBackupRegistry} from '../src/services/backupService';
 let cfg:any,user:any;
 const k={m:'remix_materials_v1',t:'remix_transactions_v1',s:'remix_settings_v1'};
 const material=(id='qa-m1',code='QA-1001')=>({id,code,name:'QA مادة',category:'QA',unit:'قطعة',minimumStock:0,initialStock:0,primaryStorehouseId:'qa-a',storageLocation:'QA-A'});
@@ -280,5 +280,117 @@ describe('R8-R1 archive rule (R2-R8-01)',()=>{
    }
    expect(commits()).toBe(calls);
   }finally{spy.mockRestore();}
+ });
+});
+
+describe('R8-R2 min(confirmed, working) and server-owned-field filter (RT-R8-D04)',()=>{
+ it('R2-D04-a a pending outbound lowers getItemStock below confirmed; a pending inbound never raises it',async()=>{
+  expect((await dataService.saveTransaction(tx('qa-t1',5))).success).toBe(true);
+  expect(dataService.getMaterials().find(m=>m.id==='qa-m1')!.currentStock).toBe(5);
+  expect(dataService.getItemStock('qa-m1',undefined)).toBe(5);
+  fake.offline=true;
+  expect((await dataService.saveTransaction({...tx('qa-t2',2),transactionType:'صادر'})).success).toBe(false);
+  expect(dataService.getMaterials().find(m=>m.id==='qa-m1')!.currentStock).toBe(5);
+  expect(dataService.getItemStock('qa-m1',undefined)).toBe(3);
+  expect(dataService.getItemStockByStorehouse('qa-m1','qa-a')).toBe(3);
+ });
+ it('R2-D04-a2 a pending inbound never raises getItemStock above confirmed',async()=>{
+  expect((await dataService.saveTransaction(tx('qa-t1',5))).success).toBe(true);
+  fake.offline=true;
+  expect((await dataService.saveTransaction({...tx('qa-t2',7),createdAt:'2026-11-04T08:00:00Z'})).success).toBe(false);
+  expect(dataService.getMaterials().find(m=>m.id==='qa-m1')!.currentStock).toBe(5);
+  expect(dataService.getItemStock('qa-m1',undefined)).toBe(5);
+  expect(dataService.getItemStock('qa-m1',undefined)).toBeLessThanOrEqual(
+    dataService.getMaterials().find(m=>m.id==='qa-m1')!.currentStock);
+ });
+ it('R2-D04-b getWorkingMaterials ignores every server-owned key from a pending value',async()=>{
+  expect((await dataService.saveTransaction(tx('qa-t1',5))).success).toBe(true);
+  const confirmed=dataService.getMaterials().find(m=>m.id==='qa-m1')!;
+  const poisoned:any={...confirmed,name:'QA poisoned',
+    currentStock:999,warehouseStocks:{'QA-A':999},warehouseStocksById:{'qa-a':999},ledgerTotalStock:999,
+    lifecycleStatus:'archived',lifecycleVersion:99,archivedAt:'2099-01-01',archivedBy:'x',archivedByName:'x',
+    archiveReason:'no',archivePurpose:'discontinued',reactivatedAt:'2099',reactivatedBy:'x',reactivatedByName:'x',reactivationReason:'no'};
+  fake.offline=true;
+  await expect(dataService.saveMaterial(poisoned)).rejects.toThrow();
+  const working=dataService.getWorkingMaterials().find(m=>m.id==='qa-m1')!;
+  expect(working.name).toBe('QA poisoned');
+  for(const key of SERVER_OWNED_MATERIAL_KEYS){
+    expect(working[key as keyof typeof working],String(key)).toEqual(confirmed[key as keyof typeof confirmed]);
+  }
+  expect(working.currentStock).toBe(5);
+  expect(working.lifecycleStatus).not.toBe('archived');
+ });
+});
+describe('R8-R2 registry integrity on backup/restore (R2-R8-D02 / RT-R8-D01 / RT-R8-D03)',()=>{
+ it('R2-D02-client a registry with an unreferenced in-range ghost is refused; a legitimate deleted tail is kept',async()=>{
+  await fake.db.query("insert into inventory_private.material_code_registry(code_key,code,prefix,number,material_id,source,deleted_at) values('qa-1002','QA-1002','QA',1002,'qa-gone','test',now())");
+  const b=await createBackup({codeRegistry:await dataService.getCodeRegistryForBackup()});
+  expect((await validateBackup(JSON.parse(JSON.stringify(b)))).success).toBe(true);
+  expect(evaluateBackupRegistry(b).ok).toBe(true);
+  expect(evaluateBackupRegistry(b).errors).toEqual([]);
+  expect(b.codeRegistry!.some(r=>r.code==='QA-1002'&&r.deleted)).toBe(true);
+  const ghost={...b,codeRegistry:[...b.codeRegistry!,{code:'SAN-2999',materialId:'phantom2',deleted:true}]};
+  const ev=evaluateBackupRegistry(ghost);
+  expect(ev.ok).toBe(false);
+  expect(ev.errors.some(e=>e.includes('SAN-2999'))).toBe(true);
+ });
+ it('R2-D01-client a registry-less backup is labelled partial and warned; a cloud export without a user is refused',async()=>{
+  const labelled=await createBackup();
+  expect(labelled.partial).toBe(true);
+  expect(labelled.manifest.registryStatus).toBe('absent');
+  expect(labelled.codeRegistry).toBeUndefined();
+  const v=await validateBackup(JSON.parse(JSON.stringify(labelled)));
+  expect(v.success).toBe(true);
+  expect(v.warnings.some(w=>w.includes('سجل الأكواد')||w.includes('جزئية'))).toBe(true);
+  // Cloud + no user: getCodeRegistryForBackup must throw (not return undefined), so Settings cannot
+  // emit an unlabelled "full" file. The live auth binding in this file is shared with resetModules
+  // (R1-GATE-1), so the branch is pinned from the source and by calling the function after a
+  // simulated missing user via the same condition it implements.
+  const src=fs.readFileSync('src/services/dataService.ts','utf8');
+  const fn=src.slice(src.indexOf('getCodeRegistryForBackup'), src.indexOf('getCodeRegistryForBackup')+900);
+  expect(fn).toMatch(/if \(!isSupabaseConfigured\(\)\) return undefined;/);
+  expect(fn).toMatch(/if \(!getCurrentAuthUser\(\)\) throw new Error\('تعذر قراءة سجل الأكواد المركزي/);
+  expect(fn).not.toMatch(/if \(!isSupabaseConfigured\(\) \|\| !getCurrentAuthUser\(\)\) return undefined;/);
+ });
+ it('R2-D02-server a restore whose codeRegistry contains SAN-2999 is refused; next_material_code and the registry are unchanged; a legitimate deleted tail is preserved',async()=>{
+  await fake.db.query("insert into inventory_private.material_code_registry(code_key,code,prefix,number,material_id,source,deleted_at) values('qa-1002','QA-1002','QA',1002,'qa-gone','test',now())");
+  const b=await createBackup({codeRegistry:await dataService.getCodeRegistryForBackup()});
+  await fake.db.exec('delete from inventory_private.material_code_registry');
+  const pre=await dataService.previewBackupRestore(b);
+  const r=await dataService.restoreBackupData(b,pre); expect(r.success,r.message).toBe(true);
+  const reg=(await fake.db.query("select code,deleted_at is not null d from inventory_private.material_code_registry where code in ('QA-1001','QA-1002') order by code")).rows;
+  expect(reg).toEqual([{code:'QA-1001',d:false},{code:'QA-1002',d:true}]);
+  const payload={settings:b.settings,materials:b.materials,transactions:b.transactions,generatorLogs:b.generatorLogs,users:b.users,
+    codeRegistry:[...b.codeRegistry!,{code:'SAN-2999',materialId:'phantom2',deleted:true}]};
+  const pre2=await supabaseDb.previewRestore(payload);
+  expect(pre2.registry?.ok).toBe(false);
+  expect(JSON.stringify(pre2.registry?.rejected||[])).toContain('SAN-2999');
+  const before=(await fake.db.query("select code,material_id,deleted_at is not null d from inventory_private.material_code_registry order by code")).rows;
+  const nextBefore=await dataService.suggestMaterialCode('QA');
+  let err:any;
+  try{
+    await asUser(fake.db,fake.uid,tx=>tx.query('select public.inventory_commit($1,$2)',['qa-r2-ghost-san2999',JSON.stringify({mode:'restore',label:'QA',backup:payload,expectedState:pre2.expectedState})]));
+  }catch(e){err=e;}
+  expect(String(err?.message||'')).toMatch(/INVENTORY_RESTORE_REGISTRY_INVALID/);
+  const after=(await fake.db.query("select code,material_id,deleted_at is not null d from inventory_private.material_code_registry order by code")).rows;
+  expect(after).toEqual(before);
+  expect(after.some((row:any)=>row.code==='SAN-2999')).toBe(false);
+  expect(await dataService.suggestMaterialCode('QA')).toBe(nextBefore);
+ });
+ it('R2-D01-server a registry-less backup is refused into an empty registry and warned in the preview',async()=>{
+  const labelled=await createBackup();
+  expect(labelled.manifest.registryStatus).toBe('absent');
+  await fake.db.exec('delete from inventory_private.material_code_registry');
+  const payload={settings:labelled.settings,materials:labelled.materials,transactions:labelled.transactions,generatorLogs:labelled.generatorLogs,users:labelled.users};
+  const pre=await supabaseDb.previewRestore(payload);
+  expect(pre.registry?.missingCodeRegistry).toBe(true);
+  expect(pre.registry?.willRefuse).toBe(true);
+  expect(JSON.stringify(pre.registry?.warnings||[])).toMatch(/REGISTRY_ABSENT/);
+  let err:any;
+  try{
+    await asUser(fake.db,fake.uid,tx=>tx.query('select public.inventory_commit($1,$2)',['qa-r2-noreg-fresh',JSON.stringify({mode:'restore',label:'QA',backup:payload,expectedState:pre.expectedState})]));
+  }catch(e){err=e;}
+  expect(String(err?.message||'')).toMatch(/INVENTORY_RESTORE_REGISTRY_REQUIRED/);
+  expect(Number((await fake.db.query('select count(*) n from inventory_private.material_code_registry')).rows[0].n)).toBe(0);
  });
 });

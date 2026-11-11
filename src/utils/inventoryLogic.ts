@@ -228,6 +228,7 @@ export interface TransactionViewRow extends InventoryTransaction {
   displayStockAfter: number;
   displayWarehouseStockBefore: Record<string, number>;
   displayWarehouseStockAfter: Record<string, number>;
+  archivedMaterial?: boolean;
 }
 
 /**

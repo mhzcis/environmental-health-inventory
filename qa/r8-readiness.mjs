@@ -283,6 +283,8 @@ await test('R1-RT03 codes are issued only in central order: a manual/imported/RP
  const m=await row('materials','b2');await atomicReject(()=>raw(ids.admin,payload([set('materials','b2',{...m,code:'PES-1900'},m)]),'qa-rt03-recode'),['23514'],/CODE_NOT_NEXT/);});
 await test('CODE-01 import batch and restore with a wrong-category code are rejected atomically',async()=>{
  await atomicReject(()=>raw(ids.admin,payload([set('materials','i1',mat('i1','PES-1002')),set('materials','i2',mat('i2','CHM-5001'))]),'qa-imp-bad'),['23514']);
+ // A live registry row makes this a same-environment restore (registry-less files are refused only into an empty registry).
+ await q("insert into inventory_private.material_code_registry(code_key,code,prefix,number,material_id,source) values('pes-1001','PES-1001','PES',1001,'seed','qa')");
  const users=(await q('select data from users order by id')).map(r=>r.data);const b={settings:cfg,materials:[mat('r1','EQP-3001')],transactions:[],generatorLogs:[],users};
  const pre=(await asUser(db,ids.admin,tx=>tx.query('select public.inventory_restore_preview($1) p',[JSON.stringify(b)]))).rows[0].p;
  await atomicReject(()=>raw(ids.admin,{mode:'restore',label:'QA',backup:b,expectedState:pre.expectedState},'qa-rst-bad'),['23514'],/CODE_CATEGORY_MISMATCH/);});
@@ -333,6 +335,62 @@ await test('RBAC-01 reader reads materials/transactions/settings but no audit; e
  await atomicReject(()=>asUser(db,ids.reader,tx=>tx.query('select public.inventory_restore_preview($1)',[JSON.stringify({settings:c,materials:[],transactions:[],generatorLogs:[],users:[]})])),['42501']);
  await rejects(()=>next('مبيدات حشرية',ids.reader),['42501']);
  for(const t of ['materials','transactions','settings','users','audit_logs'])await rejects(()=>asUser(db,ids.reader,tx=>tx.query(`update ${t} set data=data`)),['42501']);});
+
+await test('R2-D02 a restore whose codeRegistry contains an unreferenced in-range ghost (SAN-2999) is refused; next_material_code is unchanged; a legitimate deleted tail is preserved',async()=>{
+ await seedPesOk();await archiver();
+ // Legitimate deleted tail: create then delete PES-1003 (zero stock, no ledger)
+ const d=mat('m-del','PES-1002');
+ await commit(ids.admin,payload([set('materials','m-del',d)]),'qa-r2-del-c');
+ const rowD=await row('materials','m-del');
+ await commit(ids.admin,payload([del('materials','m-del',rowD)]),'qa-r2-del-d');
+ const users=(await q('select data from users')).map(r=>r.data);
+ const s=await cfgNow();
+ const materials=(await q('select data from materials')).map(r=>r.data);
+ const transactions=(await q('select data from transactions')).map(r=>r.data);
+ const codeRegistry=(await asUser(db,ids.admin,tx=>tx.query('select public.inventory_code_registry() r'))).rows[0].r;
+ assert.ok(codeRegistry.some(r=>r.code==='PES-1002'&&r.deleted),'deleted tail exported');
+ const honest={settings:s,materials,transactions,generatorLogs:[],users,codeRegistry};
+ const pre=(await asUser(db,ids.admin,tx=>tx.query('select public.inventory_restore_preview($1) p',[JSON.stringify(honest)]))).rows[0].p;
+ assert.equal(pre.registry.ok,true);
+ const nextBefore=await (async()=>{try{return (await asUser(db,ids.admin,tx=>tx.query("select public.inventory_next_material_code('معقمات ومطهرات') r"))).rows[0].r;}catch(e){return {error:e.message};}})();
+ const ghost={...honest,codeRegistry:[...codeRegistry,{code:'SAN-2999',materialId:'phantom2',deleted:true}]};
+ const preG=(await asUser(db,ids.admin,tx=>tx.query('select public.inventory_restore_preview($1) p',[JSON.stringify(ghost)]))).rows[0].p;
+ assert.equal(preG.registry.ok,false);
+ assert.ok(JSON.stringify(preG.registry.rejected).includes('SAN-2999'));
+ const before=(await q("select code,material_id,deleted_at is not null d from inventory_private.material_code_registry order by code"));
+ await atomicReject(()=>raw(ids.admin,{mode:'restore',label:'QA',backup:ghost,expectedState:preG.expectedState},'qa-r2-ghost'),['23514'],/INVENTORY_RESTORE_REGISTRY_INVALID/);
+ const after=(await q("select code,material_id,deleted_at is not null d from inventory_private.material_code_registry order by code"));
+ assert.deepEqual(after,before);
+ assert.equal(after.some(r=>r.code==='SAN-2999'),false);
+ const nextAfter=(await asUser(db,ids.admin,tx=>tx.query("select public.inventory_next_material_code('معقمات ومطهرات') r"))).rows[0].r;
+ assert.deepEqual(nextAfter,nextBefore);
+ // Honest restore still preserves the deleted tail
+ const preH=(await asUser(db,ids.admin,tx=>tx.query('select public.inventory_restore_preview($1) p',[JSON.stringify(honest)]))).rows[0].p;
+ await raw(ids.admin,{mode:'restore',label:'QA',backup:honest,expectedState:preH.expectedState},'qa-r2-honest');
+ const kept=(await q("select code,deleted_at is not null d from inventory_private.material_code_registry where code='PES-1002'"))[0];
+ assert.equal(kept.d,true);
+});
+await test('R2-D01 a registry-less backup is warned in the preview and refused into an empty (fresh) registry',async()=>{
+ await seedPesOk();
+ const users=(await q('select data from users')).map(r=>r.data);
+ const s=await cfgNow();
+ const materials=(await q('select data from materials')).map(r=>r.data);
+ const transactions=(await q('select data from transactions')).map(r=>r.data);
+ const b={settings:s,materials,transactions,generatorLogs:[],users}; // no codeRegistry
+ const pre=(await asUser(db,ids.admin,tx=>tx.query('select public.inventory_restore_preview($1) p',[JSON.stringify(b)]))).rows[0].p;
+ assert.equal(pre.registry.missingCodeRegistry,true);
+ assert.ok(JSON.stringify(pre.registry.warnings).includes('REGISTRY_ABSENT'));
+ // Same-environment (registry already populated by seed) may proceed: reservations are kept.
+ // Fresh environment: wipe the registry, then refuse.
+ const saved=await q('select * from inventory_private.material_code_registry');
+ await q('delete from inventory_private.material_code_registry');
+ const preF=(await asUser(db,ids.admin,tx=>tx.query('select public.inventory_restore_preview($1) p',[JSON.stringify(b)]))).rows[0].p;
+ assert.equal(preF.registry.willRefuse,true);
+ await atomicReject(()=>raw(ids.admin,{mode:'restore',label:'QA',backup:b,expectedState:preF.expectedState},'qa-r2-noreg'),['23514'],/INVENTORY_RESTORE_REGISTRY_REQUIRED/);
+ // restore the saved rows so later tests (none) aren't affected; boot() already isolates.
+ assert.equal((await q('select count(*) n from inventory_private.material_code_registry'))[0].n,0);
+ void saved;
+});
 
 const report={suite:'R8 readiness (PGlite isolated): DATA-01, ARC-01, REC-01, CODE-01, POL-01/02, RBAC-01',total:results.length,passed:results.filter(x=>x.status==='PASS').length,failed:results.filter(x=>x.status==='FAIL').length,results};
 fs.writeFileSync(process.env.QA_R8_OUTPUT||'/tmp/inventory-r8-readiness.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,1));await db.close();if(report.failed)process.exitCode=1;

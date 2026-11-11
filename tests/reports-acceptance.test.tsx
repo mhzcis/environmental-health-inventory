@@ -132,3 +132,61 @@ describe('R8-WH-01 no unnoticed all-warehouse report',()=>{
   expect(fake.pdf.mock.calls[0][0].metaFields).toContainEqual({label:'نطاق المستودعات:',value:'QA-B'});
  });
 });
+
+describe('R8-R2 R2-R8-D01 Transactions page, bulk Excel/PDF and voucher print',()=>{
+ const arrange=()=>{
+  fake.materials[0]={...fake.materials[0],lifecycleStatus:'active'};
+  fake.materials[1]={...fake.materials[1],lifecycleStatus:'archived',archivePurpose:'qa_test_data'};
+  const base=(id:string,itemId:string,code:string,name:string,number:string,date:string)=>({id,itemId,itemCode:code,itemName:name,itemCategory:'QA-C1',unit:'قطعة',transactionType:'صادر',quantity:1,date,transactionNumber:number,storehouse:'QA-A',storehouseId:'qa-a',createdAt:date+'T00:00:00Z',executedBy:'QA'});
+  fake.transactions=[
+   base('qa-confirmed','qa-r0','QA-1000','QA صنف عربي 0','QA-O0','2026-11-01'),
+   base('qa-archived','qa-r1','QA-1001','QA صنف عربي 1','QA-A1','2026-11-03'),
+   base('qa-queued','qa-r0','QA-1000','QA صنف عربي 0','QA-Q1','2026-11-04'),
+   base('qa-rejected','qa-r0','QA-1000','QA صنف عربي 0','QA-R1','2026-11-05'),
+  ];
+  (fake as any).pendingTx=['qa-queued','qa-rejected'];
+ };
+ const texts=(sheet:any)=>Array.from({length:sheet.rowCount},(_,i)=>sheet.getRow(i+1).values.filter(Boolean).map(String).join('|'));
+ const bulkExcel=async()=>{fireEvent.click(document.getElementById('select-all-transactions')!);fireEvent.click(document.getElementById('bulk-export-transactions-excel')!);await waitFor(()=>expect(fake.save).toHaveBeenCalledOnce());const wb=new ExcelJS.Workbook();await wb.xlsx.load(await fake.save.mock.calls[0][0].arrayBuffer());return wb.worksheets[0];};
+ const bulkPdf=async()=>{fireEvent.click(document.getElementById('select-all-transactions')!);fireEvent.click(document.getElementById('bulk-export-transactions-pdf')!);await waitFor(()=>expect(fake.pdf).toHaveBeenCalledOnce());return JSON.stringify(fake.pdf.mock.calls[0][0]);};
+ afterEach(()=>{(fake as any).pendingTx=[];});
+ it('R2-D01-a default: archived, queued and rejected rows are absent from the list and from bulk Excel/PDF',async()=>{
+  arrange();mountTransactions();
+  expect(screen.getByText('QA-O0')).toBeTruthy();
+  expect(screen.queryByText('QA-A1')).toBeNull();
+  expect(screen.queryByText('QA-Q1')).toBeNull();
+  expect(screen.queryByText('QA-R1')).toBeNull();
+  expect(screen.queryByText('(مؤرشف)')).toBeNull();
+  const lines=texts(await bulkExcel());
+  expect(lines.some(l=>l.includes('QA-O0'))).toBe(true);
+  expect(lines.some(l=>l.includes('QA-A1')||l.includes('QA-Q1')||l.includes('QA-R1')||l.includes('مؤرشف'))).toBe(false);
+  cleanup();arrange();mountTransactions();
+  const pdf=await bulkPdf();
+  expect(pdf).toContain('QA-O0');expect(pdf).not.toContain('QA-A1');expect(pdf).not.toContain('QA-Q1');expect(pdf).not.toContain('QA-R1');
+ });
+ it('R2-D01-b include-archived: archived rows come last, labelled (مؤرشف), in the list and in Excel/PDF; queued and rejected stay out',async()=>{
+  arrange();mountTransactions();
+  fireEvent.click(screen.getByRole('checkbox',{name:'تضمين الأصناف المؤرشفة'}));
+  expect(screen.getByText('QA-A1')).toBeTruthy();
+  expect(screen.getByText('QA صنف عربي 1 (مؤرشف)')).toBeTruthy();
+  expect(screen.queryByText('QA-Q1')).toBeNull();
+  expect(screen.queryByText('QA-R1')).toBeNull();
+  const lines=texts(await bulkExcel()).filter(l=>l.includes('QA-O0')||l.includes('QA-A1'));
+  const iActive=lines.findIndex(l=>l.includes('QA-O0'));const iArch=lines.findIndex(l=>l.includes('QA-A1'));
+  expect(iActive).toBeGreaterThanOrEqual(0);expect(iArch).toBeGreaterThan(iActive);expect(lines[iArch]).toContain('(مؤرشف)');expect(lines[iActive]).not.toContain('(مؤرشف)');
+  expect(lines.some(l=>l.includes('QA-Q1')||l.includes('QA-R1'))).toBe(false);
+  cleanup();arrange();mountTransactions();fireEvent.click(screen.getByRole('checkbox',{name:'تضمين الأصناف المؤرشفة'}));
+  fake.save.mockReset();fake.pdf.mockReset();
+  const pdf=await bulkPdf();
+  expect(pdf).toContain('(مؤرشف)');expect(pdf).toContain('QA-A1');expect(pdf).not.toContain('QA-Q1');expect(pdf).not.toContain('QA-R1');
+ });
+ it('R2-D01-c printing a pending voucher is refused and produces no PDF',async()=>{
+  arrange();mountTransactions(); // queued/rejected stay excluded; only the confirmed voucher is printable
+  fireEvent.click(screen.getByRole('button',{name:'معاينة وطباعة السند المخزني'}));
+  const print=screen.getByRole('button',{name:/طباعة وإصدار المستند الآن/});
+  (fake as any).pendingTx=['qa-queued','qa-rejected','qa-confirmed'];
+  fireEvent.click(print);
+  expect((await screen.findByRole('alert')).textContent).toMatch(/لم يؤكدها الخادم|معلّقة|مرفوضة/);
+  expect(fake.pdf).not.toHaveBeenCalled();
+ });
+});

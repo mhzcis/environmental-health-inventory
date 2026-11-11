@@ -12,3 +12,17 @@
 **البصمة:** حُدّث سطر الملف في `protected-files.sha256` إلى بصمته الجديدة؛ بقية الملفات المحمية دون تغيير.
 
 **الاختبارات:** `tests/r8-warehouse-scope.test.tsx` (R8-WH-C1..C3)، `tests/reports-acceptance.test.tsx` (R8-WH-R1..R3)، و `tests/p5_warehouse_centrality.test.ts` دون تغيير.
+
+---
+
+# تغيير ملف محمي في R8 الجولة 2: `src/utils/inventoryLogic.ts`
+
+**البند:** R2-R8-D01 — صفحة الحركات كانت تعرض وتصدّر كل الصفوف بما فيها المؤرشفة والمعلّقة والمرفوضة دون تمييز.
+
+**التغيير (حقل اختياري للعرض فقط، لا قواعد مخزون ولا صلاحيات):**
+- أُضيف الحقل الاختياري `archivedMaterial?: boolean` إلى واجهة `TransactionViewRow` حتى تُعلَّم حركة صنف مؤرشف بـ `(مؤرشف)` في القائمة والتصدير عند تفعيل «تضمين الأصناف المؤرشفة».
+- لم تتغير دوال الحساب أو التكامل أو أي قاعدة رصيد. الترشيح والترتيب يعيشان في `Transactions.tsx` (`getConfirmedTransactions`، `scopeTransactionsByArchive`، `archivedRowsLast`).
+
+**البصمة:** حُدّث سطر `src/utils/inventoryLogic.ts` في `protected-files.sha256` إلى بصمته الجديدة؛ بقية الملفات المحمية دون تغيير.
+
+**الاختبارات:** `tests/reports-acceptance.test.tsx` (R2-D01-a/b/c).

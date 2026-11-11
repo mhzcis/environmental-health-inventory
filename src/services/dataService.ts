@@ -912,7 +912,10 @@ export const dataService = {
    * restore re-issue deleted codes), administrators only. Local-only mode: undefined.
    */
   getCodeRegistryForBackup: async (): Promise<{ code: string; materialId: string; deleted: boolean }[] | undefined> => {
-    if (!isSupabaseConfigured() || !getCurrentAuthUser()) return undefined;
+    // Local-only (no cloud): there is no central registry; the file is labelled partial by createBackup.
+    if (!isSupabaseConfigured()) return undefined;
+    // Cloud mode: a missing session must not produce an unlabelled "full" backup (RT-R8-D01).
+    if (!getCurrentAuthUser()) throw new Error('تعذر قراءة سجل الأكواد المركزي من الخادم؛ لا تُصدَّر نسخة كاملة بدونه (يلزم اتصال وصلاحيات المدير).');
     try { return await supabaseDb.codeRegistry(); }
     catch { throw new Error('تعذر قراءة سجل الأكواد المركزي من الخادم؛ لا تُصدَّر نسخة كاملة بدونه (يلزم اتصال وصلاحيات المدير).'); }
   },
@@ -2281,9 +2284,11 @@ export const dataService = {
   },
 
   getItemStock: (itemId: string, _itemType: string | undefined): number => {
-    const confirmed = dataService.getMaterials().find((m) => m.id === itemId)?.currentStock ?? 0;
-    const working = dataService.getWorkingMaterials().find((m) => m.id === itemId)?.currentStock ?? 0;
-    return Math.min(confirmed, working);
+    // R8-R2 (RT-R8-D04): same conservative rule as getStorehouseStockExcludingTransaction — the lower of
+    // the server-confirmed ledger and the working (pending-aware) ledger. A pending outbound lowers the
+    // form balance; a pending inbound never raises it. (Comparing material.currentStock is not enough:
+    // that field is server-owned, so confirmed and working copies are equal.)
+    return dataService.getStorehouseStockExcludingTransaction(itemId, undefined, 'non-existent-id');
   },
 
   getItemStockByStorehouse: (itemId: string, storehouse: string): number => {

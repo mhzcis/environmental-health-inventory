@@ -65,9 +65,18 @@ await test('MIG-4 rollback refuses while an item is archived; reactivate -> roll
  let e;try{await commit(archive(2),'qa-mig-after-rb');}catch(x){e=x;}assert.match(e?.message||'',/INVENTORY_OPERATIONS_INVALID/);});
 await test('MIG-5 confirmed write hold allows rollback with an archived item; roll-forward again is idempotent and keeps reservations',async()=>{await db.exec(MIGRATION);await commit(archive(0),'qa-mig-archive-2');
  await db.exec(`SET r8.rollback_hold_writes='confirmed'; ${ROLLBACK}`);assert.equal(await md5('commit_inventory'),MAIN_COMMIT_MD5);await db.exec('RESET r8.rollback_hold_writes');
- // R2-R8-12: the hold is enforced, not just asserted: no authenticated write is possible while rolled back with an archived item.
+ // R2-R8-12 / RT-R8-D02: the hold is enforced on EVERY write path: public.inventory_commit AND
+ // inventory_private.commit_inventory (audit and all other writes go through this definer).
  let held;try{await commit({mode:'audit',label:'QA',operations:[{collection:'audit_logs',docId:'h',kind:'set',value:{action:'x',details:'x'}}]},'qa-mig-held');}catch(x){held=x;}assert.equal(held?.code,'42501');
- await db.exec(MIGRATION);assert.equal((await q(`select data->>'lifecycleStatus' s from materials where id='${ZID}'`))[0].s,'archived');
+ const can=async(sig)=> (await q("select has_function_privilege('authenticated',$1,'EXECUTE') c",[sig]))[0].c;
+ assert.equal(await can('public.inventory_commit(text,jsonb)'),false);
+ assert.equal(await can('inventory_private.commit_inventory(text,jsonb)'),false);
+ let priv;try{await asUser(db,ids.employee,t=>t.query('select inventory_private.commit_inventory($1,$2)',['qa-priv-hold',JSON.stringify({mode:'audit',label:'QA',operations:[{collection:'audit_logs',docId:'hp',kind:'set',value:{action:'تسجيل الدخول',details:'x',itemType:'عام'}}]})]));}catch(x){priv=x;}
+ assert.equal(priv?.code,'42501',String(priv?.message||'private commit was allowed during the hold'));
+ await db.exec(MIGRATION);
+ assert.equal(await can('public.inventory_commit(text,jsonb)'),true);
+ assert.equal(await can('inventory_private.commit_inventory(text,jsonb)'),true);
+ assert.equal((await q(`select data->>'lifecycleStatus' s from materials where id='${ZID}'`))[0].s,'archived');
  let e;try{await commit({mode:'mutation',label:'QA',operations:[{collection:'materials',docId:'m2',kind:'set',value:{...mat,id:'m2',currentStock:0,warehouseStocks:{}},expected:{kind:'missing'}}]},'qa-mig-reuse');}catch(x){e=x;}
  assert.match(e?.message||'',/INVENTORY_CODE_RESERVED/);});
 await test('R1-MIG-6 a code reused by another material while rolled back is detected: roll-forward stops and lists it (nothing applied)',async()=>{await db.exec(MIGRATION);

@@ -1,14 +1,14 @@
 import { requireStableStringPart } from '../utils/printHtml';
 import { presentResultMessage } from '../services/safeUserMessage';
 import { exportToPDF } from '../utils/printHtml';
-import { Fragment, useState, useEffect, useMemo } from 'react';
+import { Fragment, useState, useEffect, useMemo, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import NotificationToast from '../components/NotificationToast';
 import EmptyTableState from '../components/EmptyTableState';
 import { 
   Box, Typography, Button, TextField, MenuItem, Paper, Table, TableBody, 
   TableCell, TableContainer, TableHead, TableRow, TablePagination, IconButton, Dialog, DialogTitle, DialogContent, DialogActions, 
-  Tooltip, Chip, CircularProgress, Checkbox
+  Tooltip, Chip, CircularProgress, Checkbox, Alert
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import FilterAltOffIcon from "@mui/icons-material/FilterAltOff";
@@ -38,6 +38,7 @@ import { useStorehouse } from '../context/StorehouseContext';
 
 
 import { InventoryTransaction, Material } from '../types';
+import { scopeTransactionsByArchive, archivedRowsLast } from '../utils/materialLifecycle';
 import { renderOption } from '../utils/emoji';
 import { localDateString } from '../utils/localDate';
 
@@ -54,6 +55,8 @@ export default function Transactions() {
   const [correction, setCorrection] = useState({ quantity: '', date: '', notes: '', reason: '' });
   const [correctionBusy, setCorrectionBusy] = useState(false);
   const [pendingTxIds, setPendingTxIds] = useState<Set<string>>(new Set());
+  const [includeArchived, setIncludeArchived] = useState(false);
+  const includeArchivedRef = useRef(includeArchived);
   useEffect(() => {
     let active = true;
     const refresh = () => { void dataService.listPendingInventoryMutations().then(rows => {
@@ -85,18 +88,24 @@ export default function Transactions() {
   const [employeeFilter, setEmployeeFilter] = useState('all');
 
   const loadData = () => {
-    setTransactions(dataService.getTransactions());
-    setMaterials(dataService.getMaterials());
+    // R8-R2 (R2-R8-D01): the register, its exports and the voucher print use confirmed transactions only,
+    // scoped so archived-item movements are excluded by default (or last and labelled when included).
+    // Queued and rejected rows are excluded (getConfirmedTransactions + pending-id filter).
+    const confirmedMaterials = dataService.getMaterials();
+    const pendingIds = dataService.getPendingTransactionIds();
+    const confirmed = dataService.getConfirmedTransactions().filter(t => !pendingIds.has(t.id));
+    setTransactions(scopeTransactionsByArchive(confirmed, confirmedMaterials, includeArchivedRef.current));
+    setMaterials(confirmedMaterials);
     setSettings(dataService.getSettings());
+    setPendingTxIds(pendingIds);
   };
 
   useEffect(() => {
-    const load = () => {
-      loadData();
-    };
+    includeArchivedRef.current = includeArchived;
+    const load = () => { loadData(); };
     load();
     return dataService.subscribe(load);
-  }, []);
+  }, [includeArchived]);
 
 
 
@@ -216,6 +225,10 @@ export default function Transactions() {
 
   const handleOpenVoucher = (item: TransactionViewRow) => {
     if (!authorizeOutput('reports_print')) return;
+    if (dataService.getPendingTransactionIds().has(item.id)) {
+      setErrorMessage('لا يمكن طباعة سند لحركة لم يؤكدها الخادم بعد (معلّقة أو مرفوضة).');
+      return;
+    }
     setTransactionToPrint(item);
     setOpenVoucherDialog(true);
   };
@@ -224,7 +237,7 @@ export default function Transactions() {
     if (!authorizeOutput('reports_print')) return;
     try {
       setExportingPDF(true);
-      const selectedItems = ledgerTransactions.filter(t => selectedTransactionIds.includes(t.id));
+      const selectedItems = filteredTransactions.filter(t => selectedTransactionIds.includes(t.id) && !dataService.getPendingTransactionIds().has(t.id));
       
       const titleHeader = 'كشف وسجل الحركات المخزنية المحددة جماعياً';
       const filename = `كشف_حركات_المواد_المحددة_${localDateString()}.pdf`;
@@ -319,7 +332,7 @@ export default function Transactions() {
     if (!authorizeOutput('reports_export')) return;
     try {
       setExportingExcel(true);
-      const selectedItems = ledgerTransactions.filter(t => selectedTransactionIds.includes(t.id));
+      const selectedItems = filteredTransactions.filter(t => selectedTransactionIds.includes(t.id) && !dataService.getPendingTransactionIds().has(t.id));
       
       const titleHeader = 'كشف وسجل الحركات المخزنية المحددة جماعياً';
       const filename = `كشف_حركات_المواد_المحددة_${localDateString()}.xlsx`;
@@ -406,6 +419,11 @@ export default function Transactions() {
   const handlePrintVoucher = async () => {
     if (!authorizeOutput('reports_print')) return;
     if (!transactionToPrint) return;
+    if (dataService.getPendingTransactionIds().has(transactionToPrint.id)) {
+      setOpenVoucherDialog(false);
+      setErrorMessage('لا يمكن طباعة سند لحركة لم يؤكدها الخادم بعد (معلّقة أو مرفوضة).');
+      return;
+    }
     try {
       setExportingPDF(true);
       const appSettings = dataService.getSettings();
@@ -621,7 +639,8 @@ export default function Transactions() {
 
 
   // Sort transactions descending: latest first (by date, then by createdAt or id)
-  const filteredTransactions = [...unfilteredFilteredTransactions].sort((a, b) => {
+  const filteredTransactions = archivedRowsLast([...unfilteredFilteredTransactions].sort((a, b) => {
+    if (a.archivedMaterial !== b.archivedMaterial) return a.archivedMaterial ? 1 : -1;
     const dateA = new Date(a.date).getTime();
     const dateB = new Date(b.date).getTime();
     if (dateB !== dateA) return dateB - dateA;
@@ -632,7 +651,7 @@ export default function Transactions() {
     if (timeB !== timeA) return timeB - timeA;
     
     return b.id.localeCompare(a.id);
-  });
+  }));
 
   const paginatedTransactions = filteredTransactions.slice(
     page * rowsPerPage,
@@ -865,9 +884,20 @@ export default function Transactions() {
 
           {/* Results count indicator */}
           <Box className="col-span-1 md:col-span-12" sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 1, borderTop: '1px solid #f1f5f9', pt: 1.5, direction: 'rtl' }}>
-            <Typography variant="body2" sx={{ fontWeight: 'bold', color: '#566375', fontFamily: '"Cairo", sans-serif' }}>
-              وجدت: {filteredTransactions.length} حركة مطابقة للتصفية الحالية
-            </Typography>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+              <Typography variant="body2" sx={{ fontWeight: 'bold', color: '#566375', fontFamily: '"Cairo", sans-serif' }}>
+                وجدت: {filteredTransactions.length} حركة مطابقة للتصفية الحالية
+              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <Checkbox size="small" checked={includeArchived} onChange={(e) => { setIncludeArchived(e.target.checked); setPage(0); }} slotProps={{ input: { 'aria-label': 'تضمين الأصناف المؤرشفة' } }} />
+                <Typography variant="caption">تضمين الأصناف المؤرشفة (موسومة «مؤرشف»)</Typography>
+              </Box>
+              {pendingTxIds.size > 0 && (
+                <Alert severity="info" sx={{ py: 0 }} data-testid="transactions-unconfirmed-note">
+                  {`يوجد ${pendingTxIds.size} طلب لم يؤكده الخادم بعد؛ السجل وتصديره وطباعة السند يعرضون الحركات المؤكدة فقط ولا يشملون الطلبات المعلّقة أو المرفوضة.`}
+                </Alert>
+              )}
+            </Box>
             <Tooltip title="تفريغ كافة فلاتر البحث وإعادتها للافتراضي">
               <Button
                 variant="outlined"
