@@ -2040,9 +2040,8 @@ export default function Reports() {
               labelRowsPerPage="صفوف الصفحة:"
               labelDisplayedRows={({ from, to, count }) => `${from}-${to} من ${count}`}
               className="no-print-area"
-              sx={{ borderTop: '1px solid #e2e8f0' }}
-            />
-          )}
+             />
+    )}
         </TableContainer>
       </Paper>
     </Box>
