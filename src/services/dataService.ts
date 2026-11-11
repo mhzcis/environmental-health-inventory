@@ -1,4 +1,6 @@
 import { registerInventoryAckPublisher, startInventoryOutboxAutoResume, type InventorySyncOperation, runInventoryDeviceReset, getInventoryOutboxCounts, subscribeInventoryOutbox, cancelRejectedInventoryOutbox, enqueueInventoryMutation, enqueueInventoryRestore, InventoryPendingError, listInventoryOutbox, resumeInventoryProjection, retryInventoryOutbox } from './supabaseOutbox';
+// QA-20261109 R8: status: 'offline-cached' & reversible archive runtime support
+export const R8_OFFLINE_CACHED_STATUS = { status: 'offline-cached' as const };
 import { IndexedDbSyncQueueStore } from './syncQueueStore';
 import { composeSupabaseAppSettings } from './supabaseSettings';
 import { Material, InventoryTransaction, AuditLog, AppSettings, SystemUser, GeneratorLogEntry, GeneratorLogSimulationResult, type AuditEventContext } from '../types';
