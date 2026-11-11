@@ -1,4 +1,5 @@
 import { requireStableStringPart } from '../utils/printHtml';
+export const R8_TX_SEARCH_LABEL = 'البحث في الحركات بالصنف أو الكود أو المستلم';
 import { presentResultMessage } from '../services/safeUserMessage';
 import { exportToPDF } from '../utils/printHtml';
 import { Fragment, useState, useEffect, useMemo } from 'react';
@@ -86,7 +87,7 @@ export default function Transactions() {
 
   const loadData = () => {
     setTransactions(dataService.getTransactions());
-    setMaterials((dataService.getMaterials as (opts?: { includeArchived?: boolean }) => Material[])({ includeArchived: true }));
+    setMaterials((dataService.getMaterials as (opts?: { includeArchived?: boolean }) => Material[])({ includeArchived: true }));aterials(dataService.getMaterials());
     setSettings(dataService.getSettings());
   };
 
@@ -703,7 +704,7 @@ export default function Transactions() {
               size="small"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              slotProps={htmlInput: { 'aria-label': 'البحث في الحركات بالصنف أو الكود أو المستلم' }, {
+              slotProps={{
                 input: {
                   startAdornment: <SearchIcon sx={{ color: '#94a3b8', mr: 1 }} />,
                   style: { borderRadius: '10px' }
@@ -1157,7 +1158,7 @@ export default function Transactions() {
             )}
           </TableBody>
         </Table>
-        <TablePagination sx={{ '& .MuiTablePagination-toolbar': { flexWrap: 'wrap', justifyContent: { xs: 'center', sm: 'flex-end' } } }}
+        <TablePagination
           rowsPerPageOptions={[5, 10, 25]}
           component="div"
           count={filteredTransactions.length}
