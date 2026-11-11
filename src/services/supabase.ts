@@ -50,18 +50,17 @@ supabase?.auth.onAuthStateChange((event, session) => {
   }
   acceptSession(session);
 });
+// QA-20261109 R8 Auth Token HTTP 400: if a stale refresh token is rejected on startup, clear local auth storage cleanly.
 if (supabase) {
-  if (supabase.auth.getSession) {
-    void supabase.auth.getSession().then(({ error }) => {
-      if (error) {
-        const msg = String(error.message || '').toLowerCase();
-        if (msg.includes('refresh token') || msg.includes('invalid grant') || msg.includes('invalid_grant') || (error as { status?: number }).status === 400) {
-          void supabase.auth.signOut({ scope: 'local' }).catch(() => {});
-          acceptSession(null);
-        }
+  void supabase.auth.getSession().then(({ error }) => {
+    if (error) {
+      const msg = String(error.message || '').toLowerCase();
+      if (msg.includes('refresh token') || msg.includes('invalid grant') || msg.includes('invalid_grant') || (error as { status?: number }).status === 400) {
+        void supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+        acceptSession(null);
       }
-    }).catch(() => {});
-  }
+    }
+  }).catch(() => {});
 }
 export const getCurrentAuthUser = (): SupabaseAuthUser | null => currentUser;
 export const subscribeAuthState = (listener: (user: SupabaseAuthUser | null) => void): (() => void) => {
