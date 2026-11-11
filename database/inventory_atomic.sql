@@ -276,9 +276,9 @@ BEGIN
    SELECT data INTO cfg FROM public.settings WHERE id='app_config';
    UPDATE public.materials m
    SET data = jsonb_set(
-         jsonb_set(m.data - 'warehouseStocksById', '{currentStock}', to_jsonb(coalesce(calc.total_stock, 0)), true),
-         '{warehouseStocks}', coalesce(calc.wh_stocks, '{}'::jsonb), true
-       ),
+       jsonb_set(m.data - 'warehouseStocksById', '{currentStock}', to_jsonb(coalesce(calc.total_stock, 0)), true),
+       '{warehouseStocks}', coalesce(calc.wh_stocks, '{}'::jsonb), true
+     ),
        updated_at = now()
    FROM (
      SELECT m2.id AS mat_id,
