@@ -548,6 +548,7 @@ const syncLocalMaterialCachedBalances = (): void => {
         ...m,
         currentStock: live.currentStock,
         warehouseStocks: live.warehouseStocks,
+        warehouseStocksById: live.warehouseStocksById,
       };
     });
     localStorage.setItem(STORAGE_KEYS.MATERIALS, JSON.stringify(synced));
