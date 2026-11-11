@@ -776,7 +776,7 @@ export default function Settings() {
     setIsImporting(true); setErrorMsg(null); setSuccessMsg(null);
     try {
       const rows = await readImportRows(file);
-      const cfg = dataService.getSettings(); const existing = dataService.getMaterials();
+      const cfg = dataService.getSettings(); const existing = dataService.getWorkingMaterials();
       const items: Material[] = []; const openings: InventoryTransaction[] = []; const codes = new Set<string>();
       let added = 0; let updated = 0;
       for (let i = 1; i < rows.length; i++) {
@@ -819,7 +819,7 @@ export default function Settings() {
     setIsImportingTx(true); setErrorMsg(null); setSuccessMsg(null);
     try {
       const rows = await readImportRows(file); const cfg = dataService.getSettings();
-      const materials = dataService.getMaterials(); const existing = new Map(dataService.getTransactions().map(t => [t.id, t]));
+      const materials = dataService.getWorkingMaterials(); const existing = new Map(dataService.getTransactions().map(t => [t.id, t]));
       const transactions: InventoryTransaction[] = []; const occurrences = new Map<string, number>(); let repeated = 0; const rowOf = new Map<string, number>();
       const types: Record<string, InventoryTransaction['transactionType']> = { 'وارد': 'وارد', 'إدخال': 'وارد', 'ادخال': 'وارد', 'تزويد': 'وارد', 'صادر': 'صادر', 'إخراج': 'صادر', 'اخراج': 'صادر', 'صرف': 'صادر', 'توزيع': 'صادر', 'مستهلك': 'مستهلك', 'إتلاف': 'مستهلك', 'اتلاف': 'مستهلك', 'استهلاك': 'مستهلك', 'افتتاحي': 'افتتاحي' };
       for (let i = 1; i < rows.length; i++) {
@@ -866,7 +866,8 @@ export default function Settings() {
   // Local JSON Backup Export v2.0
   const handleExportBackup = async () => {
     try {
-      const backupData = await createBackup();
+      // R8-R1 (RT-R8-04): a cloud backup always includes the permanent code registry (covered by the checksum).
+      const backupData = await createBackup({ codeRegistry: await dataService.getCodeRegistryForBackup() });
       const fileContent = JSON.stringify(backupData, null, 2);
       const check = await validateBackup(JSON.parse(fileContent));
       if (!check.success) throw new Error(check.errors.join(' '));

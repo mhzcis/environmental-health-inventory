@@ -44,6 +44,12 @@ jobs:
       - name: Check application types
         run: npm run typecheck:app
 
+      # R8-R1 (R2-R8-10): enforce the lint baseline (no new lint errors) on every pull request. PR-only, so the
+      # push/deploy path is unchanged.
+      - name: Lint baseline gate
+        if: github.event_name == 'pull_request'
+        run: npm run lint:baseline
+
       - name: Test Supabase adapter, inventory and warehouse centrality
         run: npm run test:deployment
 

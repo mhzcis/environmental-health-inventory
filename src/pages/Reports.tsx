@@ -24,7 +24,7 @@ import DownloadIcon from '@mui/icons-material/Download';
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 import { dataService } from '../services/dataService';
-import { isMaterialArchived } from '../utils/materialLifecycle';
+import { isMaterialArchived, scopeTransactionsByArchive, archivedRowsLast } from '../utils/materialLifecycle';
 import { buildMaterialWarehouseView, buildOpeningStockReportView, buildTransactionLedger } from '../utils/inventoryLogic';
 import { useStorehouse } from '../context/StorehouseContext';
 import { InventoryTransaction } from '../types';
@@ -159,11 +159,15 @@ export default function Reports() {
 
   const includeArchivedRef = useRef(includeArchived);
   useEffect(() => { includeArchivedRef.current = includeArchived; loadData(); }, [includeArchived]);
+  // R8-R1 (RT-R8-01/R2-R8-08): reports read server-confirmed data only; queued or rejected requests are counted separately.
+  const [unconfirmedCount, setUnconfirmedCount] = useState(0);
   const loadData = () => {
-    setMaterials(dataService.hasPermission('materials_view')
-      ? dataService.getMaterials().filter(m => includeArchivedRef.current || !isMaterialArchived(m)).map(m => (isMaterialArchived(m) ? { ...m, name: `${m.name} (مؤرشف)` } : m))
-      : []);
-    setTransactions(dataService.hasPermission('transactions_view') ? dataService.getTransactions() : []);
+    const confirmedMaterials = dataService.hasPermission('materials_view') ? dataService.getMaterials() : [];
+    setMaterials(confirmedMaterials.filter(m => includeArchivedRef.current || !isMaterialArchived(m)).map(m => (isMaterialArchived(m) ? { ...m, name: `${m.name} (مؤرشف)` } : m)));
+    // R8-R1 (R2-R8-02): archived materials' movements are excluded by default (report, Excel, PDF); included only on request, labelled and listed last.
+    setTransactions(dataService.hasPermission('transactions_view')
+      ? scopeTransactionsByArchive(dataService.getConfirmedTransactions(), confirmedMaterials, includeArchivedRef.current) : []);
+    setUnconfirmedCount(dataService.getPendingTransactionIds().size + dataService.getPendingMaterialChanges().length);
     setGeneratorLogs(dataService.hasPermission('generator_log') ? dataService.getGeneratorLogs() : []);
     setSettings(dataService.getSettings());
   };
@@ -257,7 +261,7 @@ export default function Reports() {
       
       case 'transactions': {
         const ledger = buildTransactionLedger(transactions, selectedStorehouse, settings.storehouses, materials);
-        return ledger.filter(t => {
+        const filtered = ledger.filter(t => {
           let matches = true;
           if (transactionTypeFilter !== 'all' && t.transactionType !== transactionTypeFilter) matches = false;
           if (itemIdFilter !== 'all' && t.itemId !== itemIdFilter) matches = false;
@@ -274,6 +278,8 @@ export default function Reports() {
           }
           return matches;
         });
+        // R8-R1 (R2-R8-02): included archived movements are always listed after the active ones (and labelled).
+        return archivedRowsLast(filtered as (typeof filtered[number] & { archivedMaterial?: boolean })[]);
       }
 
       case 'category_summary': {
@@ -1146,6 +1152,11 @@ export default function Reports() {
               <Checkbox size="small" checked={includeArchived} onChange={(e) => { setIncludeArchived(e.target.checked); setPage(0); }} slotProps={{ input: { 'aria-label': 'تضمين الأصناف المؤرشفة' } }} />
               <Typography variant="caption">تضمين الأصناف المؤرشفة (موسومة «مؤرشف»)</Typography>
             </Box>
+            {unconfirmedCount > 0 && (
+              <Alert severity="info" sx={{ mt: 1, py: 0 }} data-testid="reports-unconfirmed-note">
+                {`يوجد ${unconfirmedCount} طلب لم يؤكده الخادم بعد؛ التقرير وتصديره يعرضان البيانات المؤكدة فقط ولا يشملان هذه الطلبات.`}
+              </Alert>
+            )}
           </Grid>
 
           <Grid size={{ xs: 12, sm: 6, md: 3 }}>

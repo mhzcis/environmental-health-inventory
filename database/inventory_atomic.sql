@@ -18,10 +18,28 @@ CREATE TABLE IF NOT EXISTS inventory_private.material_code_registry(
   number numeric,
   material_id text NOT NULL,
   source text NOT NULL,
-  reserved_at timestamptz NOT NULL DEFAULT now()
+  reserved_at timestamptz NOT NULL DEFAULT now(),
+  -- R8-R1 (R2-R8-04): set when the owning material is deleted; a deleted reservation is never re-issued, not even to the same id.
+  deleted_at timestamptz
 );
 CREATE UNIQUE INDEX IF NOT EXISTS material_code_registry_prefix_number ON inventory_private.material_code_registry(prefix, number) WHERE prefix IS NOT NULL;
+ALTER TABLE inventory_private.material_code_registry ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
 REVOKE ALL ON TABLE inventory_private.material_code_registry FROM PUBLIC, anon, authenticated;
+
+-- R8-R1 (R2-R8-03 / RT-R8-06): the owner-approved category policy is pinned at the server. After the migration the
+-- five prefixes and their exact ranges can be neither removed, re-ranged (shrunk, widened, overlapped) nor
+-- supplemented; only category display names may change. A policy change needs a separately approved SQL migration.
+CREATE TABLE IF NOT EXISTS inventory_private.category_policy(
+  prefix text PRIMARY KEY CHECK (prefix ~ '^[A-Z]{2,6}$'),
+  start_range numeric NOT NULL,
+  end_range numeric NOT NULL,
+  pinned_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (start_range>=1 AND start_range<=end_range)
+);
+REVOKE ALL ON TABLE inventory_private.category_policy FROM PUBLIC, anon, authenticated;
+INSERT INTO inventory_private.category_policy(prefix,start_range,end_range)
+VALUES ('PES',1001,1999),('SAN',2001,2999),('EQP',3001,3999),('ROD',4001,4999),('CHM',5001,5999)
+ON CONFLICT(prefix) DO NOTHING;
 
 CREATE OR REPLACE FUNCTION inventory_private.derived_material_keys() RETURNS text[]
 LANGUAGE sql IMMUTABLE SET search_path = '' AS $$ SELECT ARRAY['currentStock','warehouseStocks','warehouseStocksById','ledgerTotalStock']::text[] $$;
@@ -76,6 +94,15 @@ LANGUAGE sql IMMUTABLE SET search_path = '' AS $$
  SELECT coalesce((SELECT jsonb_object_agg(k, p_data->k) FROM unnest(inventory_private.derived_material_keys()) k WHERE p_data ? k),'{}'::jsonb)
 $$;
 
+-- R8-R1 (RT-R8-02): 'drift' = a stored derived value disagrees with the ledger. Such a material is never corrected
+-- silently by an ordinary commit; only the explicit, audited reconcile mode may rewrite it.
+CREATE OR REPLACE FUNCTION inventory_private.projection_status(p_data jsonb, p_computed jsonb) RETURNS text
+LANGUAGE sql IMMUTABLE SET search_path = '' AS $$
+ SELECT CASE WHEN inventory_private.stored_projection(p_data)='{}'::jsonb THEN 'unprojected'
+   WHEN EXISTS(SELECT 1 FROM jsonb_each(inventory_private.stored_projection(p_data)) s WHERE s.value IS DISTINCT FROM p_computed->s.key) THEN 'drift'
+   WHEN inventory_private.stored_projection(p_data)<>p_computed THEN 'incomplete' ELSE 'ok' END
+$$;
+
 CREATE OR REPLACE FUNCTION inventory_private.material_rows(p_ids jsonb) RETURNS jsonb
 LANGUAGE sql STABLE SET search_path = '' AS $$
  SELECT coalesce(jsonb_agg(m.data ORDER BY m.id),'[]'::jsonb) FROM public.materials m
@@ -105,6 +132,12 @@ BEGIN
      WHERE NOT EXISTS(SELECT 1 FROM jsonb_array_elements(p_cfg->'categories') c WHERE c->>'prefix'=r.prefix
        AND (c->>'startRange')::numeric<=r.lo AND (c->>'endRange')::numeric>=r.hi))
  THEN RAISE EXCEPTION 'INVENTORY_CATEGORY_PREFIX_FROZEN' USING ERRCODE='23514'; END IF;
+ -- R8-R1 (R2-R8-03): the pinned policy is exact: every pinned prefix with exactly its range, and nothing else.
+ IF EXISTS(SELECT 1 FROM inventory_private.category_policy) AND (
+      EXISTS(SELECT 1 FROM inventory_private.category_policy p WHERE NOT EXISTS(SELECT 1 FROM jsonb_array_elements(p_cfg->'categories') c
+        WHERE c->>'prefix'=p.prefix AND (c->>'startRange')::numeric=p.start_range AND (c->>'endRange')::numeric=p.end_range))
+   OR EXISTS(SELECT 1 FROM jsonb_array_elements(p_cfg->'categories') c WHERE NOT EXISTS(SELECT 1 FROM inventory_private.category_policy p WHERE p.prefix=c->>'prefix')))
+ THEN RAISE EXCEPTION 'INVENTORY_CATEGORY_POLICY_PINNED' USING ERRCODE='23514'; END IF;
 END;
 $$;
 
@@ -117,21 +150,38 @@ $$;
 
 -- Registers a material code permanently. p_strict: create/code change/category change (always checks membership);
 -- non-strict (restore/import of an already registered code) checks membership only for unregistered codes.
+-- R8-R1 (RT-R8-03 / R2-R8-04): outside restore, a NEW canonical code must be exactly the next central number of its
+-- prefix (registry maximum + 1), so a manual, imported or crafted RPC code can neither skip ahead nor exhaust a range;
+-- and a reservation whose material was deleted is never issued again, not even to a re-created material with the same id.
 CREATE OR REPLACE FUNCTION inventory_private.reserve_material_code(p_id text, p_data jsonb, p_cfg jsonb, p_strict boolean, p_source text) RETURNS void
 LANGUAGE plpgsql SET search_path = '' AS $$
-DECLARE k text:=lower(btrim(coalesce(p_data->>'code',''))); parts jsonb; registered boolean;
+DECLARE k text:=lower(btrim(coalesce(p_data->>'code',''))); parts jsonb; registered boolean; nxt numeric; c jsonb;
 BEGIN
- IF EXISTS(SELECT 1 FROM inventory_private.material_code_registry r WHERE r.code_key=k AND r.material_id<>p_id)
+ IF EXISTS(SELECT 1 FROM inventory_private.material_code_registry r WHERE r.code_key=k
+      AND (r.material_id<>p_id OR (r.deleted_at IS NOT NULL AND p_source<>'restore')))
     OR EXISTS(SELECT 1 FROM public.materials m WHERE m.id<>p_id AND lower(btrim(m.data->>'code'))=k)
  THEN RAISE EXCEPTION 'INVENTORY_CODE_RESERVED:%',p_data->>'code' USING ERRCODE='23505'; END IF;
  registered:=EXISTS(SELECT 1 FROM inventory_private.material_code_registry r WHERE r.code_key=k AND r.material_id=p_id);
  IF (p_strict OR NOT registered) AND NOT inventory_private.code_matches_category(p_data->>'code',p_data->>'category',p_cfg)
  THEN RAISE EXCEPTION 'INVENTORY_CODE_CATEGORY_MISMATCH:%',p_data->>'code' USING ERRCODE='23514'; END IF;
  parts:=inventory_private.code_parts(p_data->>'code');
- IF parts->>'prefix' IS NOT NULL AND EXISTS(SELECT 1 FROM inventory_private.material_code_registry r WHERE r.prefix=parts->>'prefix' AND r.number=(parts->>'number')::numeric AND r.material_id<>p_id)
+ IF parts->>'prefix' IS NOT NULL AND EXISTS(SELECT 1 FROM inventory_private.material_code_registry r WHERE r.prefix=parts->>'prefix' AND r.number=(parts->>'number')::numeric
+      AND (r.material_id<>p_id OR (r.deleted_at IS NOT NULL AND p_source<>'restore')))
  THEN RAISE EXCEPTION 'INVENTORY_CODE_RESERVED:%',p_data->>'code' USING ERRCODE='23505'; END IF;
+ IF NOT registered AND p_source<>'restore' AND parts->>'prefix' IS NOT NULL THEN
+   SELECT x INTO c FROM jsonb_array_elements(p_cfg->'categories') x WHERE x->>'prefix'=parts->>'prefix';
+   -- one past the highest REGISTERED number of the prefix (the migration backfills every existing code, so the registry
+   -- is the single source; next_material_code() suggests the same value)
+   nxt:=greatest(coalesce((c->>'startRange')::numeric,1)-1,
+     coalesce((SELECT max(r.number) FROM inventory_private.material_code_registry r WHERE r.prefix=parts->>'prefix'),0))+1;
+   IF (parts->>'number')::numeric<>nxt THEN
+     RAISE EXCEPTION 'INVENTORY_CODE_NOT_NEXT:%:%',p_data->>'code',(parts->>'prefix')||'-'||nxt::text USING ERRCODE='23514';
+   END IF;
+ END IF;
  INSERT INTO inventory_private.material_code_registry(code_key,code,prefix,number,material_id,source)
- VALUES(k,btrim(p_data->>'code'),parts->>'prefix',(parts->>'number')::numeric,p_id,p_source) ON CONFLICT(code_key) DO NOTHING;
+ VALUES(k,btrim(p_data->>'code'),parts->>'prefix',(parts->>'number')::numeric,p_id,p_source)
+ ON CONFLICT(code_key) DO UPDATE SET deleted_at=NULL
+   WHERE inventory_private.material_code_registry.material_id=excluded.material_id AND p_source='restore';
 END;
 $$;
 
@@ -187,6 +237,11 @@ BEGIN
      OR NOT (cfg->'units' @> jsonb_build_array(m.data->>'unit'))
      OR NOT EXISTS(SELECT 1 FROM jsonb_array_elements(cfg->'categories') c WHERE c->>'name'=m.data->>'category'))
  THEN RAISE EXCEPTION 'INVENTORY_MATERIAL_INVALID' USING ERRCODE='23514'; END IF;
+ -- R8-R1 (RT-R8-06): a canonical code of a pinned prefix must stay inside its own category (no name swap/remap).
+ IF EXISTS(SELECT 1 FROM public.materials m CROSS JOIN LATERAL inventory_private.code_parts(m.data->>'code') p
+     WHERE p->>'prefix' IN (SELECT cp.prefix FROM inventory_private.category_policy cp)
+       AND NOT inventory_private.code_matches_category(upper(btrim(m.data->>'code')),m.data->>'category',cfg))
+ THEN RAISE EXCEPTION 'INVENTORY_CODE_CATEGORY_MISMATCH' USING ERRCODE='23514'; END IF;
  FOR row_data IN SELECT data FROM public.transactions LOOP
    v_date:=row_data->>'date';
    IF v_date IS NULL OR v_date !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' OR to_char(v_date::date,'YYYY-MM-DD')<>v_date
@@ -248,6 +303,7 @@ DECLARE actor public.users%ROWTYPE; op jsonb; ops jsonb; receipt jsonb; digest t
  touched text[]:='{}'; ledger_items text[]:='{}'; strict_codes text[]:='{}'; restore_codes text[]:='{}'; all_materials boolean:=false;
  proj_ids text[]; proj_changes jsonb:='[]'; extra jsonb:='{}'; lc jsonb; cur_lc jsonb:='{}'; lc_preserved jsonb:='[]';
  mid text; before_d jsonb; after_d jsonb; lc_from text; lc_ver numeric; total numeric; business_equal boolean;
+ pre_drift text[]:='{}'; direct text[]:='{}'; held jsonb:='[]'; is_admin boolean;
 BEGIN
  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'INVENTORY_AUTH_REQUIRED' USING ERRCODE='42501'; END IF;
  -- One short serializable writer boundary. This also fences permission revocation through users.
@@ -285,8 +341,12 @@ BEGIN
    IF (lc->>'action'='archive' AND lc_from='archived') OR (lc->>'action'='reactivate' AND lc_from<>'archived')
    THEN RAISE EXCEPTION 'INVENTORY_LIFECYCLE_STATE_INVALID' USING ERRCODE='23514'; END IF;
    after_d:=inventory_private.material_projection(mid); total:=(after_d->>'ledgerTotalStock')::numeric;
-   -- Archive is not a disposal: real nonzero stock needs a separate disposition; only an explicit QA record may keep its history.
-   IF lc->>'action'='archive' AND total<>0 AND lc->>'purpose'<>'qa_test_data'
+   -- R8-R1 (RT-R8-02): a drifted stored projection is never corrected as a side effect; reconcile first.
+   IF inventory_private.projection_status(old,after_d)='drift'
+   THEN RAISE EXCEPTION 'INVENTORY_RECONCILE_REQUIRED:%',old->>'code' USING ERRCODE='23514'; END IF;
+   -- R8-R1 (R2-R8-01): archive is not a disposal. A material whose ledger total is not zero can never be archived,
+   -- whatever the declared purpose (the purpose is a client label, not an authorization).
+   IF lc->>'action'='archive' AND total<>0
    THEN RAISE EXCEPTION 'INVENTORY_ARCHIVE_NONZERO_STOCK' USING ERRCODE='23514'; END IF;
    val:=(old-lc_keys-derived)||after_d||CASE WHEN lc->>'action'='archive' THEN jsonb_build_object('lifecycleStatus','archived','lifecycleVersion',lc_ver+1,
        'archivedAt',stamp,'archivedBy',actor.id,'archivedByName',actor.full_name,'archiveReason',left(lc->>'reason',500),'archivePurpose',lc->>'purpose')
@@ -376,6 +436,19 @@ BEGIN
      END LOOP;
    END LOOP;
    all_materials:=true;
+   -- R8-R1 (RT-R8-04): reservations carried by the backup are merged union-only (never dropped, never re-owned).
+   IF backup ? 'codeRegistry' THEN
+     IF jsonb_typeof(backup->'codeRegistry') IS DISTINCT FROM 'array' OR jsonb_array_length(backup->'codeRegistry')>100000
+        OR EXISTS(SELECT 1 FROM jsonb_array_elements(backup->'codeRegistry') r WHERE jsonb_typeof(r) IS DISTINCT FROM 'object'
+          OR nullif(btrim(r->>'code'),'') IS NULL OR length(r->>'code')>120 OR nullif(btrim(r->>'materialId'),'') IS NULL OR length(r->>'materialId')>200)
+     THEN RAISE EXCEPTION 'INVENTORY_BACKUP_INVALID' USING ERRCODE='22023'; END IF;
+     INSERT INTO inventory_private.material_code_registry(code_key,code,prefix,number,material_id,source,deleted_at)
+     SELECT lower(btrim(r->>'code')),btrim(r->>'code'),p->>'prefix',(p->>'number')::numeric,r->>'materialId','restore-backup',
+       CASE WHEN EXISTS(SELECT 1 FROM jsonb_array_elements(backup->'materials') bm WHERE bm->>'id'=r->>'materialId'
+         AND lower(btrim(bm->>'code'))=lower(btrim(r->>'code'))) THEN NULL ELSE now() END
+     FROM jsonb_array_elements(backup->'codeRegistry') r CROSS JOIN LATERAL inventory_private.code_parts(r->>'code') p
+     ON CONFLICT DO NOTHING;
+   END IF;
  ELSE
    -- QA-20261109 TX-03: 'correction' is a distinct mode so that a server WITHOUT correction support
    -- (e.g. SQL rolled back to #8, which accepts only mutation/audit) rejects the whole request atomically
@@ -385,12 +458,37 @@ BEGIN
  END IF;
  IF EXISTS(SELECT 1 FROM jsonb_array_elements(ops) x GROUP BY x->>'collection',x->>'docId' HAVING count(*)>1)
  THEN RAISE EXCEPTION 'INVENTORY_DUPLICATE_OPERATION' USING ERRCODE='22023'; END IF;
+ -- R8-R1 (RT-R8-02): materials whose STORED projection already disagrees with the ledger before this request.
+ IF mode IN ('mutation','correction') THEN
+   SELECT coalesce(array_agg(m.id),'{}') INTO pre_drift FROM public.materials m
+   WHERE (EXISTS(SELECT 1 FROM jsonb_array_elements(ops) x WHERE x->>'collection'='settings')
+       OR m.id IN (SELECT x->>'docId' FROM jsonb_array_elements(ops) x WHERE x->>'collection'='materials'
+         UNION SELECT x->'value'->>'itemId' FROM jsonb_array_elements(ops) x WHERE x->>'collection'='transactions'
+         UNION SELECT x->'expected'->'data'->>'itemId' FROM jsonb_array_elements(ops) x WHERE x->>'collection'='transactions'
+         UNION SELECT t.data->>'itemId' FROM public.transactions t WHERE t.id IN (SELECT x->>'docId' FROM jsonb_array_elements(ops) x WHERE x->>'collection'='transactions')))
+     AND inventory_private.projection_status(m.data,inventory_private.material_projection(m.id))='drift';
+ END IF;
  FOR op IN SELECT value FROM jsonb_array_elements(ops) LOOP
    col:=op->>'collection';doc:=op->>'docId';kind:=op->>'kind';val:=op->'value';old:=NULL;business_equal:=false;
    IF col NOT IN ('settings','materials','transactions','generator_logs','users','audit_logs') OR nullif(btrim(doc),'') IS NULL OR length(doc)>200 OR kind NOT IN ('set','delete')
    THEN RAISE EXCEPTION 'INVENTORY_OPERATION_INVALID' USING ERRCODE='22023'; END IF;
    IF mode='audit' THEN
      IF col<>'audit_logs' OR kind<>'set' OR jsonb_array_length(ops)<>1 THEN RAISE EXCEPTION 'INVENTORY_AUDIT_MODE_INVALID' USING ERRCODE='22023'; END IF;
+     -- R8-R1 (R2-R8-05): application events are server-controlled. A non-administrator may only report a known event
+     -- type that matches its own capabilities (a read-only user: sign-in/out only), with a known item type, bounded
+     -- text and a per-actor rate limit. Every receipt is attributed to the authenticated actor by the server.
+     is_admin:=actor.permissions @> '["users_manage","settings_edit","system_reset"]'::jsonb;
+     IF jsonb_typeof(val) IS DISTINCT FROM 'object' OR nullif(btrim(val->>'action'),'') IS NULL
+        OR coalesce(val->>'itemType','عام') NOT IN ('مادة','مبيد','معاملة','إعدادات','حركة','مولد','عام')
+        OR length(coalesce(val->>'details',''))>8000
+        OR (NOT is_admin AND NOT (val->>'action' IN ('تسجيل الدخول','تسجيل الخروج','طلب إعادة تعيين كلمة المرور')
+          OR (actor.permissions ?| ARRAY['materials_create','materials_edit','materials_delete','transactions_create','transactions_delete','settings_edit','generator_log','users_manage']
+              AND val->>'action' IN ('إضافة مادة جديدة','تعديل مادة','حذف مادة','إضافة حركة مخزنية','تعديل حركة مخزنية','إضافة حركات مخزنية',
+                'حذف حركات مخزنية','تصحيح حركة مخزنية (إلغاء وبديل)','تحويل مخزني','تحديث سجلات المولد','تحديث الإعدادات','إدارة الحسابات والصلاحيات'))))
+     THEN RAISE EXCEPTION 'INVENTORY_AUDIT_EVENT_DENIED' USING ERRCODE='42501'; END IF;
+     IF NOT is_admin AND (SELECT count(*) FROM public.audit_logs a WHERE a.data->>'actorUserId'=actor.id AND a.data->>'result'='reported'
+         AND a.updated_at>now()-interval '5 minutes')>=60
+     THEN RAISE EXCEPTION 'INVENTORY_AUDIT_RATE_LIMITED' USING ERRCODE='54000'; END IF;
      CONTINUE;
    END IF;
    IF col='audit_logs' THEN RAISE EXCEPTION 'INVENTORY_AUDIT_IMMUTABLE' USING ERRCODE='42501'; END IF;
@@ -420,6 +518,7 @@ BEGIN
      touched:=touched||doc;
    END IF;
    IF business_equal THEN CONTINUE; END IF; -- cache-only refresh: no write, no materials_edit needed; projection is recomputed below.
+   IF col='materials' THEN direct:=direct||doc; END IF;
    IF mode<>'restore' THEN
      needed:=CASE col WHEN 'transactions' THEN CASE WHEN kind='delete' THEN 'transactions_delete' ELSE 'transactions_create' END
        WHEN 'generator_logs' THEN 'generator_log' WHEN 'users' THEN 'users_manage'
@@ -467,7 +566,8 @@ BEGIN
        ledger_items:=ledger_items||coalesce(val->>'itemId',old->>'itemId');
      END IF;
    END IF;
-   IF col='transactions' THEN touched:=touched||coalesce(val->>'itemId',old->>'itemId'); IF old IS NOT NULL THEN touched:=touched||(old->>'itemId'); END IF; END IF;
+   IF col='transactions' THEN touched:=touched||coalesce(val->>'itemId',old->>'itemId'); IF old IS NOT NULL THEN touched:=touched||(old->>'itemId'); END IF;
+     direct:=direct||coalesce(val->>'itemId',old->>'itemId'); IF old IS NOT NULL THEN direct:=direct||(old->>'itemId'); END IF; END IF;
    IF col='settings' THEN all_materials:=true; END IF;
    IF col='materials' AND kind='set' AND EXISTS(SELECT 1 FROM public.materials m WHERE m.id<>doc AND lower(btrim(m.data->>'code'))=lower(btrim(val->>'code')))
    THEN RAISE EXCEPTION 'INVENTORY_CODE_RESERVED:%',val->>'code' USING ERRCODE='23505'; END IF;
@@ -488,6 +588,7 @@ BEGIN
    ELSIF kind='delete' THEN
      IF old IS NULL THEN RAISE EXCEPTION 'INVENTORY_DELETE_MISSING' USING ERRCODE='40001'; END IF;
      EXECUTE format('DELETE FROM public.%I WHERE id=$1',col) USING doc;
+     IF col='materials' THEN UPDATE inventory_private.material_code_registry SET deleted_at=now() WHERE material_id=doc AND deleted_at IS NULL; END IF;
    ELSE
      EXECUTE format('INSERT INTO public.%I(id,data,updated_at) VALUES($1,$2,now()) ON CONFLICT(id) DO UPDATE SET data=excluded.data,updated_at=now()',col) USING doc,val;
    END IF;
@@ -516,8 +617,16 @@ BEGIN
    -- Lifecycle is server-owned and unchanged by this mode, so the stored state is both the old and the final state.
    IF EXISTS(SELECT 1 FROM public.materials m WHERE m.id=ANY(ledger_items) AND m.data->>'lifecycleStatus'='archived')
    THEN RAISE EXCEPTION 'INVENTORY_MATERIAL_ARCHIVED' USING ERRCODE='23514'; END IF;
+   -- R8-R1 (RT-R8-11): deleting the last opening row must also clear initialStock in the same request; otherwise the
+   -- initialStock fallback would silently re-create the cancelled opening balance.
+   IF mode IN ('mutation','correction') AND EXISTS(SELECT 1 FROM jsonb_array_elements(removed) r JOIN public.materials m ON m.id=r->>'itemId'
+       WHERE (r->>'transactionType'='افتتاحي' OR r->>'id' LIKE 'tr-init%') AND coalesce((m.data->>'initialStock')::numeric,0)<>0
+         AND NOT EXISTS(SELECT 1 FROM public.transactions t WHERE t.data->>'itemId'=m.id AND (t.data->>'transactionType'='افتتاحي' OR t.id LIKE 'tr-init%')))
+   THEN RAISE EXCEPTION 'INVENTORY_OPENING_LEDGER_REQUIRED' USING ERRCODE='23514'; END IF;
    SELECT data INTO cfg FROM public.settings WHERE id='app_config';
-   FOREACH mid IN ARRAY strict_codes LOOP
+   -- New codes are reserved in ascending central order, so an import batch of consecutive codes is accepted in one request.
+   FOR mid IN SELECT u.id FROM unnest(strict_codes) WITH ORDINALITY u(id,o) JOIN public.materials m ON m.id=u.id
+       CROSS JOIN LATERAL inventory_private.code_parts(m.data->>'code') p ORDER BY p->>'prefix',(p->>'number')::numeric,u.o LOOP
      SELECT data INTO val FROM public.materials WHERE id=mid;
      IF val IS NOT NULL THEN PERFORM inventory_private.reserve_material_code(mid,val,cfg,true,mode); END IF;
    END LOOP;
@@ -525,11 +634,21 @@ BEGIN
      SELECT data INTO val FROM public.materials WHERE id=mid;
      IF val IS NOT NULL THEN PERFORM inventory_private.reserve_material_code(mid,val,cfg,false,'restore'); END IF;
    END LOOP;
+   IF mode='restore' THEN
+     UPDATE inventory_private.material_code_registry r SET deleted_at=now()
+     WHERE r.deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM public.materials m WHERE m.id=r.material_id AND lower(btrim(m.data->>'code'))=r.code_key);
+   END IF;
    -- R8-DATA-01: recompute the ledger projection of every affected material inside this same locked transaction.
    IF all_materials THEN SELECT coalesce(array_agg(id ORDER BY id),'{}') INTO proj_ids FROM public.materials;
    ELSE SELECT coalesce(array_agg(DISTINCT x ORDER BY x),'{}') INTO proj_ids FROM unnest(touched) x WHERE x IS NOT NULL AND EXISTS(SELECT 1 FROM public.materials m WHERE m.id=x); END IF;
    FOREACH mid IN ARRAY proj_ids LOOP
      SELECT data INTO val FROM public.materials WHERE id=mid;
+     IF mid=ANY(pre_drift) THEN
+       -- A ledger or business change to a drifted material is refused (nothing written); a settings-wide or cache-only
+       -- refresh keeps the drifted stored value untouched and reports it. Only mode 'reconcile' corrects it.
+       IF mid=ANY(direct) THEN RAISE EXCEPTION 'INVENTORY_RECONCILE_REQUIRED:%',coalesce(val->>'code',mid) USING ERRCODE='23514'; END IF;
+       held:=held||jsonb_build_array(mid); CONTINUE;
+     END IF;
      before_d:=inventory_private.stored_projection(val); after_d:=inventory_private.material_projection(mid);
      IF before_d IS DISTINCT FROM after_d THEN
        UPDATE public.materials SET data=(data-derived)||after_d,updated_at=now() WHERE id=mid;
@@ -542,9 +661,11 @@ BEGIN
    IF NOT EXISTS(SELECT 1 FROM public.users WHERE active AND permissions @> '["users_manage","settings_edit","system_reset"]'::jsonb)
    THEN RAISE EXCEPTION 'INVENTORY_LAST_ADMIN_REQUIRED' USING ERRCODE='23514'; END IF;
    -- Always present (possibly []) outside restore so a client can tell a server-projected ACK from an older server.
-   IF mode<>'restore' THEN extra:=extra||jsonb_build_object('projectedMaterialIds',to_jsonb(coalesce(proj_ids,'{}'::text[]))); END IF;
+   IF mode<>'restore' THEN extra:=extra||jsonb_build_object('projectedMaterialIds',coalesce((SELECT jsonb_agg(x ORDER BY x) FROM unnest(proj_ids) x
+     WHERE NOT held ? x),'[]'::jsonb)); END IF;
    IF jsonb_array_length(proj_changes)>0 THEN extra:=extra||jsonb_build_object('projectionUpdates',proj_changes); END IF;
    IF jsonb_array_length(lc_preserved)>0 THEN extra:=extra||jsonb_build_object('lifecyclePreserved',lc_preserved); END IF;
+   IF jsonb_array_length(held)>0 THEN extra:=extra||jsonb_build_object('projectionDriftHeld',held); END IF;
  END IF;
  receipt:=jsonb_build_object('id',p_mutation_id,'timestamp',stamp,'user',actor.full_name,'actorUserId',actor.id,'actorDisplayName',actor.full_name,
    'action',CASE WHEN mode='restore' THEN 'استعادة بيانات التطبيق' WHEN mode='audit' THEN left(ops->0->'value'->>'action',200) WHEN jsonb_array_length(corr)>0 THEN 'تصحيح حركة مخزنية (إلغاء وبديل)' ELSE 'اعتماد عملية مخزنية' END,
@@ -599,9 +720,7 @@ BEGIN
  SELECT coalesce(jsonb_agg(x ORDER BY x->>'id'),'[]'::jsonb) INTO rows FROM (
    SELECT jsonb_build_object('id',m.id,'code',m.data->>'code','lifecycleStatus',coalesce(m.data->>'lifecycleStatus','active'),
      'stored',inventory_private.stored_projection(m.data),'computed',p.p,
-     'status',CASE WHEN inventory_private.stored_projection(m.data)='{}'::jsonb THEN 'unprojected'
-       WHEN EXISTS(SELECT 1 FROM jsonb_each(inventory_private.stored_projection(m.data)) s WHERE s.value IS DISTINCT FROM p.p->s.key) THEN 'drift'
-       WHEN inventory_private.stored_projection(m.data)<>p.p THEN 'incomplete' ELSE 'ok' END,
+     'status',inventory_private.projection_status(m.data,p.p),
      'ledgerRows',(SELECT count(*) FROM public.transactions t WHERE t.data->>'itemId'=m.id),'ledgerHash',inventory_private.material_ledger_hash(m.id)) x
    FROM public.materials m CROSS JOIN LATERAL inventory_private.material_projection(m.id) p(p)) q;
  RETURN jsonb_build_object('materials',jsonb_array_length(rows),
@@ -634,14 +753,30 @@ $$;
 CREATE OR REPLACE FUNCTION public.inventory_next_material_code(p_category text) RETURNS jsonb
 LANGUAGE sql SECURITY INVOKER SET search_path = '' AS $$ SELECT inventory_private.next_material_code(p_category); $$;
 
+-- R8-R1 (RT-R8-04): read the permanent code registry for a full backup (administrators only; read-only).
+CREATE OR REPLACE FUNCTION inventory_private.code_registry_export() RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $$
+DECLARE actor public.users%ROWTYPE;
+BEGIN
+ SELECT * INTO actor FROM public.users WHERE auth_uid=auth.uid()::text AND active;
+ IF actor.id IS NULL OR NOT actor.permissions @> '["users_manage","settings_edit","system_reset"]'::jsonb
+ THEN RAISE EXCEPTION 'INVENTORY_CODE_REGISTRY_DENIED' USING ERRCODE='42501'; END IF;
+ RETURN coalesce((SELECT jsonb_agg(jsonb_build_object('code',r.code,'materialId',r.material_id,'deleted',r.deleted_at IS NOT NULL) ORDER BY r.code_key)
+   FROM inventory_private.material_code_registry r),'[]'::jsonb);
+END;
+$$;
+CREATE OR REPLACE FUNCTION public.inventory_code_registry() RETURNS jsonb
+LANGUAGE sql SECURITY INVOKER SET search_path = '' AS $$ SELECT inventory_private.code_registry_export(); $$;
+
 REVOKE ALL ON FUNCTION inventory_private.state_hash(),inventory_private.validate_inventory(),inventory_private.commit_inventory(text,jsonb),inventory_private.restore_preview(jsonb) FROM PUBLIC,anon,authenticated;
 REVOKE ALL ON FUNCTION inventory_private.derived_material_keys(),inventory_private.lifecycle_material_keys(),inventory_private.server_owned_material_keys(),
   inventory_private.code_parts(text),inventory_private.material_projection(text),inventory_private.material_ledger_hash(text),inventory_private.stored_projection(jsonb),
   inventory_private.material_rows(jsonb),inventory_private.validate_category_config(jsonb),inventory_private.code_matches_category(text,text,jsonb),
-  inventory_private.reserve_material_code(text,jsonb,jsonb,boolean,text),inventory_private.projection_drift(),inventory_private.next_material_code(text) FROM PUBLIC,anon,authenticated;
-GRANT EXECUTE ON FUNCTION inventory_private.commit_inventory(text,jsonb),inventory_private.restore_preview(jsonb),inventory_private.projection_drift(),inventory_private.next_material_code(text) TO authenticated;
-REVOKE ALL ON FUNCTION public.inventory_commit(text,jsonb),public.inventory_restore_preview(jsonb),public.inventory_projection_drift(),public.inventory_next_material_code(text) FROM PUBLIC,anon;
-GRANT EXECUTE ON FUNCTION public.inventory_commit(text,jsonb),public.inventory_restore_preview(jsonb),public.inventory_projection_drift(),public.inventory_next_material_code(text) TO authenticated;
+  inventory_private.reserve_material_code(text,jsonb,jsonb,boolean,text),inventory_private.projection_drift(),inventory_private.next_material_code(text),
+  inventory_private.projection_status(jsonb,jsonb),inventory_private.code_registry_export() FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION inventory_private.commit_inventory(text,jsonb),inventory_private.restore_preview(jsonb),inventory_private.projection_drift(),inventory_private.next_material_code(text),inventory_private.code_registry_export() TO authenticated;
+REVOKE ALL ON FUNCTION public.inventory_commit(text,jsonb),public.inventory_restore_preview(jsonb),public.inventory_projection_drift(),public.inventory_next_material_code(text),public.inventory_code_registry() FROM PUBLIC,anon;
+GRANT EXECUTE ON FUNCTION public.inventory_commit(text,jsonb),public.inventory_restore_preview(jsonb),public.inventory_projection_drift(),public.inventory_next_material_code(text),public.inventory_code_registry() TO authenticated;
 REVOKE INSERT,UPDATE,DELETE,TRUNCATE ON public.materials,public.transactions,public.generator_logs,public.settings,public.audit_logs,public.users FROM authenticated;
 REVOKE TRUNCATE ON public.users FROM authenticated;
 REVOKE ALL ON public.materials,public.transactions,public.generator_logs,public.settings,public.audit_logs,public.users FROM anon,PUBLIC;

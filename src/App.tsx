@@ -15,6 +15,7 @@ import { Box, Button, CircularProgress, Typography } from '@mui/material';
 import {
   hasPersistedAuthSession,
   isSupabaseConfigured,
+  refreshAuthSession,
   subscribeAuthState,
   supabaseAuthSignOut,
   type SupabaseAuthUser,
@@ -61,7 +62,13 @@ export default function App() {
       setAuthTerminating(false);
       setAuthReady(true);
     };
-    const retry = () => { if (isMounted && waitingForNetwork && lastUser) handleAuthUser(lastUser); };
+    // R8-R1 (R2-R8-09): with no delivered user (offline cold start), retry asks the SDK to refresh the persisted session;
+    // a delivered session runs the normal live revalidation via subscribeAuthState(handleAuthUser).
+    const retry = () => {
+      if (!isMounted || !waitingForNetwork) return;
+      if (lastUser) { handleAuthUser(lastUser); return; }
+      void refreshAuthSession();
+    };
     const onOnline = () => retry();
     window.addEventListener('online', onOnline);
     setRetryOnline(() => retry);

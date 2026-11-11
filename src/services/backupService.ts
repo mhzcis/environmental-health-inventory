@@ -52,11 +52,15 @@ const K = {
 } as const;
 
 type SafeUser = SystemUser & { authUid?: string };
+/** R8-R1 (RT-R8-04): one permanent code reservation (live, archived or deleted) from the central registry. */
+export interface CodeRegistryEntry { code: string; materialId: string; deleted?: boolean }
 export interface BackupV2 {
   materials: Material[]; transactions: InventoryTransaction[]; users: SafeUser[]; settings: AppSettings;
+  /** Optional for compatibility with older files; a cloud backup always carries it (covered by the checksum). */
+  codeRegistry?: CodeRegistryEntry[];
   auditLogs: AuditLog[]; generatorLogs: GeneratorLogEntry[]; backupVersion: typeof BACKUP_VERSION; exportedAt: string;
   manifest: { format: typeof BACKUP_FORMAT; version: typeof BACKUP_VERSION; backupId: string; exportedAt: string;
-    counts: { materials:number; transactions:number; users:number; auditLogs:number; generatorLogs:number; storehouses:number };
+    counts: { materials:number; transactions:number; users:number; auditLogs:number; generatorLogs:number; storehouses:number; codeRegistry?:number };
     selectedStorehouse:string; selectedStorehouseId?:string; warehouseTotals:Record<string,number>; checksumAlgorithm:'SHA-256'; checksum:string };
 }
 const read = <T>(key:string, fallback:T):T => { const raw=localStorage.getItem(key); return raw ? JSON.parse(raw) as T : fallback; };
@@ -76,7 +80,7 @@ const stripLegacyPassword = (value: SystemUser): SafeUser => {
   return safe as unknown as SafeUser;
 };
 
-export async function createBackup():Promise<BackupV2>{
+export async function createBackup(options:{codeRegistry?:CodeRegistryEntry[]}={}):Promise<BackupV2>{
  const rawMaterials=read<Material[]>(K.materials,[]), rawTransactions=read<InventoryTransaction[]>(K.transactions,[]);
  const users=read<SystemUser[]>(K.users,[]).map(stripLegacyPassword), rawSettings=read<AppSettings>(K.settings,{} as AppSettings);
  const auditLogs=read<AuditLog[]>(K.auditLogs,[]), generatorLogs=read<GeneratorLogEntry[]>(K.generatorLogs,[]), exportedAt=new Date().toISOString();
@@ -89,9 +93,10 @@ export async function createBackup():Promise<BackupV2>{
  const storeErrors=validateStorehouses({storehouses});
  const warehouseCheck=calculateWarehouseTotals(materials,storehouses);
  if(storeErrors.length||warehouseCheck.errors.length)throw new Error(['تعذر إنشاء نسخة احتياطية بسبب أخطاء سلامة البيانات.',...storeErrors,...warehouseCheck.errors].join(' '));
- const base= {materials,transactions,users,settings,auditLogs,generatorLogs,backupVersion:BACKUP_VERSION,exportedAt,
+ const codeRegistry=options.codeRegistry?.map(r=>({code:r.code,materialId:r.materialId,deleted:r.deleted===true}));
+ const base= {materials,transactions,users,settings,auditLogs,generatorLogs,...(codeRegistry?{codeRegistry}:{}),backupVersion:BACKUP_VERSION,exportedAt,
  manifest:{format:BACKUP_FORMAT,version:BACKUP_VERSION,backupId:crypto.randomUUID?.()||`backup-${Date.now()}`,exportedAt,
- counts:{materials:materials.length,transactions:transactions.length,users:users.length,auditLogs:auditLogs.length,generatorLogs:generatorLogs.length,storehouses:storehouses.length},
+ counts:{materials:materials.length,transactions:transactions.length,users:users.length,auditLogs:auditLogs.length,generatorLogs:generatorLogs.length,storehouses:storehouses.length,...(codeRegistry?{codeRegistry:codeRegistry.length}:{})},
  selectedStorehouse:warehouseProjection.selectedStorehouseName,selectedStorehouseId:warehouseProjection.selectedStorehouseId,warehouseTotals:warehouseCheck.totals,checksumAlgorithm:'SHA-256' as const,checksum:''}};
  if (hasForbiddenCredentialKey(base)) throw new Error('تم إيقاف إنشاء النسخة الاحتياطية لوجود حقل بيانات اعتماد محظور.');
  const checksum=await hash({...base,manifest:((({checksum:_c,...m})=>m)(base.manifest))}); return {...base,manifest:{...base.manifest,checksum}};
@@ -107,6 +112,12 @@ export async function validateBackup(value:unknown):Promise<{success:boolean;err
  const mids=new Set(b.materials.map(m=>m.id)); if(b.transactions.some(t=>!mids.has(t.itemId)))errors.push('توجد حركات مرتبطة بأصناف غير موجودة.');
  if(b.transactions.some(t=>!Number.isFinite(Number(t.quantity))||Number(t.quantity)<0))errors.push('توجد كمية حركة غير صالحة.');
  if(hasForbiddenCredentialKey(b))errors.push('النسخة تحتوي حقول بيانات اعتماد محظورة وتم رفضها.');
+ // R8-R1 (RT-R8-04): the registry is optional (older files) but, when present, must be well-formed and counted.
+ if(b.codeRegistry!==undefined){
+  if(!Array.isArray(b.codeRegistry)||b.codeRegistry.some(r=>!r||typeof r.code!=='string'||!r.code.trim()||typeof r.materialId!=='string'||!r.materialId.trim()))errors.push('سجل الأكواد المركزي في النسخة غير صالح.');
+  else{const keys=new Set<string>();for(const r of b.codeRegistry){const key=r.code.trim().toLowerCase();if(keys.has(key))errors.push(`سجل الأكواد: كود مكرر ${r.code}.`);keys.add(key);}
+   if(b.manifest.counts.codeRegistry!==b.codeRegistry.length)errors.push('عدد أكواد السجل المركزي لا يطابق بيان النسخة.');}
+ } else if(b.manifest.counts.codeRegistry!==undefined)errors.push('بيان النسخة يذكر سجل أكواد غير موجود.');
  const warehouseProjection=buildWarehouseBackupProjection({settings:b.settings,materials:b.materials,transactions:b.transactions,selectedStorehouse:b.manifest.selectedStorehouseId||b.manifest.selectedStorehouse});
  errors.push(...warehouseProjection.errors); warnings.push(...warehouseProjection.warnings);
  errors.push(...validateStorehouses(warehouseProjection.settings));

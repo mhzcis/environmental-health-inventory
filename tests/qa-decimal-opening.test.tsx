@@ -4,7 +4,7 @@ import {it,expect,vi,afterEach} from 'vitest';
 import {render,screen,fireEvent,cleanup} from '@testing-library/react';
 import {MemoryRouter} from 'react-router-dom';
 vi.mock('../src/context/StorehouseContext',()=>({useStorehouse:()=>({selectedStorehouse:'QA-A'})}));
-vi.mock('../src/services/dataService',()=>({dataService:{getSettings:()=>({organizationName:'QA',departmentName:'QA',categories:[{name:'QA',prefix:'QA'}],units:['قطعة'],storehouses:['QA-A'],expiryWarningThresholdDays:30}),getMaterials:()=>[],getTransactions:()=>[],getCurrentUser:()=>({fullName:'QA'}),subscribe:()=>()=>{},generateItemCode:()=>'QA-1001',hasPermission:()=>true,saveTransactionBatch:vi.fn()}}));
+vi.mock('../src/services/dataService',()=>({dataService:{getSettings:()=>({organizationName:'QA',departmentName:'QA',categories:[{name:'QA',prefix:'QA'}],units:['قطعة'],storehouses:['QA-A'],expiryWarningThresholdDays:30}),getMaterials:()=>[],getTransactions:()=>[],getConfirmedTransactions:()=>[],getPendingTransactionIds:()=>new Set(),getPendingMaterialChanges:()=>[],getWorkingMaterials:()=>[],getCurrentUser:()=>({fullName:'QA'}),subscribe:()=>()=>{},generateItemCode:()=>'QA-1001',hasPermission:()=>true,saveTransactionBatch:vi.fn()}}));
 import Materials from '../src/pages/Materials';
 afterEach(()=>cleanup());
 it('FORM-02 initialStock 2.75 and minimumStock 0.5 pass native constraint validation', async()=>{

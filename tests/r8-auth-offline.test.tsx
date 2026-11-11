@@ -9,12 +9,14 @@ const fake = vi.hoisted(() => ({
   listener: null as null | ((user: any) => void),
   gate: vi.fn(), signOut: vi.fn(async () => {}), ensure: vi.fn(), bootstrap: vi.fn(), device: vi.fn(),
   setCurrentUser: vi.fn(), initCloudSync: vi.fn(async () => {}), stopCloudSync: vi.fn(), persisted: false,
+  refresh: vi.fn(async () => false),
 }));
 vi.mock('../src/services/supabase', () => ({
   isSupabaseConfigured: () => true,
   subscribeAuthState: (listener: any) => { fake.listener = listener; return () => { fake.listener = null; }; },
   supabaseAuthSignOut: fake.signOut,
   hasPersistedAuthSession: () => fake.persisted,
+  refreshAuthSession: fake.refresh,
 }));
 vi.mock('../src/services/supabaseOutbox', () => ({ setInventoryOutboxSendGate: fake.gate }));
 vi.mock('../src/services/legacyUserMigration', () => ({ ensureCanonicalCurrentUserProfile: fake.ensure }));
@@ -105,6 +107,18 @@ describe('R8-AUTH-01 online-required instead of fail-closed on network unavailab
     expect(await screen.findByTestId('online-required')).toBeTruthy();
     expect(localStorage.getItem('remix_current_user_v1')).toBe('u-1');
     expect(fake.signOut).not.toHaveBeenCalled();
+  });
+  it('R1-R2-09 token-less offline state: "retry now" asks the SDK to refresh the session; the delivered user is then live-revalidated (gate opens only after)', async () => {
+    offline(true); fake.persisted = true;
+    render(<App />); await signIn(null);
+    expect(await screen.findByTestId('online-required')).toBeTruthy();
+    offline(false);
+    fake.refresh.mockImplementationOnce(async () => { await act(async () => { fake.listener?.(user); await Promise.resolve(); }); return true; });
+    await act(async () => { window.dispatchEvent(new Event('online')); });
+    expect(fake.refresh).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText('APP-ROUTES')).toBeTruthy();
+    expect(fake.ensure).toHaveBeenCalled();
+    expect(fake.gate).toHaveBeenLastCalledWith(true);
   });
   it('R8-AUTH-T7 a real sign-out (online, no persisted session) still shows login and clears the marker', async () => {
     render(<App />); await signIn(null);

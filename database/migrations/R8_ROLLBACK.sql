@@ -1,13 +1,19 @@
 -- R8 readiness — ROLLBACK to main 6933d16 server behaviour (PREPARED ONLY; NOT RUN). Tested in PGlite by qa/r8-migration-rollback.mjs.
 -- Restores the exact main functions (commit_inventory md5 c10026ce626d134deda991fe78e63057) and drops the R8 functions.
 -- Keeps: every audit receipt (incl. archive/reconcile receipts), every ledger row, current material documents
--- (derived/lifecycle fields stay as inert data) and inventory_private.material_code_registry (permanent reservations).
+-- (derived/lifecycle fields stay as inert data), inventory_private.material_code_registry and
+-- inventory_private.category_policy (both private, no grants, inert under main).
 --
--- SAFETY (R8-REC-01): main SQL ignores archive metadata. This file REFUSES to run while any material is archived,
--- unless the operator first reactivates it with the audited lifecycle mode, OR has confirmed a write hold
--- (no-entry window, all device queues drained/held) by running in the same session:
+-- WHILE ROLLED BACK (RT-R8-08): main does NOT enforce code non-reuse, the category pin, the drift guard or archive
+-- blocking. A code reused in that window is detected by the roll-forward migration, which stops and lists it.
+--
+-- SAFETY (R8-REC-01 / R2-R8-12): main SQL ignores archive metadata. This file REFUSES to run while any material is
+-- archived, unless the operator first reactivates it with the audited lifecycle mode, OR confirms a write hold by
+-- running in the same session:
 --     SET r8.rollback_hold_writes = 'confirmed';
--- Do not reopen data entry on the rolled-back server while an archived QA record exists; roll forward instead.
+-- On that path the hold is ENFORCED: EXECUTE on public.inventory_commit is revoked from authenticated at the end of
+-- this file, so no device can write until roll-forward (which re-grants it) or an explicit, approved re-grant:
+--     GRANT EXECUTE ON FUNCTION public.inventory_commit(text,jsonb) TO authenticated;
 BEGIN;
 SET LOCAL lock_timeout = '5s';
 SELECT pg_advisory_xact_lock(824671520);
@@ -316,6 +322,9 @@ REVOKE TRUNCATE ON public.users FROM authenticated;
 REVOKE ALL ON public.materials,public.transactions,public.generator_logs,public.settings,public.audit_logs,public.users FROM anon,PUBLIC;
 -- Existing read RLS remains in force. Service role and Auth provisioning are unchanged.
 
+DROP FUNCTION IF EXISTS public.inventory_code_registry();
+DROP FUNCTION IF EXISTS inventory_private.code_registry_export();
+DROP FUNCTION IF EXISTS inventory_private.projection_status(jsonb,jsonb);
 DROP FUNCTION IF EXISTS public.inventory_projection_drift();
 DROP FUNCTION IF EXISTS public.inventory_next_material_code(text);
 DROP FUNCTION IF EXISTS inventory_private.projection_drift();
@@ -331,7 +340,14 @@ DROP FUNCTION IF EXISTS inventory_private.code_parts(text);
 DROP FUNCTION IF EXISTS inventory_private.server_owned_material_keys();
 DROP FUNCTION IF EXISTS inventory_private.lifecycle_material_keys();
 DROP FUNCTION IF EXISTS inventory_private.derived_material_keys();
--- inventory_private.material_code_registry is intentionally KEPT (private, no grants; permanent code reservations survive a roll-forward).
+-- inventory_private.material_code_registry and inventory_private.category_policy are intentionally KEPT (private, no grants).
+DO $r8_rb_hold$
+BEGIN
+ IF EXISTS(SELECT 1 FROM public.materials WHERE data->>'lifecycleStatus'='archived') THEN
+   REVOKE EXECUTE ON FUNCTION public.inventory_commit(text,jsonb) FROM authenticated;
+   RAISE NOTICE 'R8_ROLLBACK_WRITE_HOLD_ENFORCED: inventory_commit revoked from authenticated until roll-forward or approved re-grant';
+ END IF;
+END $r8_rb_hold$;
 
 DO $r8_rb_post$
 BEGIN

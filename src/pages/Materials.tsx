@@ -96,6 +96,8 @@ export default function Materials() {
   };
   const { selectedStorehouse } = useStorehouse();
   const [materials, setMaterials] = useState<Material[]>([]);
+  // R8-R1 (RT-R8-01): the list shows server-confirmed rows only; this device's unconfirmed requests are listed separately.
+  const [pendingChanges, setPendingChanges] = useState<ReturnType<typeof dataService.getPendingMaterialChanges>>([]);
   const [settings, setSettings] = useState(dataService.getSettings());
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
@@ -143,7 +145,7 @@ export default function Materials() {
   const [detailsMaterial, setDetailsMaterial] = useState<MaterialViewRow | null>(null);
 
   const detailsHistory = detailsMaterial && dataService.hasPermission('transactions_view')
-    ? buildTransactionLedger(dataService.getTransactions(), selectedStorehouse, settings.storehouses, materials)
+    ? buildTransactionLedger(dataService.getConfirmedTransactions(), selectedStorehouse, settings.storehouses, materials)
       .filter(tx => tx.itemId === (detailsMaterial._originalId || detailsMaterial.id))
     : [];
 
@@ -345,6 +347,7 @@ export default function Materials() {
 
   const loadMaterials = () => {
     setMaterials(dataService.getMaterials());
+    setPendingChanges(dataService.getPendingMaterialChanges());
   };
 
   useEffect(() => {
@@ -973,6 +976,16 @@ const handleOpenDeleteDialog = (item: Material) => {
               <Checkbox size="small" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} slotProps={{ input: { 'aria-label': 'عرض الأصناف المؤرشفة' } }} />
               <Typography variant="body2" sx={{ fontFamily: '"Cairo", sans-serif' }}>عرض الأصناف المؤرشفة فقط (للاطلاع والسجل التاريخي)</Typography>
             </Box>
+            {pendingChanges.length > 0 && (
+              <Alert severity="warning" sx={{ mt: 1 }} data-testid="materials-pending-panel">
+                <Typography variant="body2" sx={{ fontWeight: 'bold' }}>طلبات أصناف لم يؤكدها الخادم بعد (غير مشمولة في الأرصدة والتقارير):</Typography>
+                {pendingChanges.map(change => (
+                  <Typography key={`${change.mutationId}-${change.docId}`} variant="caption" component="div">
+                    {`${change.kind === 'delete' ? 'حذف' : change.confirmed ? 'تعديل' : 'إضافة'}: ${change.name || change.confirmed?.name || change.docId}${change.code ? ` (${change.code})` : ''} — بانتظار تأكيد الخادم`}
+                  </Typography>
+                ))}
+              </Alert>
+            )}
             {showArchived && <Alert severity="info" sx={{ mt: 1 }}>هذه أصناف مؤرشفة: لا تظهر في الأرصدة النشطة ولا يمكن تسجيل حركات عليها، وتبقى حركاتها وتقاريرها التاريخية محفوظة.</Alert>}
           </Grid>
         </Grid>
@@ -1221,7 +1234,7 @@ const handleOpenDeleteDialog = (item: Material) => {
                         {isMaterialArchived(item) && (
                           <Chip label="مؤرشف" size="small" color="default" sx={{ fontSize: '10px', height: '18px', fontWeight: 'bold', fontFamily: '"Cairo", sans-serif' }} />
                         )}
-                        {item.syncPending && (
+                        {(item.syncPending || pendingChanges.some(change => change.docId === (item._originalId || item.id))) && (
                           <Chip label="بانتظار تأكيد الخادم" size="small" color="warning" variant="outlined" sx={{ fontSize: '10px', height: '18px', fontWeight: 'bold', fontFamily: '"Cairo", sans-serif' }} />
                         )}
                         {item.isSubRow && (
@@ -1619,7 +1632,7 @@ const handleOpenDeleteDialog = (item: Material) => {
             <TextField select fullWidth size="small" label="الغرض" value={lifecyclePurpose} sx={{ mb: 2 }}
               onChange={(e) => setLifecyclePurpose(e.target.value as 'qa_test_data' | 'discontinued')}>
               <MenuItem value="discontinued">صنف متوقف (يشترط رصيدًا صفريًا)</MenuItem>
-              <MenuItem value="qa_test_data">بيانات اختبار (QA)</MenuItem>
+              <MenuItem value="qa_test_data">بيانات اختبار (QA) — يشترط رصيدًا صفريًا أيضًا</MenuItem>
             </TextField>
           )}
           <TextField fullWidth required multiline minRows={2} label="السبب" value={lifecycleReason} onChange={(e) => setLifecycleReason(e.target.value)} />

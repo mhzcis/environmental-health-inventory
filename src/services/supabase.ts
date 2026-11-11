@@ -43,7 +43,8 @@ const acceptSession = (session: Session | null) => {
     for (const listener of authListeners) listener(delivered);
   });
 };
-supabase?.auth.onAuthStateChange((_event, session) => acceptSession(session));
+// R8-R1 (R2-R8-06): guarded like getSession below; a client/test double without auth never throws at module load.
+if (typeof supabase?.auth?.onAuthStateChange === 'function') supabase.auth.onAuthStateChange((_event, session) => acceptSession(session));
 // R8-AUTH-01: read the persisted session explicitly at start (works offline from storage). Guarded because some
 // SDK builds/test doubles have no getSession; a failure leaves the onAuthStateChange path unchanged.
 if (supabase && typeof supabase.auth?.getSession === 'function') {
@@ -53,6 +54,25 @@ if (supabase && typeof supabase.auth?.getSession === 'function') {
     .catch(() => { /* the auth state listener remains the source of truth */ });
 }
 export const getCurrentAuthUser = (): SupabaseAuthUser | null => currentUser;
+/**
+ * R8-R1 (R2-R8-09): "retry now" from the online-required state when no user was delivered (offline cold start with an
+ * expired token). Asks the SDK to refresh the persisted session; a delivered session re-runs the normal live
+ * revalidation through the auth listeners. Never throws; resolves false when no session could be obtained.
+ */
+export const refreshAuthSession = async (): Promise<boolean> => {
+  try {
+    const auth = supabase?.auth as unknown as {
+      refreshSession?: () => Promise<{ data?: { session?: Session | null } }>;
+      getSession?: () => Promise<{ data?: { session?: Session | null } }>;
+    } | undefined;
+    const result = typeof auth?.refreshSession === 'function' ? await auth.refreshSession()
+      : typeof auth?.getSession === 'function' ? await auth.getSession() : null;
+    const session = result?.data?.session ?? null;
+    if (!session) return false;
+    acceptSession(session);
+    return true;
+  } catch { return false; }
+};
 /** R8-AUTH-01: whether this device still holds a persisted Supabase session (presence only; the token is never read). */
 export const hasPersistedAuthSession = (): boolean => {
   try {
@@ -238,6 +258,13 @@ export const supabaseDb = {
     return data as InventoryRpcAck;
   },
   /** R8-CODE-01: central next-code read (provisional until commit_inventory reserves it). */
+  /** R8-R1 (RT-R8-04): the permanent code registry (live, archived and deleted reservations) for a full backup. Admin only. */
+  async codeRegistry(): Promise<{ code: string; materialId: string; deleted: boolean }[]> {
+    const { data, error } = await client().rpc('inventory_code_registry');
+    if (error) throw error;
+    if (!Array.isArray(data)) throw new Error('INVENTORY_CODE_REGISTRY_INVALID');
+    return data.map((row: Record<string, unknown>) => ({ code: String(row.code), materialId: String(row.materialId), deleted: row.deleted === true }));
+  },
   async nextMaterialCode(category: string): Promise<InventoryNextCode> {
     const { data, error } = await client().rpc('inventory_next_material_code', { p_category: category });
     if (error) throw error;

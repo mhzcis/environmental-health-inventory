@@ -121,10 +121,19 @@ const R8_BLOCK_REASONS: Record<string, string> = {
   INVENTORY_LIFECYCLE_STALE: 'تغيّرت حالة الصنف على الخادم منذ تجهيز الطلب؛ لم يتغير شيء. حدّث البيانات وراجع الحالة الحالية.',
   INVENTORY_LIFECYCLE_DENIED: 'لا تملك صلاحية أرشفة الأصناف أو إعادة تفعيلها؛ لم يتغير شيء.',
   INVENTORY_ARCHIVE_NONZERO_STOCK: 'لا يمكن أرشفة صنف عليه رصيد فعلي؛ يلزم صرف أو تحويل معتمد أولًا.',
+  INVENTORY_RECONCILE_REQUIRED: 'الرصيد المخزن للصنف يختلف عن سجل الحركات؛ رُفض الطلب ولم يتغير شيء. يلزم إجراء تسوية معتمد (reconcile) قبل أي تعديل عادي.',
+  INVENTORY_CODE_NOT_NEXT: 'الكود ليس الكود التالي في السجل المركزي؛ لم يُحفظ شيء. اطلب الكود التالي من الخادم ثم أعد المحاولة.',
+  INVENTORY_CATEGORY_POLICY_PINNED: 'المجموعات الخمس ونطاقاتها مثبتة على الخادم؛ لا يمكن حذفها أو تقليصها أو تداخلها أو إضافة مجموعة. يُسمح بتغيير الاسم المعروض فقط.',
+  INVENTORY_OPENING_LEDGER_REQUIRED: 'حذف الرصيد الافتتاحي يتطلب تصفير الرصيد الافتتاحي للصنف في الطلب نفسه؛ لم يتغير شيء.',
+  INVENTORY_AUDIT_EVENT_DENIED: 'نوع سجل التدقيق هذا غير مسموح لحسابك؛ لم يُسجل شيء.',
 };
 const CORRECTION_UNSUPPORTED = 'الخادم الحالي لا يدعم تصحيح الحركات؛ لم يُعتمد الإلغاء ولا البديل، والطلب باقٍ محفوظًا على الجهاز ويمكن إعادة إرساله بعد تحديث الخادم.';
+// R8-R1 (R2-R8-09/RT-R8-09): nothing is sent (direct enqueue, retry or drain) before this session's live profile
+// check has opened the gate; the request stays durably pending (not blocked) and is sent once the gate opens.
+export const OUTBOX_GATE_CLOSED_AR = 'حُفظ الطلب على الجهاز وسيُرسل تلقائيًا بعد التحقق من الجلسة والصلاحيات.';
 const once = async (row: Queued): Promise<InventoryRpcAck> => {
   assertOwner(row.userId);
+  if (!sendGateOpen) throw new InventoryPendingError(row.id, false, OUTBOX_GATE_CLOSED_AR);
   try {
     row.status = 'processing'; row.updatedAt = Date.now();
     await store.put(row); assertOwner(row.userId); emit();
@@ -372,12 +381,21 @@ export async function enqueueInventoryRestore(backup: Record<string, unknown>, e
 let autoTimer: ReturnType<typeof setTimeout> | undefined; let autoRunning = false; let autoBackoff = 5_000;
 let autoStarted = false;
 // R8-AUTH-01: queued work is never sent automatically until the live profile check of this session has passed.
-let sendGateOpen = true;
-export const setInventoryOutboxSendGate = (open: boolean): void => { sendGateOpen = open; };
+// R8-R1 (R2-R8-09): starts CLOSED; App opens it only after the live revalidation of this session, then drains once.
+// The vitest harness (tests/setup/outbox-gate.ts) may pre-open it for service-level suites; in a production build
+// import.meta.env.MODE is 'production', so this is statically false.
+let sendGateOpen = import.meta.env?.MODE === 'test' && (globalThis as { __R8_OUTBOX_GATE_TEST_OPEN__?: boolean }).__R8_OUTBOX_GATE_TEST_OPEN__ === true;
+let kickOnGateOpen: (() => void) | null = null;
+export const setInventoryOutboxSendGate = (open: boolean): void => {
+  const opened = open && !sendGateOpen;
+  sendGateOpen = open;
+  if (opened) kickOnGateOpen?.();
+};
 export const isInventoryOutboxSendGateOpen = (): boolean => sendGateOpen;
 export function startInventoryOutboxAutoResume(after?: (result: InventoryDrainResult) => void): void {
   if (autoStarted || typeof window === 'undefined') return; autoStarted = true;
   const kick = (delay = 0) => { if (autoTimer) clearTimeout(autoTimer); autoTimer = setTimeout(() => { void run(); }, delay); };
+  kickOnGateOpen = () => kick(0);
   const run = async () => {
     if (autoRunning) { kick(1_000); return; }
     const uid = getCurrentAuthUser()?.uid;

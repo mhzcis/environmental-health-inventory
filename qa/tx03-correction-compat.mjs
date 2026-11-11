@@ -16,7 +16,9 @@ const link={id:'t-orig',transactionNumber:'W-0001',transactionType:'وارد',qu
 const replacement=tr('t-repl','W-0002',18,{correctionOf:link});
 const correctionOps=(rep=replacement)=>[del('transactions','t-orig',original),set('transactions',rep.id,rep)];
 let db;
-const boot=async sql=>{if(db)await db.close();db=await createIsolatedDatabase();await db.exec('CREATE TABLE auth.users(id uuid primary key,email text);');for(const [name,id]of Object.entries(ids))await db.query('insert into auth.users values($1,$2)',[id,name+'@qa.invalid']);await db.exec(sql);await seedAccounts(db);await db.query('insert into settings(id,data) values($1,$2)',['app_config',JSON.stringify(cfg)]);await db.query('insert into materials(id,data) values($1,$2)',['m1',JSON.stringify(mat)]);await commit({mode:'mutation',label:'seed',operations:[set('transactions','t-orig',original)]},'qa-seed-original');};
+// Synthetic single 'QA' category (pre-R8 suite): the R8 five-category pin is lifted in this isolated database only.
+const unpin=async()=>{if((await db.query("select to_regclass('inventory_private.category_policy') r")).rows[0].r)await db.exec('DELETE FROM inventory_private.category_policy;');};
+const boot=async sql=>{if(db)await db.close();db=await createIsolatedDatabase();await db.exec('CREATE TABLE auth.users(id uuid primary key,email text);');for(const [name,id]of Object.entries(ids))await db.query('insert into auth.users values($1,$2)',[id,name+'@qa.invalid']);await db.exec(sql);await unpin();await seedAccounts(db);await db.query('insert into settings(id,data) values($1,$2)',['app_config',JSON.stringify(cfg)]);await db.query('insert into materials(id,data) values($1,$2)',['m1',JSON.stringify(mat)]);await commit({mode:'mutation',label:'seed',operations:[set('transactions','t-orig',original)]},'qa-seed-original');};
 const commit=async(p,id)=>(await asUser(db,ids.admin,tx=>tx.query('select public.inventory_commit($1,$2) ack',[id,JSON.stringify(p)]))).rows[0].ack;
 const rejects=async(fn,codes)=>{let e;try{await fn();}catch(x){e=x;}assert.ok(e,'Expected rejection');if(codes)assert.ok(codes.includes(e.code),e.code+':'+e.message);return e;};
 const ids_=async t=>(await db.query(`select id from ${t} order by id`)).rows.map(r=>r.id);
@@ -48,11 +50,11 @@ await test('TX03-C6 candidate: restore of a backup that contains a correction ro
 await test('TX03-R1 #8 SQL (rollback target): queued correction is rejected atomically, no partial commit, no audit row',PR8,async()=>{
   const e=await rejects(()=>commit(correction(),'qa-corr-0101'),['22023']);assert.match(e.message,/INVENTORY_OPERATIONS_INVALID/);await assertUntouched();});
 await test('TX03-R2 #8 -> candidate upgrade: the SAME queued correction then commits once with complete audit',PR8,async()=>{
-  await rejects(()=>commit(correction(),'qa-corr-0102'),['22023']);await db.exec(CANDIDATE);
+  await rejects(()=>commit(correction(),'qa-corr-0102'),['22023']);await db.exec(CANDIDATE);await unpin();
   const a=await commit(correction(),'qa-corr-0102');assert.equal(a.replayed,false);assertCompleteReceipt(a.audit);assert.deepEqual(await ids_('transactions'),['t-repl']);
   assert.equal((await commit(correction(),'qa-corr-0102')).replayed,true);assert.equal((await ids_('audit_logs')).length,2);});
 await test('TX03-R3 candidate -> #8 rollback: later queued correction is rejected; earlier committed correction stays intact',CANDIDATE,async()=>{
-  await commit(correction(),'qa-corr-0103');await db.exec(PR8);
+  await commit(correction(),'qa-corr-0103');await db.exec(PR8);await unpin();
   const second=tr('t-repl2','W-0003',17,{correctionOf:{...link,id:'t-repl',transactionNumber:'W-0002',quantity:18}});
   await rejects(()=>commit(correction([del('transactions','t-repl',replacement),set('transactions','t-repl2',second)]),'qa-corr-0103b'),['22023']);
   assert.deepEqual(await ids_('transactions'),['t-repl']);assertCompleteReceipt(await audit('qa-corr-0103'));});
