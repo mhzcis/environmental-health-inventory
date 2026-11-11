@@ -86,7 +86,7 @@ export default function Transactions() {
 
   const loadData = () => {
     setTransactions(dataService.getTransactions());
-    setMaterials(dataService.getMaterials({ includeArchived: true }));
+    setMaterials((dataService.getMaterials as (opts?: { includeArchived?: boolean }) => Material[])({ includeArchived: true }));
     setSettings(dataService.getSettings());
   };
 
