@@ -28,7 +28,7 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import * as XLSX from 'xlsx';
 import { dataService } from '../services/dataService';
 import { presentResultMessage, safeUserMessage } from '../services/safeUserMessage';
-import { createBackup, validateBackup, migrateValidatedBackupToFirestore, testFirestoreRbacReads, compareLocalAndCloudData, P7_CLOUD_MIGRATION_EXECUTION_ENABLED, isSystemAdminRole } from '../services/backupService';
+import { createBackup, validateBackup, formatRestoreConfirmDialog, migrateValidatedBackupToFirestore, testFirestoreRbacReads, compareLocalAndCloudData, P7_CLOUD_MIGRATION_EXECUTION_ENABLED, isSystemAdminRole } from '../services/backupService';
 import NotificationToast from '../components/NotificationToast';
 import { downloadPreparedMessage } from '../utils/downloadFeedback';
 
@@ -890,9 +890,14 @@ export default function Settings() {
         if (!check.success || !check.backup) { setErrorMsg(`تم رفض النسخة: ${check.errors.join(' ')}`); return; }
         const m = check.backup.manifest;
         const preview = await dataService.previewBackupRestore(check.backup);
-        const labels: Record<string, string> = { materials: 'الأصناف', transactions: 'الحركات', users: 'ملفات المستخدمين', generator_logs: 'قراءات المولد' };
-        const differences = Object.entries(preview.diffs).map(([key, diff]) => `${labels[key] || key}: إضافة ${diff.added}، إزالة ${diff.removed}، اختلاف ${diff.changed}`).join('\n');
-        const ok = window.confirm(`معاينة الاستعادة مقابل الخادم\nالتاريخ: ${new Date(m.exportedAt).toLocaleString('ar-EG')}\n${differences}\nسيُستبدل مخزون التطبيق وإعداداته وملفات مستخدميه بالكامل بعد التحقق. تبقى حسابات المصادقة وكلمات المرور وسجل التدقيق الحالي. الدخول بعدها بالحساب نفسه وكلمة مروره الحالية. هل تعتمد الاستعادة؟`);
+        const dialog = formatRestoreConfirmDialog({
+          exportedAt: new Date(m.exportedAt).toLocaleString('ar-EG'),
+          diffs: preview.diffs,
+          registry: preview.registry,
+          validationWarnings: check.warnings,
+        });
+        if (dialog.blocked) { setErrorMsg(dialog.message); return; }
+        const ok = window.confirm(dialog.message);
         if (!ok) return;
         const result = await dataService.restoreBackupData(check.backup, preview);
         if (!result.success) { setErrorMsg(presentResultMessage(result.message, 'user-management')); return; }

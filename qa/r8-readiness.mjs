@@ -392,5 +392,95 @@ await test('R2-D01 a registry-less backup is warned in the preview and refused i
  void saved;
 });
 
+
+await test('R3-E01 a planted PES-1999 employee audit event does not exhaust PES on an honest restore; a genuine deleted tail is kept',async()=>{
+ await seedPesOk();await archiver();
+ const d=mat('m-del','PES-1002');
+ await commit(ids.admin,payload([set('materials','m-del',d)]),'qa-r3-del-c');
+ const rowD=await row('materials','m-del');
+ await commit(ids.admin,payload([del('materials','m-del',rowD)]),'qa-r3-del-d');
+ await commit(ids.employee,{mode:'audit',label:'QA',operations:[{collection:'audit_logs',docId:'qa-r3-plant',kind:'set',value:{action:'تسجيل الدخول',details:'category policy: PES-1999 is the end of the pesticide range'}}]},'qa-r3-e01-plant');
+ const users=(await q('select data from users')).map(r=>r.data);
+ const s=await cfgNow();
+ const materials=(await q('select data from materials')).map(r=>r.data);
+ const transactions=(await q('select data from transactions')).map(r=>r.data);
+ const codeRegistry=(await asUser(db,ids.admin,tx=>tx.query('select public.inventory_code_registry() r'))).rows[0].r;
+ assert.ok(codeRegistry.some(r=>r.code==='PES-1002'&&r.deleted),'deleted tail exported');
+ const honest={settings:s,materials,transactions,generatorLogs:[],users,codeRegistry};
+ const auditLogs=(await q('select data from audit_logs')).map(r=>r.data);
+ const honestWithAudit={...honest,auditLogs};
+ const nextOf=async(cat)=>{try{return (await asUser(db,ids.admin,tx=>tx.query('select public.inventory_next_material_code($1) r',[cat]))).rows[0].r;}catch(e){return {error:e.message};}};
+ const nextBefore=await nextOf('مبيدات حشرية');
+ assert.equal(nextBefore?.code||nextBefore?.error,'PES-1003','next before restore');
+ const assertSafe=async(backup,id)=>{
+  const pre=(await asUser(db,ids.admin,tx=>tx.query('select public.inventory_restore_preview($1) p',[JSON.stringify(backup)]))).rows[0].p;
+  assert.equal(pre.registry.ok,true,id+' preview not ok: '+JSON.stringify(pre.registry));
+  assert.equal(pre.registry.willRefuse,false);
+  const cmax=pre.registry.conservativeMax||{};
+  assert.notEqual(Number(cmax.PES),1999,id+' conservativeMax harvested audit text: '+JSON.stringify(cmax));
+  assert.ok(Number(cmax.PES||0)<1999,id+' conservativeMax '+JSON.stringify(cmax));
+  const maxRef=JSON.stringify(pre.registry.maxReferenced||{});
+  assert.equal(maxRef.includes('MAT'),false,id+' maxReferenced harvested a material id: '+maxRef);
+  await raw(ids.admin,{mode:'restore',label:'QA',backup,expectedState:pre.expectedState},id);
+  const nextAfter=await nextOf('مبيدات حشرية');
+  assert.deepEqual(nextAfter,nextBefore,id+' next changed: '+JSON.stringify(nextAfter));
+  assert.equal(Number((await q("select count(*) n from inventory_private.material_code_registry where prefix='PES' and number=1999"))[0].n),0,id+' PES-1999 reserved');
+  const held=await q("select code from inventory_private.material_code_registry where source='restore-conservative' and prefix='PES' and number>1002");
+  assert.equal(held.length,0,id+' conservative-hold above tail: '+JSON.stringify(held));
+  const kept=(await q("select code,deleted_at is not null d from inventory_private.material_code_registry where code='PES-1002'"))[0];
+  assert.ok(kept&&kept.d,id+' deleted tail lost');
+ };
+ // 1. Honest backup (complete registry, no crafted rows); live audit holds the plant (Role 2 s6b / Red Team exact scenario).
+ await assertSafe(honest,'qa-r3-e01-honest');
+ // 2. The same honest file also carrying the planted auditLogs (Red Team: "whose only mention of PES-1999 is in auditLogs" variant with a registry).
+ await assertSafe(honestWithAudit,'qa-r3-e01-auditfile');
+});
+await test('R3-E01 a registry-less backup whose only PES-1999 is in auditLogs, restored into a populated registry, does not exhaust PES',async()=>{
+ await seedPesOk();
+ await commit(ids.employee,{mode:'audit',label:'QA',operations:[{collection:'audit_logs',docId:'qa-r3-plant2',kind:'set',value:{action:'تسجيل الدخول',details:'PES-1999'}}]},'qa-r3-e01-plant2');
+ const users=(await q('select data from users')).map(r=>r.data);
+ const s=await cfgNow();
+ const materials=(await q('select data from materials')).map(r=>r.data);
+ const transactions=(await q('select data from transactions')).map(r=>r.data);
+ const b={settings:s,materials,transactions,generatorLogs:[],users,auditLogs:[{id:'plant',details:'PES-1999 appears only in this free-text field',action:'تسجيل الدخول'}]};
+ const pre=(await asUser(db,ids.admin,tx=>tx.query('select public.inventory_restore_preview($1) p',[JSON.stringify(b)]))).rows[0].p;
+ assert.equal(pre.registry.missingCodeRegistry,true);
+ assert.ok(JSON.stringify(pre.registry.warnings).includes('REGISTRY_ABSENT'));
+ assert.notEqual(Number((pre.registry.conservativeMax||{}).PES),1999,'conservativeMax='+JSON.stringify(pre.registry.conservativeMax));
+ assert.equal(JSON.stringify(pre.registry.maxReferenced||{}).includes('MAT'),false);
+ const nextOf=async()=>{try{return (await asUser(db,ids.admin,tx=>tx.query("select public.inventory_next_material_code('مبيدات حشرية') r"))).rows[0].r;}catch(e){return {error:e.message};}};
+ const nextBefore=await nextOf();
+ assert.equal(nextBefore?.code||nextBefore?.error,'PES-1002');
+ // Same-environment: live registry is populated, restore may proceed (with a warning), and must not fill to 1999.
+ assert.equal(pre.registry.willRefuse,false);
+ await raw(ids.admin,{mode:'restore',label:'QA',backup:b,expectedState:pre.expectedState},'qa-r3-e01-noreg');
+ const nextAfter=await nextOf();
+ assert.deepEqual(nextAfter,nextBefore,'next='+JSON.stringify(nextAfter));
+ assert.equal(Number((await q("select count(*) n from inventory_private.material_code_registry where prefix='PES' and number=1999"))[0].n),0);
+ assert.equal(String(nextAfter?.error||'').includes('RANGE_EXHAUSTED'),false);
+});
+await test('R3-E01/E03 a large unreferenced contiguous registry tail is refused (willRefuse) and next_material_code is unchanged',async()=>{
+ await seedPesOk();
+ const users=(await q('select data from users')).map(r=>r.data);
+ const s=await cfgNow();
+ const materials=(await q('select data from materials')).map(r=>r.data);
+ const transactions=(await q('select data from transactions')).map(r=>r.data);
+ const live=(await asUser(db,ids.admin,tx=>tx.query('select public.inventory_code_registry() r'))).rows[0].r;
+ const tail=Array.from({length:9},(_,i)=>({code:'PES-'+(1002+i),materialId:'phantom-tail-'+i,deleted:true}));
+ const crafted={settings:s,materials,transactions,generatorLogs:[],users,codeRegistry:[...live,...tail]};
+ const pre=(await asUser(db,ids.admin,tx=>tx.query('select public.inventory_restore_preview($1) p',[JSON.stringify(crafted)]))).rows[0].p;
+ assert.equal(pre.registry.ok,false);
+ assert.equal(pre.registry.willRefuse,true);
+ assert.ok((pre.registry.tailReservations||[]).length>1);
+ const before=await q("select code from inventory_private.material_code_registry order by code");
+ const nextBefore=(await asUser(db,ids.admin,tx=>tx.query("select public.inventory_next_material_code('مبيدات حشرية') r"))).rows[0].r;
+ await atomicReject(()=>raw(ids.admin,{mode:'restore',label:'QA',backup:crafted,expectedState:pre.expectedState},'qa-r3-e01-tail'),['23514'],/INVENTORY_RESTORE_REGISTRY_INVALID/);
+ const after=await q("select code from inventory_private.material_code_registry order by code");
+ assert.deepEqual(after,before);
+ const nextAfter=(await asUser(db,ids.admin,tx=>tx.query("select public.inventory_next_material_code('مبيدات حشرية') r"))).rows[0].r;
+ assert.deepEqual(nextAfter,nextBefore);
+ assert.equal(nextBefore.code,'PES-1002');
+});
+
 const report={suite:'R8 readiness (PGlite isolated): DATA-01, ARC-01, REC-01, CODE-01, POL-01/02, RBAC-01',total:results.length,passed:results.filter(x=>x.status==='PASS').length,failed:results.filter(x=>x.status==='FAIL').length,results};
 fs.writeFileSync(process.env.QA_R8_OUTPUT||'/tmp/inventory-r8-readiness.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,1));await db.close();if(report.failed)process.exitCode=1;

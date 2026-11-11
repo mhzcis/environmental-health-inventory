@@ -771,12 +771,22 @@ BEGIN
   SELECT coalesce(jsonb_agg(jsonb_build_object('prefix',x.prefix,'number',x.number,'code',x.code,'materialId',x.material_id)),'[]'::jsonb)
   INTO ev
   FROM (
+    -- R8-R3 (RT-R8-E01 / E02): evidence is structured code fields only — never a regex over
+    -- free-text audit details or whole-row JSON (a planted "PES-1999" or a material id like
+    -- mat-1793795662160 must not become conservativeMax).
     SELECT (inventory_private.code_parts(m->>'code')->>'prefix') AS prefix,
            (inventory_private.code_parts(m->>'code')->>'number')::numeric AS number,
            btrim(m->>'code') AS code,
            m->>'id' AS material_id
     FROM jsonb_array_elements(CASE WHEN jsonb_typeof(p_backup->'materials')='array' THEN p_backup->'materials' ELSE '[]'::jsonb END) m
     WHERE inventory_private.code_parts(m->>'code')->>'prefix' IS NOT NULL
+    UNION ALL
+    SELECT (inventory_private.code_parts(lm.data->>'code')->>'prefix'),
+           (inventory_private.code_parts(lm.data->>'code')->>'number')::numeric,
+           btrim(lm.data->>'code'),
+           lm.id
+    FROM public.materials lm
+    WHERE inventory_private.code_parts(lm.data->>'code')->>'prefix' IS NOT NULL
     UNION ALL
     SELECT (inventory_private.code_parts(t->>'itemCode')->>'prefix'),
            (inventory_private.code_parts(t->>'itemCode')->>'number')::numeric,
@@ -785,19 +795,12 @@ BEGIN
     FROM jsonb_array_elements(CASE WHEN jsonb_typeof(p_backup->'transactions')='array' THEN p_backup->'transactions' ELSE '[]'::jsonb END) t
     WHERE inventory_private.code_parts(t->>'itemCode')->>'prefix' IS NOT NULL
     UNION ALL
-    SELECT (inventory_private.code_parts(u[1])->>'prefix'),
-           (inventory_private.code_parts(u[1])->>'number')::numeric,
-           (inventory_private.code_parts(u[1])->>'prefix')||'-'||(inventory_private.code_parts(u[1])->>'number'),
-           NULL
-    FROM (
-      SELECT regexp_matches(s.doc,'[A-Za-z]{2,6}-[1-9][0-9]{0,8}','g') u
-      FROM (
-        SELECT value::text AS doc FROM jsonb_array_elements(CASE WHEN jsonb_typeof(p_backup->'auditLogs')='array' THEN p_backup->'auditLogs' ELSE '[]'::jsonb END)
-        UNION ALL
-        SELECT data::text FROM public.audit_logs
-      ) s
-    ) q
-    WHERE inventory_private.code_parts(u[1])->>'prefix' IS NOT NULL
+    SELECT (inventory_private.code_parts(lt.data->>'itemCode')->>'prefix'),
+           (inventory_private.code_parts(lt.data->>'itemCode')->>'number')::numeric,
+           btrim(lt.data->>'itemCode'),
+           lt.data->>'itemId'
+    FROM public.transactions lt
+    WHERE inventory_private.code_parts(lt.data->>'itemCode')->>'prefix' IS NOT NULL
   ) x;
 
   SELECT coalesce(jsonb_object_agg(prefix, mx),'{}'::jsonb) INTO max_ref
@@ -806,7 +809,7 @@ BEGIN
   missing := (NOT (p_backup ? 'codeRegistry')) OR jsonb_typeof(p_backup->'codeRegistry') IS DISTINCT FROM 'array'
              OR jsonb_array_length(p_backup->'codeRegistry')=0;
   IF missing THEN
-    warnings := warnings || jsonb_build_array('INVENTORY_RESTORE_REGISTRY_ABSENT: registry is rebuilt conservatively up to the highest code seen in materials, transactions and audit receipts; a deleted code with no remaining trace will not be reserved');
+    warnings := warnings || jsonb_build_array('INVENTORY_RESTORE_REGISTRY_ABSENT: registry is rebuilt conservatively up to the highest structured material or transaction code (never from free-text audit details); a deleted code with no remaining structured trace will not be reserved');
     RETURN jsonb_build_object('ok',true,'missingRegistry',true,'warnings',warnings,'rejected','[]'::jsonb,'accepted','[]'::jsonb,
       'tailReservations','[]'::jsonb,'maxReferenced',max_ref,'conservativeMax',max_ref,'newReservations','[]'::jsonb,'error',NULL);
   END IF;
@@ -876,7 +879,12 @@ BEGIN
     END IF;
   END LOOP;
 
-  IF jsonb_array_length(tail)>0 THEN
+  IF jsonb_array_length(tail)>1 THEN
+    -- R8-R3 (RT-R8-E01 / E03): a large unreferenced fill (more than a single just-deleted latest code) is refused.
+    ok := false;
+    err := 'INVENTORY_RESTORE_REGISTRY_INVALID';
+    warnings := warnings || jsonb_build_array('INVENTORY_RESTORE_REGISTRY_TAIL: '||jsonb_array_length(tail)::text||' unreferenced contiguous reservation(s) above the highest structured material/transaction code — fills larger than one code are refused');
+  ELSIF jsonb_array_length(tail)>0 THEN
     warnings := warnings || jsonb_build_array('INVENTORY_RESTORE_REGISTRY_TAIL: '||jsonb_array_length(tail)::text||' unreferenced contiguous reservation(s) above the highest evidenced code (typically a just-deleted latest material)');
   END IF;
 

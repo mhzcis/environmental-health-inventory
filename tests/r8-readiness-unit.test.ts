@@ -7,6 +7,7 @@ import { migrateWarehouseModel } from '../src/utils/warehouseMigration';
 import { SERVER_OWNED_MATERIAL_KEYS, KNOWN_PERMISSION_IDS, assertDomainProofPayload } from '../src/utils/productSchema';
 import { READER_FORBIDDEN_PERMISSIONS, READER_PERMISSION_PRESET, readerPermissions } from '../src/security/rbacPresets';
 import { isMaterialArchived, activeMaterialsOnly } from '../src/utils/materialLifecycle';
+import { evaluateBackupRegistry, formatRestoreConfirmDialog } from '../src/services/backupService';
 
 const settings = (): AppSettings => ({
   organizationName: 'Org', departmentName: 'Dept', expiryWarningThresholdDays: 30,
@@ -76,5 +77,94 @@ describe('R8-RBAC-01 reader preset', () => {
   it('R8-RBAC-U2 Settings uses the preset for the reader role (no audit/settings/users/write permissions)', () => {
     const source = fs.readFileSync('src/pages/Settings.tsx', 'utf8');
     expect(source).toMatch(/val === 'مراجع\/مُشاهد'\) \{\s*\/\/[^\n]*\n\s*setUserPermissions\(readerPermissions\(\)\);/);
+  });
+});
+
+const pesSettings = {categories:[{name:'مبيدات حشرية',prefix:'PES',startRange:1001,endRange:1999},{name:'QA',prefix:'QA',startRange:1000,endRange:2000}]} as any;
+
+describe('R8-R3 RT-R8-E01 / E02 / E03 registry evidence and restore confirm dialog', () => {
+  it('R3-E01-client a planted PES-1999 in auditLogs is not evidence: an honest registry stays ok and a PES-1999 ghost is still refused', () => {
+    const honest = evaluateBackupRegistry({
+      settings: pesSettings,
+      materials: [{id:'m',code:'PES-1001'}] as any,
+      transactions: [],
+      auditLogs: [{details:'category policy: PES-1999 is the end of the pesticide range',id:'mat-1793795662160'}] as any,
+      codeRegistry: [{code:'PES-1001',materialId:'m'}],
+    });
+    expect(honest.ok).toBe(true);
+    expect(honest.errors).toEqual([]);
+    const ghost = evaluateBackupRegistry({
+      settings: pesSettings,
+      materials: [{id:'m',code:'PES-1001'}] as any,
+      transactions: [],
+      auditLogs: [{details:'PES-1999',id:'mat-1793795662160'}] as any,
+      codeRegistry: [{code:'PES-1001',materialId:'m'},{code:'PES-1999',materialId:'phantom',deleted:true}],
+    });
+    expect(ghost.ok).toBe(false);
+    expect(ghost.errors.join(' ')).toMatch(/1999|وهمي|غير متصل/);
+  });
+
+  it('R3-E01-client a large unreferenced contiguous tail is refused; a single just-deleted tail is only a warning', () => {
+    const single = evaluateBackupRegistry({
+      settings: pesSettings,
+      materials: [{id:'m',code:'PES-1001'}] as any,
+      transactions: [],
+      auditLogs: [],
+      codeRegistry: [{code:'PES-1001',materialId:'m'},{code:'PES-1002',materialId:'deleted',deleted:true}],
+    });
+    expect(single.ok).toBe(true);
+    expect(single.warnings.join(' ')).toMatch(/PES-1002/);
+    const large = evaluateBackupRegistry({
+      settings: pesSettings,
+      materials: [{id:'m',code:'PES-1001'}] as any,
+      transactions: [],
+      auditLogs: [],
+      codeRegistry: [
+        {code:'PES-1001',materialId:'m'},
+        ...Array.from({length:9},(_,i)=>({code:`PES-${1002+i}`,materialId:`p${i}`,deleted:true})),
+      ],
+    });
+    expect(large.ok).toBe(false);
+    expect(large.errors.join(' ')).toMatch(/أكبر من كود واحد|PES/);
+  });
+
+  it('R3-E03 the confirm dialog shows registry warnings and blocks when willRefuse is set', () => {
+    const warned = formatRestoreConfirmDialog({
+      exportedAt: '12/11/2026',
+      diffs: {materials:{added:0,removed:0,changed:1}},
+      registry: {
+        ok: true, willRefuse: false, missingCodeRegistry: true,
+        warnings: ['INVENTORY_RESTORE_REGISTRY_ABSENT: rebuilt conservatively'],
+        conservativeMax: {PES:1001}, maxReferenced: {PES:1001},
+        newReservations: [], tailReservations: [],
+      },
+      validationWarnings: ['النسخة لا تحتوي سجل الأكواد المركزي'],
+    });
+    expect(warned.blocked).toBe(false);
+    expect(warned.message).toMatch(/تحذيرات سجل الأكواد/);
+    expect(warned.message).toMatch(/INVENTORY_RESTORE_REGISTRY_ABSENT|سجل الأكواد المركزي/);
+    expect(warned.message).toMatch(/الحد التحفظي للسجل/);
+    expect(warned.message).toMatch(/هل تعتمد الاستعادة/);
+    const blocked = formatRestoreConfirmDialog({
+      exportedAt: '12/11/2026',
+      diffs: {materials:{added:0,removed:0,changed:0}},
+      registry: {
+        ok: false, willRefuse: true, error: 'INVENTORY_RESTORE_REGISTRY_INVALID',
+        warnings: ['INVENTORY_RESTORE_REGISTRY_TAIL: 9 unreferenced'],
+        tailReservations: Array.from({length:9},(_,i)=>({code:`PES-${1002+i}`})),
+        conservativeMax: {PES:1001},
+      },
+    });
+    expect(blocked.blocked).toBe(true);
+    expect(blocked.message).toMatch(/تُرفض الاستعادة/);
+    expect(blocked.message).toMatch(/INVENTORY_RESTORE_REGISTRY_INVALID/);
+    expect(blocked.message).toMatch(/تحذيرات سجل الأكواد|REGISTRY_TAIL/);
+    expect(blocked.message).toMatch(/حجوزات متتابعة/);
+    expect(blocked.message).not.toMatch(/هل تعتمد الاستعادة/);
+    const src = fs.readFileSync('src/pages/Settings.tsx','utf8');
+    expect(src).toContain('formatRestoreConfirmDialog');
+    expect(src).toMatch(/if \(dialog\.blocked\)/);
+    expect(src).toContain('preview.registry');
+    expect(src).toContain('validationWarnings: check.warnings');
   });
 });

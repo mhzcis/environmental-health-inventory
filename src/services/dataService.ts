@@ -860,6 +860,19 @@ export const dataService = {
   },
   /** R8-R1 (R2-R8-08): ids of transactions whose current local value is not yet server-confirmed. */
   getPendingTransactionIds: (): Set<string> => new Set(readPendingTransactions().map(entry => entry.docId)),
+  /**
+   * R8-R3 (R2-R8-E02): pending ids that have no confirmed snapshot (brand-new queued or rejected rows).
+   * A confirmed movement with a queued or rejected edit is NOT included — the register shows its confirmed version.
+   */
+  getUnconfirmedPendingTransactionIds: (): Set<string> => {
+    const pending = dataService.getPendingTransactionIds();
+    const confirmed = new Set(dataService.getConfirmedTransactions().map(t => t.id));
+    return new Set([...pending].filter(id => !confirmed.has(id)));
+  },
+  /** True when a confirmed movement has a queued or rejected edit on top. */
+  hasPendingTransactionEdit: (id: string): boolean => (
+    dataService.getPendingTransactionIds().has(id) && dataService.getConfirmedTransactions().some(t => t.id === id)
+  ),
   /** Server-confirmed transactions only (queued/rejected writes replaced by the value they would change). */
   getConfirmedTransactions: (): InventoryTransaction[] => confirmedTransactionsView(dataService.getTransactions()),
   getArchivedMaterials: (): Material[] => dataService.getMaterials().filter(material => isMaterialArchived(material)),

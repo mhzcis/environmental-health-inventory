@@ -5,7 +5,7 @@ import {cleanup,render,screen,fireEvent,waitFor} from '@testing-library/react';
 import {Blob as NodeBlob} from 'node:buffer';
 import ExcelJS from 'exceljs';
 const fake=vi.hoisted(()=>({fallback:null as any,materials:[] as any[],transactions:[] as any[],logs:[] as any[],warehouse:'all',permissions:true,denied:[] as string[],blocked:false,retry:vi.fn(),pdf:vi.fn(),save:vi.fn()}));
-vi.mock('../src/services/dataService',()=>({dataService:{getSettings:()=>({organizationName:'QA معزول',departmentName:'QA فحص',expiryWarningThresholdDays:30,categories:[{name:'QA-C1'},{name:'QA-C2'}],units:['قطعة'],storehouses:['QA-A','QA-B'],partners:[]}),getMaterials:()=>fake.materials,getTransactions:()=>fake.transactions,getConfirmedTransactions:()=>fake.transactions,getPendingTransactionIds:()=>new Set((fake as any).pendingTx||[]),getPendingMaterialChanges:()=>[],getWorkingMaterials:()=>fake.materials,getGeneratorLogs:()=>fake.logs,subscribe:()=>()=>{},hasPermission:(p:string)=>fake.permissions&&!fake.denied.includes(p),listPendingInventoryMutations:async()=>[{id:'qa-pending',status:fake.blocked?'blocked':'pending',operations:[],transport:'supabase-v1'}],retryPendingInventoryMutations:()=>fake.retry(),getOpeningStockAttachment:()=>null,getStorehouseInitialStock:(id:string,wh:string)=>fake.materials.find(m=>m.id===id)?.initialStocks?.[wh]||0}}));
+vi.mock('../src/services/dataService',()=>({dataService:{getSettings:()=>({organizationName:'QA معزول',departmentName:'QA فحص',expiryWarningThresholdDays:30,categories:[{name:'QA-C1'},{name:'QA-C2'}],units:['قطعة'],storehouses:['QA-A','QA-B'],partners:[]}),getMaterials:()=>fake.materials,getTransactions:()=>fake.transactions,getConfirmedTransactions:()=>{const edits=new Set((fake as any).pendingEdits||[]);const unconfirmed=new Set(((fake as any).pendingTx||[]).filter((id:string)=>!edits.has(id)));return fake.transactions.filter((t:any)=>!unconfirmed.has(t.id));},getPendingTransactionIds:()=>new Set([...((fake as any).pendingTx||[]),...((fake as any).pendingEdits||[])]),getUnconfirmedPendingTransactionIds:()=>new Set(((fake as any).pendingTx||[]).filter((id:string)=>!((fake as any).pendingEdits||[]).includes(id))),hasPendingTransactionEdit:(id:string)=>((fake as any).pendingEdits||[]).includes(id),getPendingMaterialChanges:()=>[],getWorkingMaterials:()=>fake.materials,getGeneratorLogs:()=>fake.logs,subscribe:()=>()=>{},hasPermission:(p:string)=>fake.permissions&&!fake.denied.includes(p),listPendingInventoryMutations:async()=>[{id:'qa-pending',status:fake.blocked?'blocked':'pending',operations:[],transport:'supabase-v1'}],retryPendingInventoryMutations:()=>fake.retry(),getOpeningStockAttachment:()=>null,getStorehouseInitialStock:(id:string,wh:string)=>fake.materials.find(m=>m.id===id)?.initialStocks?.[wh]||0}}));
 vi.mock('../src/context/StorehouseContext',()=>({useStorehouse:()=>({selectedStorehouse:fake.warehouse,activeStorehouses:['QA-A','QA-B'],scopeFallback:fake.fallback})}));
 vi.mock('../src/utils/printHtml',()=>({requireStableStringPart:(s:any)=>{if(typeof s!=='string'||!s.trim())throw new Error('invalid id');return s.trim();},exportToPDF:(...a:any[])=>fake.pdf(...a)}));
 vi.mock('file-saver',()=>({saveAs:(...a:any[])=>fake.save(...a)}));
@@ -149,7 +149,7 @@ describe('R8-R2 R2-R8-D01 Transactions page, bulk Excel/PDF and voucher print',(
  const texts=(sheet:any)=>Array.from({length:sheet.rowCount},(_,i)=>sheet.getRow(i+1).values.filter(Boolean).map(String).join('|'));
  const bulkExcel=async()=>{fireEvent.click(document.getElementById('select-all-transactions')!);fireEvent.click(document.getElementById('bulk-export-transactions-excel')!);await waitFor(()=>expect(fake.save).toHaveBeenCalledOnce());const wb=new ExcelJS.Workbook();await wb.xlsx.load(await fake.save.mock.calls[0][0].arrayBuffer());return wb.worksheets[0];};
  const bulkPdf=async()=>{fireEvent.click(document.getElementById('select-all-transactions')!);fireEvent.click(document.getElementById('bulk-export-transactions-pdf')!);await waitFor(()=>expect(fake.pdf).toHaveBeenCalledOnce());return JSON.stringify(fake.pdf.mock.calls[0][0]);};
- afterEach(()=>{(fake as any).pendingTx=[];});
+ afterEach(()=>{(fake as any).pendingTx=[];(fake as any).pendingEdits=[];});
  it('R2-D01-a default: archived, queued and rejected rows are absent from the list and from bulk Excel/PDF',async()=>{
   arrange();mountTransactions();
   expect(screen.getByText('QA-O0')).toBeTruthy();
@@ -184,9 +184,26 @@ describe('R8-R2 R2-R8-D01 Transactions page, bulk Excel/PDF and voucher print',(
   arrange();mountTransactions(); // queued/rejected stay excluded; only the confirmed voucher is printable
   fireEvent.click(screen.getByRole('button',{name:'معاينة وطباعة السند المخزني'}));
   const print=screen.getByRole('button',{name:/طباعة وإصدار المستند الآن/});
-  (fake as any).pendingTx=['qa-queued','qa-rejected','qa-confirmed'];
+  (fake as any).pendingTx=['qa-queued','qa-rejected','qa-confirmed']; // no pendingEdits: treated as unconfirmed
   fireEvent.click(print);
   expect((await screen.findByRole('alert')).textContent).toMatch(/لم يؤكدها الخادم|معلّقة|مرفوضة/);
   expect(fake.pdf).not.toHaveBeenCalled();
+ });
+ it('R3-E02 a confirmed movement with a queued or rejected edit stays in the register and in bulk Excel/PDF as the confirmed snapshot, with a pending marker, and is not treated as a pending voucher',async()=>{
+  arrange();(fake as any).pendingEdits=['qa-confirmed'];mountTransactions();
+  expect(screen.getByText('QA-O0')).toBeTruthy();
+  expect(screen.getByTestId('pending-edit-marker').textContent).toMatch(/تعديل معلّق/);
+  expect(screen.queryByText('QA-Q1')).toBeNull();
+  expect(screen.queryByText('QA-R1')).toBeNull();
+  const lines=texts(await bulkExcel());
+  expect(lines.some(l=>l.includes('QA-O0'))).toBe(true);
+  expect(lines.some(l=>l.includes('QA-Q1')||l.includes('QA-R1')||l.includes('معلّقة')||l.includes('بانتظار تأكيد'))).toBe(false);
+  cleanup();arrange();(fake as any).pendingEdits=['qa-confirmed'];fake.pdf.mockReset();fake.save.mockReset();mountTransactions();
+  const pdf=await bulkPdf();
+  expect(pdf).toContain('QA-O0');expect(pdf).not.toContain('QA-Q1');expect(pdf).not.toContain('QA-R1');expect(pdf).not.toMatch(/معلّقة|بانتظار تأكيد الخادم/);
+  cleanup();arrange();(fake as any).pendingEdits=['qa-confirmed'];fake.pdf.mockReset();mountTransactions();
+  fireEvent.click(screen.getByRole('button',{name:'معاينة وطباعة السند المخزني'}));
+  fireEvent.click(screen.getByRole('button',{name:/طباعة وإصدار المستند الآن/}));
+  await waitFor(()=>expect(fake.pdf).toHaveBeenCalledOnce());
  });
 });

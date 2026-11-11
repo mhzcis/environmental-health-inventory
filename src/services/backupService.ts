@@ -114,10 +114,11 @@ const codeParts=(code:string):{prefix:string;number:number}|null=>{
  return {prefix:t.split('-')[0].toUpperCase(),number:Number(t.split('-')[1])};
 };
 /**
- * R8-R2 (R2-R8-D02 / RT-R8-D03): client-side twin of inventory_private.evaluate_backup_registry.
- * Evidence = materials + transactions + auditLogs in the file. Ghost / out-of-range / gapped entries are errors.
- * A contiguous tail above the highest evidenced code (a just-deleted latest material) is accepted with a warning.
- * A missing registry is a warning, not an error (the server rebuilds it conservatively).
+ * R8-R2 / R8-R3 (RT-R8-E01 / E02): client-side twin of inventory_private.evaluate_backup_registry.
+ * Evidence = structured material `code` and transaction `itemCode` in the file only. Never a regex over
+ * auditLogs / free-text details, and never material ids. Ghost / out-of-range / gapped entries are errors.
+ * A single contiguous tail (a just-deleted latest material) is accepted with a warning; a larger
+ * unreferenced tail is an error (the server refuses it). A missing registry is a warning, not an error.
  */
 export function evaluateBackupRegistry(b:Pick<BackupV2,'materials'|'transactions'|'auditLogs'|'codeRegistry'|'settings'>):{ok:boolean;errors:string[];warnings:string[]}{
  const errors:string[]=[],warnings:string[]=[];
@@ -125,14 +126,12 @@ export function evaluateBackupRegistry(b:Pick<BackupV2,'materials'|'transactions
  const note=(code:string|undefined)=>{const p=code?codeParts(code):null;if(!p)return;const cur=evidence.get(p.prefix);if(cur===undefined||p.number>cur)evidence.set(p.prefix,p.number);};
  for(const m of b.materials||[]) note(m.code);
  for(const t of b.transactions||[]) note((t as {itemCode?:string}).itemCode);
- const harvest=(v:unknown)=>{if(typeof v==='string'){for(const m of v.match(/[A-Za-z]{2,6}-[1-9][0-9]{0,8}/g)||[])note(m);}else if(v&&typeof v==='object')Object.values(v as object).forEach(harvest);};
- harvest(b.auditLogs);
  const ranges=new Map<string,{start:number;end:number}>();
  for(const c of (b.settings?.categories||[]) as Array<{prefix?:string;startRange?:number;endRange?:number}>){
   if(c.prefix&&Number.isFinite(Number(c.startRange))&&Number.isFinite(Number(c.endRange))) ranges.set(String(c.prefix).toUpperCase(),{start:Number(c.startRange),end:Number(c.endRange)});
  }
  if(!Array.isArray(b.codeRegistry)||b.codeRegistry.length===0){
-  warnings.push('النسخة لا تحتوي سجل الأكواد المركزي (ملف أقدم من R8 أو تصدير جزئي). عند الاستعادة يُعاد بناء السجل تحفظاً حتى أعلى كود ظاهر في المواد والحركات وإيصالات التدقيق، مع تحذير في المعاينة والإيصال.');
+  warnings.push('النسخة لا تحتوي سجل الأكواد المركزي (ملف أقدم من R8 أو تصدير جزئي). عند الاستعادة يُعاد بناء السجل تحفظاً حتى أعلى كود منظم في المواد والحركات (وليس من نص التدقيق)، مع تحذير في المعاينة والإيصال.');
   return {ok:true,errors,warnings};
  }
  const byPrefix=new Map<string,Set<number>>();
@@ -142,6 +141,7 @@ export function evaluateBackupRegistry(b:Pick<BackupV2,'materials'|'transactions
   if(!byPrefix.has(p.prefix)) byPrefix.set(p.prefix,new Set());
   byPrefix.get(p.prefix)!.add(p.number);
  }
+ const tailCount=new Map<string,number>();
  for(const r of b.codeRegistry){
   const p=codeParts(r.code); if(!p) continue;
   const range=ranges.get(p.prefix);
@@ -155,9 +155,48 @@ export function evaluateBackupRegistry(b:Pick<BackupV2,'materials'|'transactions
   const have=byPrefix.get(p.prefix)||new Set<number>();
   let gap=false; for(let k=floor+1;k<=p.number;k++) if(!have.has(k)){gap=true;break;}
   if(gap) errors.push(`سجل الأكواد: حجز غير متصل/وهمي ${r.code} (أعلى كود مستند ${p.prefix}-${floor}).`);
-  else warnings.push(`سجل الأكواد: حجز متتابع غير ظاهر في المواد ${r.code} (عادةً آخر صنف محذوف).`);
+  else {warnings.push(`سجل الأكواد: حجز متتابع غير ظاهر في المواد ${r.code} (عادةً آخر صنف محذوف).`);tailCount.set(p.prefix,(tailCount.get(p.prefix)||0)+1);}
+ }
+ for(const [pref,n] of tailCount){
+  if(n>1) errors.push(`سجل الأكواد: تعبئة غير مستندة أكبر من كود واحد للبادئة ${pref} (${n} حجوزات) — تُرفض الاستعادة.`);
  }
  return {ok:errors.length===0,errors,warnings};
+}
+
+/** R8-R3 (RT-R8-E03): text for the Settings restore confirm dialog. A refused registry evaluation never offers confirm. */
+export function formatRestoreConfirmDialog(input:{
+ exportedAt:string;
+ diffs:Record<string,{added:number;removed:number;changed:number}>;
+ registry?:{
+  ok?:boolean;willRefuse?:boolean;missingCodeRegistry?:boolean;error?:string|null;
+  warnings?:unknown;rejected?:unknown;newReservations?:unknown;tailReservations?:unknown;
+  maxReferenced?:unknown;conservativeMax?:unknown;
+ };
+ validationWarnings?:string[];
+}):{blocked:boolean;message:string}{
+ const labels:Record<string,string>={materials:'الأصناف',transactions:'الحركات',users:'ملفات المستخدمين',generator_logs:'قراءات المولد'};
+ const differences=Object.entries(input.diffs||{}).map(([key,diff])=>`${labels[key]||key}: إضافة ${diff.added}، إزالة ${diff.removed}، اختلاف ${diff.changed}`).join('\n');
+ const asList=(v:unknown):string[]=>Array.isArray(v)?v.map(x=>typeof x==='string'?x:JSON.stringify(x)):v? [String(v)]: [];
+ const lines:string[]=[];
+ const warnings=[...asList(input.registry?.warnings),...(input.validationWarnings||[])];
+ if(warnings.length) lines.push('تحذيرات سجل الأكواد:',...warnings);
+ const tails=asList(input.registry?.tailReservations);
+ const news=asList(input.registry?.newReservations);
+ if(input.registry?.conservativeMax && typeof input.registry.conservativeMax==='object' && Object.keys(input.registry.conservativeMax as object).length)
+  lines.push('الحد التحفظي للسجل: '+JSON.stringify(input.registry.conservativeMax));
+ if(input.registry?.maxReferenced && typeof input.registry.maxReferenced==='object' && Object.keys(input.registry.maxReferenced as object).length)
+  lines.push('أعلى كود منظم مستند: '+JSON.stringify(input.registry.maxReferenced));
+ if(news.length) lines.push(`حجوزات جديدة: ${news.length}`);
+ if(tails.length) lines.push(`حجوزات متتابعة غير ظاهرة في المواد: ${tails.length}`);
+ if(input.registry?.missingCodeRegistry) lines.push('النسخة بلا سجل أكواد مركزي.');
+ const blocked=!!(input.registry?.willRefuse || input.registry?.ok===false);
+ if(blocked){
+  const err=input.registry?.error?`(${input.registry.error}) `:'';
+  return {blocked:true,message:`تُرفض الاستعادة ${err}ولا يُطلب التأكيد.\n${lines.join('\n')}\n${differences}`.trim()};
+ }
+ const date=input.exportedAt?`التاريخ: ${input.exportedAt}\n`:'';
+ const registryBlock=lines.length?`\n${lines.join('\n')}\n`:'\n';
+ return {blocked:false,message:`معاينة الاستعادة مقابل الخادم\n${date}${differences}${registryBlock}سيُستبدل مخزون التطبيق وإعداداته وملفات مستخدميه بالكامل بعد التحقق. تبقى حسابات المصادقة وكلمات المرور وسجل التدقيق الحالي. الدخول بعدها بالحساب نفسه وكلمة مروره الحالية. هل تعتمد الاستعادة؟`};
 }
 
 export async function validateBackup(value:unknown):Promise<{success:boolean;errors:string[];warnings:string[];backup?:BackupV2}>{

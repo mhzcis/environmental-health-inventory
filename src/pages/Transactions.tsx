@@ -90,14 +90,14 @@ export default function Transactions() {
   const loadData = () => {
     // R8-R2 (R2-R8-D01): the register, its exports and the voucher print use confirmed transactions only,
     // scoped so archived-item movements are excluded by default (or last and labelled when included).
-    // Queued and rejected rows are excluded (getConfirmedTransactions + pending-id filter).
+    // Brand-new queued/rejected rows (no confirmed snapshot) stay out. R8-R3 (R2-R8-E02): a confirmed
+    // movement that has a queued or rejected edit remains, as its confirmed snapshot, with a pending marker.
     const confirmedMaterials = dataService.getMaterials();
-    const pendingIds = dataService.getPendingTransactionIds();
-    const confirmed = dataService.getConfirmedTransactions().filter(t => !pendingIds.has(t.id));
+    const confirmed = dataService.getConfirmedTransactions();
     setTransactions(scopeTransactionsByArchive(confirmed, confirmedMaterials, includeArchivedRef.current));
     setMaterials(confirmedMaterials);
     setSettings(dataService.getSettings());
-    setPendingTxIds(pendingIds);
+    setPendingTxIds(new Set([...dataService.getPendingTransactionIds()].filter(id => confirmed.some(t => t.id === id))));
   };
 
   useEffect(() => {
@@ -225,7 +225,7 @@ export default function Transactions() {
 
   const handleOpenVoucher = (item: TransactionViewRow) => {
     if (!authorizeOutput('reports_print')) return;
-    if (dataService.getPendingTransactionIds().has(item.id)) {
+    if (dataService.getUnconfirmedPendingTransactionIds().has(item.id)) {
       setErrorMessage('لا يمكن طباعة سند لحركة لم يؤكدها الخادم بعد (معلّقة أو مرفوضة).');
       return;
     }
@@ -237,7 +237,7 @@ export default function Transactions() {
     if (!authorizeOutput('reports_print')) return;
     try {
       setExportingPDF(true);
-      const selectedItems = filteredTransactions.filter(t => selectedTransactionIds.includes(t.id) && !dataService.getPendingTransactionIds().has(t.id));
+      const selectedItems = filteredTransactions.filter(t => selectedTransactionIds.includes(t.id) && !dataService.getUnconfirmedPendingTransactionIds().has(t.id));
       
       const titleHeader = 'كشف وسجل الحركات المخزنية المحددة جماعياً';
       const filename = `كشف_حركات_المواد_المحددة_${localDateString()}.pdf`;
@@ -332,7 +332,7 @@ export default function Transactions() {
     if (!authorizeOutput('reports_export')) return;
     try {
       setExportingExcel(true);
-      const selectedItems = filteredTransactions.filter(t => selectedTransactionIds.includes(t.id) && !dataService.getPendingTransactionIds().has(t.id));
+      const selectedItems = filteredTransactions.filter(t => selectedTransactionIds.includes(t.id) && !dataService.getUnconfirmedPendingTransactionIds().has(t.id));
       
       const titleHeader = 'كشف وسجل الحركات المخزنية المحددة جماعياً';
       const filename = `كشف_حركات_المواد_المحددة_${localDateString()}.xlsx`;
@@ -419,7 +419,7 @@ export default function Transactions() {
   const handlePrintVoucher = async () => {
     if (!authorizeOutput('reports_print')) return;
     if (!transactionToPrint) return;
-    if (dataService.getPendingTransactionIds().has(transactionToPrint.id)) {
+    if (dataService.getUnconfirmedPendingTransactionIds().has(transactionToPrint.id)) {
       setOpenVoucherDialog(false);
       setErrorMessage('لا يمكن طباعة سند لحركة لم يؤكدها الخادم بعد (معلّقة أو مرفوضة).');
       return;
@@ -894,7 +894,7 @@ export default function Transactions() {
               </Box>
               {pendingTxIds.size > 0 && (
                 <Alert severity="info" sx={{ py: 0 }} data-testid="transactions-unconfirmed-note">
-                  {`يوجد ${pendingTxIds.size} طلب لم يؤكده الخادم بعد؛ السجل وتصديره وطباعة السند يعرضون الحركات المؤكدة فقط ولا يشملون الطلبات المعلّقة أو المرفوضة.`}
+                  {`يوجد ${pendingTxIds.size} تعديل معلّق على حركة مؤكدة؛ السجل والتصدير يعرضون النسخة المؤكدة (موسومة «تعديل معلّق»). الطلبات الجديدة المعلّقة أو المرفوضة التي لا أصل مؤكداً لها لا تظهر.`}
                 </Alert>
               )}
             </Box>
@@ -1084,7 +1084,7 @@ export default function Transactions() {
                     <TableCell sx={{ fontFamily: 'monospace', fontWeight: 'bold', color: '#006da3' }}>
                       <span dir="ltr">{tx.transactionNumber || '---'}</span>
                       {tx.correctionOf && <Chip size="small" label={`تصحيح لـ ${tx.correctionOf.transactionNumber || ''}`} sx={{ ml: 0.5, height: 20, fontSize: '10px', bgcolor: '#e0f2fe', color: '#075985', fontWeight: 'bold' }} />}
-                      {pendingTxIds.has(tx.id) && <Chip size="small" data-pending-tx={tx.id} label="بانتظار تأكيد الخادم" sx={{ ml: 0.5, height: 20, fontSize: '10px', bgcolor: '#fef3c7', color: '#92400e', fontWeight: 'bold' }} />}
+                      {pendingTxIds.has(tx.id) && <Chip size="small" data-testid="pending-edit-marker" data-pending-tx={tx.id} label="تعديل معلّق" sx={{ ml: 0.5, height: 20, fontSize: '10px', bgcolor: '#fef3c7', color: '#92400e', fontWeight: 'bold' }} />}
                     </TableCell>
                     <TableCell sx={{ fontFamily: 'monospace' }}>{tx.date}</TableCell>
                     <TableCell sx={{ color: '#475569', fontSize: '0.85rem', fontWeight: selectedStorehouse === 'all' ? 'bold' : 'normal' }}>
