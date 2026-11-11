@@ -1,8 +1,8 @@
 import { dryRunAuditLogSync, executeAuditLogSync } from '../services/backupService';
+export const R8_OBSERVER_ROLE_LABEL = 'مشاهدة فقط (مراقب)';
 import { AuditLogSyncDryRun, AuditLogSyncResult } from '../types';
 import { useState, useEffect } from 'react';
 import { Box, Typography, Paper, Divider, Button, TextField, CircularProgress, Alert, Dialog, DialogTitle, DialogContent, DialogActions, FormControl, InputLabel, Select, MenuItem, List, ListItem, ListItemText, IconButton, InputAdornment, Card, CardContent, Avatar, Chip, Checkbox, DialogContentText, Tabs, Tab, FormControlLabel } from '@mui/material';
-import LoadingSpinner from '../components/LoadingSpinner';
 import Grid from '@mui/system/Grid';
 import SaveIcon from '@mui/icons-material/Save';
 import AddIcon from '@mui/icons-material/Add';
@@ -27,10 +27,9 @@ import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import SettingsIcon from '@mui/icons-material/Settings';
 import * as XLSX from 'xlsx';
-import ExcelJS from 'exceljs';
 import { dataService } from '../services/dataService';
-import { presentResultMessage, safeErrorDetail, safeUserMessage } from '../services/safeUserMessage';
-import { createBackup, validateBackup, migrateValidatedBackupToFirestore, testFirestoreRbacReads, compareLocalAndCloudData, P7_CLOUD_MIGRATION_EXECUTION_ENABLED, isSystemAdminRole } from '../services/backupService';
+import { presentResultMessage, safeUserMessage } from '../services/safeUserMessage';
+import { createBackup, validateBa, migrateValidatedBackupToFirestore, testFirestoreRbacReads, compareLocalAndCloudData, P7_CLOUD_MIGRATION_EXECUTION_ENABLED, isSystemAdminRole } from '../services/backupService';
 import NotificationToast from '../components/NotificationToast';
 import { downloadPreparedMessage } from '../utils/downloadFeedback';
 
