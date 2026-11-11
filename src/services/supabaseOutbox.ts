@@ -1,7 +1,11 @@
 import { IndexedDbSyncQueueStore } from './syncQueueStore';
 import type { DurableSyncMutation, SyncOperation } from './syncCoordinator';
 import { fingerprintDocument } from '../utils/syncProtocol';
-import { getCurrentAuthUser, subscribeAuthState, supabaseDb, type InventoryRpcPayload, type InventoryRpcAck, type SupabaseTableName } from './supabase';
+import { getCurrentAuthUser, subscribeAuthState, supabaseDb, type InventoryLifecycleRequest, type InventoryRpcPayload, type InventoryRpcAck, type SupabaseTableName } from './supabase';
+/** R8 requirement 3: projection callbacks learn which request a change belongs to, so material changes stay
+ *  in a pending overlay until the server confirms them (or are dropped on an explicit cancel). */
+export interface InventoryProjectionMeta { mutationId: string; phase: 'pending' | 'cancel' }
+export type InventoryProjectionApplier = (operations: InventorySyncOperation[], meta?: InventoryProjectionMeta) => void;
 
 export type InventorySyncOperation = (Omit<Extract<SyncOperation, {kind:'set'}>, 'collection'> | Omit<Extract<SyncOperation, {kind:'delete'}>, 'collection'>) & {collection: SupabaseTableName};
 type Queued = Omit<DurableSyncMutation, 'operations'> & {
@@ -107,6 +111,17 @@ const buildPayload = (row: Pick<Queued, 'operations' | 'rpcLabel'>): InventoryRp
 // A stored payload is sent verbatim (also by older app builds, which send row.restorePayload as-is),
 // so a queued correction keeps its 'correction' mode even if the app is rolled back before it is sent.
 const payloadFor = (row: Queued): InventoryRpcPayload => row.restorePayload || buildPayload(row);
+const LIFECYCLE_UNSUPPORTED = 'الخادم الحالي لا يدعم أرشفة الأصناف؛ لم يتغير شيء، والطلب باقٍ محفوظًا ويمكن إعادة إرساله بعد تحديث الخادم.';
+// R8: definitive server reasons explained to the user; the request is kept (blocked) and never silently discarded.
+const R8_BLOCK_REASONS: Record<string, string> = {
+  INVENTORY_MATERIAL_ARCHIVED: 'الصنف مؤرشف على الخادم؛ لم تُعتمد الحركة ولم يتغير شيء. الطلب محفوظ للمراجعة: أعد تفعيل الصنف بإجراء معتمد أو ألغِ الطلب.',
+  INVENTORY_CODE_RESERVED: 'كود الصنف محجوز مسبقًا (مستخدم أو مؤرشف أو محذوف)؛ لم يُحفظ شيء. اطلب كودًا جديدًا ثم أعد المحاولة.',
+  INVENTORY_CODE_CATEGORY_MISMATCH: 'كود الصنف لا يطابق بادئة ونطاق مجموعته؛ لم يُحفظ شيء. اطلب كودًا جديدًا من المجموعة الصحيحة.',
+  INVENTORY_CODE_RANGE_EXHAUSTED: 'نفد نطاق أكواد هذه المجموعة؛ يلزم قرار معتمد لتوسيع النطاق قبل إضافة أصناف جديدة.',
+  INVENTORY_LIFECYCLE_STALE: 'تغيّرت حالة الصنف على الخادم منذ تجهيز الطلب؛ لم يتغير شيء. حدّث البيانات وراجع الحالة الحالية.',
+  INVENTORY_LIFECYCLE_DENIED: 'لا تملك صلاحية أرشفة الأصناف أو إعادة تفعيلها؛ لم يتغير شيء.',
+  INVENTORY_ARCHIVE_NONZERO_STOCK: 'لا يمكن أرشفة صنف عليه رصيد فعلي؛ يلزم صرف أو تحويل معتمد أولًا.',
+};
 const CORRECTION_UNSUPPORTED = 'الخادم الحالي لا يدعم تصحيح الحركات؛ لم يُعتمد الإلغاء ولا البديل، والطلب باقٍ محفوظًا على الجهاز ويمكن إعادة إرساله بعد تحديث الخادم.';
 const once = async (row: Queued): Promise<InventoryRpcAck> => {
   assertOwner(row.userId);
@@ -126,7 +141,9 @@ const once = async (row: Queued): Promise<InventoryRpcAck> => {
       if (code) row.lastErrorCode = code; else delete row.lastErrorCode;
     }
     const unsupportedCorrection = row.status === 'blocked' && payloadFor(row).mode === 'correction' && row.lastErrorCode === 'INVENTORY_OPERATIONS_INVALID';
-    row.lastError = unsupportedCorrection ? CORRECTION_UNSUPPORTED : row.status === 'blocked'
+    const unsupportedLifecycle = row.status === 'blocked' && payloadFor(row).mode === 'lifecycle' && row.lastErrorCode === 'INVENTORY_OPERATIONS_INVALID';
+    const specific = row.status === 'blocked' && row.lastErrorCode ? R8_BLOCK_REASONS[row.lastErrorCode] : undefined;
+    row.lastError = unsupportedCorrection ? CORRECTION_UNSUPPORTED : unsupportedLifecycle ? LIFECYCLE_UNSUPPORTED : specific ? specific : row.status === 'blocked'
       ? 'رفض الخادم هذا الطلب ولم يُعتمد؛ بقي محفوظًا للمراجعة. الطلبات المستقلة عنه تُرسل تلقائيًا.'
       : 'لم يصل إقرار الخادم؛ سيُعاد الإرسال تلقائيًا عند عودة الاتصال دون تكرار الحركة.';
     await store.put(row); emit();
@@ -143,7 +160,7 @@ const LABELS_AR: Record<string, string> = {
   'create-material': 'إضافة صنف', 'update-material': 'تعديل صنف', 'delete-material-with-ledger': 'حذف صنف',
   'create-material-with-opening-stock': 'إضافة صنف برصيد افتتاحي', 'save-transaction-batch': 'تسجيل حركة',
   'delete-transaction-batch': 'حذف حركة', 'save-settings-atomic': 'حفظ الإعدادات',
-  'rename-reference-and-linked-records': 'إعادة تسمية مرجع', 'correct-transaction': 'تصحيح حركة (إلغاء وبديل)', 'import-materials-with-opening-balances': 'استيراد أصناف',
+  'rename-reference-and-linked-records': 'إعادة تسمية مرجع', 'archive-material': 'أرشفة صنف', 'reactivate-material': 'إعادة تفعيل صنف', 'correct-transaction': 'تصحيح حركة (إلغاء وبديل)', 'import-materials-with-opening-balances': 'استيراد أصناف',
 };
 export const inventoryRequestLabelAr = (row: { label?: string; rpcLabel?: string }): string =>
   LABELS_AR[row.rpcLabel || row.label || ''] || (/[\u0600-\u06FF]/.test(row.rpcLabel || row.label || '') ? (row.rpcLabel || row.label)! : 'طلب محفوظ');
@@ -156,9 +173,11 @@ const materialRefOf = (op: InventorySyncOperation): string | undefined => {
   const ref = value?.itemId ?? value?.materialId ?? before?.itemId ?? before?.materialId;
   return typeof ref === 'string' && ref ? ref : undefined;
 };
-export const inventoryDependencyKeys = (row: Pick<Queued, 'operations' | 'transport'>): string[] => {
+export const inventoryDependencyKeys = (row: Pick<Queued, 'operations' | 'transport'> & { restorePayload?: InventoryRpcPayload }): string[] => {
   if (row.transport === 'supabase-restore-v1') return ['*'];
   const keys = new Set<string>();
+  const lifecycleTarget = (row as Partial<Queued>).restorePayload?.lifecycle?.materialId;
+  if (lifecycleTarget) { keys.add(`materials/${lifecycleTarget}`); keys.add(`material-ref/${lifecycleTarget}`); }
   for (const op of row.operations) {
     keys.add(`${op.collection}/${op.docId}`);
     const ref = materialRefOf(op); if (ref) keys.add(`material-ref/${ref}`);
@@ -211,7 +230,7 @@ export async function drainInventoryOutbox(options: { includeBlocked?: boolean; 
 }
 export async function enqueueInventoryMutation(
   operations: InventorySyncOperation[], label: string, mutationId: string,
-  applyProjection: (operations: InventorySyncOperation[]) => void,
+  applyProjection: InventoryProjectionApplier,
 ): Promise<InventoryRpcAck> {
   const uid = owner();
   return exclusive(uid, async () => {
@@ -236,7 +255,7 @@ export async function enqueueInventoryMutation(
     if (!existing) await store.insert(row);
     assertOwner(uid);
     supabaseDb.rememberOperations(prepared);
-    try { applyProjection(row.operations); }
+    try { applyProjection(row.operations, { mutationId: row.id, phase: 'pending' }); }
     catch {
       row.status = 'quarantined'; row.lastError = 'الطلب محفوظ لكن تعذر تحديث عرض الجهاز؛ لا تمسح البيانات.';
       await store.put(row); emit(); throw new InventoryPendingError(row.id, true);
@@ -252,15 +271,16 @@ export async function enqueueInventoryMutation(
     throw new InventoryPendingError(row.id, false);
   });
 }
-export async function resumeInventoryProjection(applyProjection: (operations: InventorySyncOperation[]) => void): Promise<number> {
+export async function resumeInventoryProjection(applyProjection: InventoryProjectionApplier): Promise<number> {
   const uid = owner();
   return exclusive(uid, async () => {
     const rows = await listInventoryOutbox();
     for (const row of rows) {
       assertOwner(uid);
       if (row.transport === 'supabase-v1') {
-        applyProjection(row.operations);
-        supabaseDb.rememberOperations(payloadFor(row).operations!);
+        applyProjection(row.operations, { mutationId: row.id, phase: 'pending' });
+        const sent = payloadFor(row).operations;
+        if (sent) supabaseDb.rememberOperations(sent);
       }
     }
     return rows.length;
@@ -289,7 +309,7 @@ export const rejectedGroup = <R extends Pick<Queued, 'id' | 'status' | 'operatio
   }
   return group;
 };
-export async function cancelRejectedInventoryOutbox(applyProjection: (operations: InventorySyncOperation[]) => void): Promise<number> {
+export async function cancelRejectedInventoryOutbox(applyProjection: InventoryProjectionApplier): Promise<number> {
   const uid = owner();
   return exclusive(uid, async () => {
     const all = await listInventoryOutbox();
@@ -301,11 +321,35 @@ export async function cancelRejectedInventoryOutbox(applyProjection: (operations
       const inverse = [...row.operations].reverse().map(op => op.expected.kind === 'present'
         ? { kind: 'set', collection: op.collection, docId: op.docId, value: op.expected.exactLegacyPayload!, expected: { kind: 'missing' } }
         : { kind: 'delete', collection: op.collection, docId: op.docId, expected: { kind: 'missing' } });
-      applyProjection(inverse as InventorySyncOperation[]);
+      applyProjection(inverse as InventorySyncOperation[], { mutationId: row.id, phase: 'cancel' });
       supabaseDb.rememberOperations(inverse.map(op => ({ ...op, collection: op.collection as SupabaseTableName })) as Parameters<typeof supabaseDb.rememberOperations>[0]);
     }
     for (const row of rows) { assertOwner(uid); await store.delete(row.id); }
     emit(); return rows.length;
+  });
+}
+/** R8-ARC-01: queue an archive/reactivate request. Durable like any other request; sent verbatim (mode 'lifecycle'). */
+export async function enqueueInventoryLifecycle(request: InventoryLifecycleRequest, mutationId: string): Promise<InventoryRpcAck> {
+  const uid = owner();
+  return exclusive(uid, async () => {
+    const previous = await listInventoryOutbox(); assertOwner(uid);
+    if (previous.some(row => row.transport === 'supabase-restore-v1')) throw new Error('INVENTORY_RESTORE_PENDING_WORK');
+    const label = request.action === 'archive' ? 'archive-material' : 'reactivate-material';
+    const now = Math.max(Date.now(), ...previous.map(row => row.createdAt + 1));
+    const existing = await store.get(mutationId) as Queued | undefined; assertOwner(uid);
+    const row: Queued = existing || {
+      id: mutationId, userId: uid, operations: [], label, rpcLabel: label, transport: 'supabase-v1',
+      status: 'pending', attempts: 0, nextAttemptAt: now, createdAt: now, updatedAt: now,
+      restorePayload: { mode: 'lifecycle', label, lifecycle: { ...request } },
+    };
+    if (!existing) await store.insert(row);
+    assertOwner(uid); emit();
+    if (!previous.length) return once(row);
+    const result = await drainLocked(uid, { includeBlocked: false });
+    const ack = result.acks.get(row.id);
+    if (ack) return ack;
+    const current = await store.get(row.id) as Queued | undefined;
+    throw new InventoryPendingError(row.id, current?.status === 'blocked' || current?.status === 'conflict' || !!current?.waitingOn, current?.lastError);
   });
 }
 export async function enqueueInventoryRestore(backup: Record<string, unknown>, expectedState: string): Promise<InventoryRpcAck> {

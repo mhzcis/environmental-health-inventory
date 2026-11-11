@@ -46,6 +46,7 @@ import { validateInventoryDataset } from '../utils/inventoryIntegrity';
 import { getStorehouseEntities } from '../utils/warehouseDomain';
 import type { Material, InventoryTransaction } from '../types';
 import { localDateString } from '../utils/localDate';
+import { readerPermissions } from '../security/rbacPresets';
 
 
 const APP_PERMISSIONS = [
@@ -55,6 +56,7 @@ const APP_PERMISSIONS = [
   { id: 'materials_edit', name: 'الأصناف - تعديل صنف', desc: 'تغيير بيانات بطاقة الصنف وحد الأمان والمخزن' },
   { id: 'materials_delete', name: 'الأصناف - حذف صنف', desc: 'حذف الأصناف والمواد من السجل (تتطلب عدم وجود معاملات)' },
   { id: 'materials_stocktake', name: 'الأصناف - تسوية الجرد السنوي الفعلي', desc: 'فتح تسوية الجرد الفعلي. حفظ التسوية يتطلب أيضًا صلاحية تسجيل الحركات.' },
+  { id: 'materials_archive', name: 'الأصناف - أرشفة / إعادة تفعيل صنف', desc: 'أرشفة صنف (يبقى سجله وتقاريره التاريخية) أو إعادة تفعيله، بسبب مكتوب وتأكيد الخادم.' },
   { id: 'transactions_view', name: 'الحركات - عرض الحركات', desc: 'استعراض الحركات المخزنية المسجلة من معاملات التوريد والصرف' },
   { id: 'transactions_create', name: 'الحركات - تسجيل معاملة', desc: 'تسجيل توريد مواد أو صرف أذونات إمداد للمراكز والبلديات' },
   { id: 'transactions_delete', name: 'الحركات - حذف / إلغاء حركة مخزنية', desc: 'حذف حركات التوريد والصرف وإعادة رصد أرصدة المخازن' },
@@ -2038,7 +2040,8 @@ export default function Settings() {
                           } else if (val === 'أمين مستودع') {
                             setUserPermissions(['dashboard_view', 'materials_view', 'materials_create', 'materials_edit', 'materials_stocktake', 'transactions_view', 'transactions_create', 'reports_view', 'reports_export', 'reports_print']);
                           } else if (val === 'مراجع/مُشاهد') {
-                            setUserPermissions(['dashboard_view', 'materials_view', 'transactions_view', 'reports_view', 'audit_view']);
+                            // R8-RBAC-01: least-privilege reader preset; export/print are ticked explicitly if approved.
+                            setUserPermissions(readerPermissions());
                           }
                         }}
                         sx={{ fontFamily: '"Cairo", sans-serif', fontWeight: 'bold' }}

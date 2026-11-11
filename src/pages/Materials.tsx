@@ -13,6 +13,8 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import SearchIcon from '@mui/icons-material/Search';
 import EditIcon from '@mui/icons-material/Edit';
+import ArchiveIcon from '@mui/icons-material/Archive';
+import UnarchiveIcon from '@mui/icons-material/Unarchive';
 import DeleteIcon from '@mui/icons-material/Delete';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import AssessmentIcon from '@mui/icons-material/Assessment';
@@ -26,6 +28,7 @@ import { useForm, SubmitHandler } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as zod from 'zod';
 import { dataService } from '../services/dataService';
+import { isMaterialArchived } from '../utils/materialLifecycle';
 import { Material, InventoryTransaction } from '../types';
 import { buildTransactionLedger, buildMaterialWarehouseView, MaterialViewRow } from '../utils/inventoryLogic';
 import { useStorehouse } from '../context/StorehouseContext';
@@ -125,6 +128,12 @@ export default function Materials() {
   const [newSupplierName, setNewSupplierName] = useState('');
   const [saveNewSupplier, setSaveNewSupplier] = useState(false);
   const [openDeleteDialog, setOpenDeleteDialog] = useState(false);
+  // R8-ARC-01: archived materials are hidden from active work and shown only in this labelled read-only view.
+  const [showArchived, setShowArchived] = useState(false);
+  const [lifecycleTarget, setLifecycleTarget] = useState<{ item: MaterialViewRow; action: 'archive' | 'reactivate' } | null>(null);
+  const [lifecycleReason, setLifecycleReason] = useState('');
+  const [lifecyclePurpose, setLifecyclePurpose] = useState<'qa_test_data' | 'discontinued'>('discontinued');
+  const [lifecycleBusy, setLifecycleBusy] = useState(false);
   const [openBulkDeleteDialog, setOpenBulkDeleteDialog] = useState(false);
   const [materialToDelete, setMaterialToDelete] = useState<MaterialViewRow | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -148,7 +157,7 @@ export default function Materials() {
     const rows: StocktakeRow[] = [];
     const initialCounts: Record<string, string> = {};
 
-    materials.forEach((m) => {
+    materials.filter(m => !isMaterialArchived(m)).forEach((m) => {
       if (selectedStorehouse !== 'all') {
         const store = selectedStorehouse;
         const whStock = m.warehouseStocks && typeof m.warehouseStocks[store] === 'number'
@@ -325,6 +334,12 @@ export default function Materials() {
     if (watchCategory && !selectedMaterial) {
       const generated = dataService.generateItemCode(watchCategory);
       setValue('code', generated);
+      // R8-CODE-01: prefer the central suggestion (registry + archived/history codes); the server re-checks on commit.
+      let cancelled = false;
+      Promise.resolve().then(() => dataService.suggestMaterialCode(watchCategory))
+        .then(code => { if (!cancelled) setValue('code', code); })
+        .catch(() => { /* offline/older server: the local suggestion stays; the server still rejects reuse */ });
+      return () => { cancelled = true; };
     }
   }, [watchCategory, selectedMaterial, setValue]);
 
@@ -735,8 +750,21 @@ const handleOpenDeleteDialog = (item: Material) => {
       matchesStock = !isLowStockByTotal(item, totalStockIndex);
     }
 
-    return matchesSearch && matchesCategory && matchesStock && matchesStorehouse;
+    const matchesLifecycle = showArchived ? isMaterialArchived(item) : !isMaterialArchived(item);
+    return matchesSearch && matchesCategory && matchesStock && matchesStorehouse && matchesLifecycle;
   });
+
+  const submitLifecycle = async () => {
+    if (!lifecycleTarget) return;
+    setLifecycleBusy(true);
+    const result = await dataService.setMaterialLifecycle(
+      lifecycleTarget.item._originalId || lifecycleTarget.item.id, lifecycleTarget.action, lifecycleReason,
+      lifecycleTarget.action === 'archive' ? lifecyclePurpose : undefined,
+    );
+    setLifecycleBusy(false);
+    if (result.success) { setSuccessMessage(result.message); setLifecycleTarget(null); setLifecycleReason(''); loadMaterials(); }
+    else setErrorMessage(result.message);
+  };
 
 
   const handleExpandAll = () => {
@@ -941,6 +969,11 @@ const handleOpenDeleteDialog = (item: Material) => {
             <Typography variant="body2" sx={{ fontWeight: 'bold', color: '#566375', fontFamily: '"Cairo", sans-serif', textAlign: 'end', mt: 1 }}>
               الأصناف المطابقة: {filteredMaterials.filter(m => !m.isSubRow).length}
             </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 1 }}>
+              <Checkbox size="small" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} slotProps={{ input: { 'aria-label': 'عرض الأصناف المؤرشفة' } }} />
+              <Typography variant="body2" sx={{ fontFamily: '"Cairo", sans-serif' }}>عرض الأصناف المؤرشفة فقط (للاطلاع والسجل التاريخي)</Typography>
+            </Box>
+            {showArchived && <Alert severity="info" sx={{ mt: 1 }}>هذه أصناف مؤرشفة: لا تظهر في الأرصدة النشطة ولا يمكن تسجيل حركات عليها، وتبقى حركاتها وتقاريرها التاريخية محفوظة.</Alert>}
           </Grid>
         </Grid>
       </Paper>
@@ -1185,6 +1218,12 @@ const handleOpenDeleteDialog = (item: Material) => {
                         >
                           {item.name}
                         </Typography>
+                        {isMaterialArchived(item) && (
+                          <Chip label="مؤرشف" size="small" color="default" sx={{ fontSize: '10px', height: '18px', fontWeight: 'bold', fontFamily: '"Cairo", sans-serif' }} />
+                        )}
+                        {item.syncPending && (
+                          <Chip label="بانتظار تأكيد الخادم" size="small" color="warning" variant="outlined" sx={{ fontSize: '10px', height: '18px', fontWeight: 'bold', fontFamily: '"Cairo", sans-serif' }} />
+                        )}
                         {item.isSubRow && (
                           <Chip 
                             label="مفرع حسب المستودع" 
@@ -1241,14 +1280,24 @@ const handleOpenDeleteDialog = (item: Material) => {
                             <VisibilityIcon fontSize="small" />
                           </IconButton>
                         </Tooltip>
-                        {!item.isSubRow && dataService.hasPermission('materials_edit') && (
+                        {!item.isSubRow && dataService.hasPermission('materials_archive') && (
+                          <Tooltip title={isMaterialArchived(item) ? 'إعادة تفعيل الصنف' : 'أرشفة الصنف (يبقى السجل التاريخي)'}>
+                            <span>
+                              <IconButton size="small" color="secondary" disabled={!!item.syncPending}
+                                onClick={() => { setLifecycleReason(''); setLifecycleTarget({ item, action: isMaterialArchived(item) ? 'reactivate' : 'archive' }); }}>
+                                {isMaterialArchived(item) ? <UnarchiveIcon fontSize="small" /> : <ArchiveIcon fontSize="small" />}
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                        )}
+                        {!item.isSubRow && !isMaterialArchived(item) && dataService.hasPermission('materials_edit') && (
                           <Tooltip title="تعديل بيانات الصنف">
                             <IconButton size="small" color="primary" onClick={() => handleOpenEditDialog(item)}>
                               <EditIcon fontSize="small" />
                             </IconButton>
                           </Tooltip>
                         )}
-                        {!item.isSubRow && dataService.hasPermission('materials_delete') && (
+                        {!item.isSubRow && !isMaterialArchived(item) && dataService.hasPermission('materials_delete') && (
                           <Tooltip title="حذف نهائي">
                             <IconButton size="small" color="error" onClick={() => handleOpenDeleteDialog(item)}>
                               <DeleteIcon fontSize="small" />
@@ -1555,6 +1604,30 @@ const handleOpenDeleteDialog = (item: Material) => {
             </Button>
           </DialogActions>
         </form>
+      </Dialog>
+
+      {/* R8-ARC-01: archive / reactivate (server-confirmed, reason required) */}
+      <Dialog open={!!lifecycleTarget} onClose={() => !lifecycleBusy && setLifecycleTarget(null)} slotProps={{ paper: { sx: { p: 1, direction: 'rtl' } } }}>
+        <DialogTitle sx={{ fontWeight: 'bold' }}>{lifecycleTarget?.action === 'archive' ? 'أرشفة صنف' : 'إعادة تفعيل صنف'}</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mb: 2 }}>
+            {lifecycleTarget?.action === 'archive'
+              ? <>سيُخفى <strong>{lifecycleTarget?.item.name}</strong> ({lifecycleTarget?.item.code}) من الأرصدة النشطة والاختيار، ويبقى كوده محجوزًا وسجله التاريخي كاملاً. لا يُحذف أي شيء.</>
+              : <>سيعود <strong>{lifecycleTarget?.item.name}</strong> إلى الأصناف النشطة.</>}
+          </Typography>
+          {lifecycleTarget?.action === 'archive' && (
+            <TextField select fullWidth size="small" label="الغرض" value={lifecyclePurpose} sx={{ mb: 2 }}
+              onChange={(e) => setLifecyclePurpose(e.target.value as 'qa_test_data' | 'discontinued')}>
+              <MenuItem value="discontinued">صنف متوقف (يشترط رصيدًا صفريًا)</MenuItem>
+              <MenuItem value="qa_test_data">بيانات اختبار (QA)</MenuItem>
+            </TextField>
+          )}
+          <TextField fullWidth required multiline minRows={2} label="السبب" value={lifecycleReason} onChange={(e) => setLifecycleReason(e.target.value)} />
+        </DialogContent>
+        <DialogActions sx={{ p: 2, justifyContent: 'flex-start', gap: 2 }}>
+          <Button variant="contained" disabled={lifecycleBusy || !lifecycleReason.trim()} onClick={submitLifecycle}>تأكيد</Button>
+          <Button variant="outlined" disabled={lifecycleBusy} onClick={() => setLifecycleTarget(null)}>إلغاء</Button>
+        </DialogActions>
       </Dialog>
 
       {/* Delete Confirmation Dialog */}

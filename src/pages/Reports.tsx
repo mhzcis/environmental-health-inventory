@@ -2,13 +2,13 @@ import { requireStableStringPart } from '../utils/printHtml';
 import { buildTotalStockIndex, isLowStockByTotal } from '../utils/lowStock';
 import { safeErrorDetail, safeUserMessage } from '../services/safeUserMessage';
 import { exportToPDF } from '../utils/printHtml';
-import { Fragment, useState, useEffect, useMemo } from 'react';
+import { Fragment, useState, useEffect, useMemo, useRef } from 'react';
 import NotificationToast from '../components/NotificationToast';
 import { 
   Box, Typography, Paper, Grid, MenuItem, Button, Table, TableBody, 
   TableCell, TableContainer, TableHead, TableRow, TablePagination, TextField, 
   Divider, Card, Chip, IconButton, Tooltip, Alert,
-  Dialog, DialogTitle, DialogContent
+  Dialog, DialogTitle, DialogContent, Checkbox
 } from '@mui/material';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import PrintIcon from '@mui/icons-material/Print';
@@ -24,6 +24,7 @@ import DownloadIcon from '@mui/icons-material/Download';
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 import { dataService } from '../services/dataService';
+import { isMaterialArchived } from '../utils/materialLifecycle';
 import { buildMaterialWarehouseView, buildOpeningStockReportView, buildTransactionLedger } from '../utils/inventoryLogic';
 import { useStorehouse } from '../context/StorehouseContext';
 import { InventoryTransaction } from '../types';
@@ -85,6 +86,8 @@ export default function Reports() {
     return true;
   };
   const [materials, setMaterials] = useState<any[]>([]);
+  // R8-ARC-01: active reports exclude archived materials unless the user explicitly includes them (labelled).
+  const [includeArchived, setIncludeArchived] = useState(false);
   const [transactions, setTransactions] = useState<InventoryTransaction[]>([]);
   const [generatorLogs, setGeneratorLogs] = useState<any[]>([]);
   const [settings, setSettings] = useState(dataService.getSettings());
@@ -149,8 +152,12 @@ export default function Reports() {
     return dataService.subscribe(load);
   }, []);
 
+  const includeArchivedRef = useRef(includeArchived);
+  useEffect(() => { includeArchivedRef.current = includeArchived; loadData(); }, [includeArchived]);
   const loadData = () => {
-    setMaterials(dataService.hasPermission('materials_view') ? dataService.getMaterials() : []);
+    setMaterials(dataService.hasPermission('materials_view')
+      ? dataService.getMaterials().filter(m => includeArchivedRef.current || !isMaterialArchived(m)).map(m => (isMaterialArchived(m) ? { ...m, name: `${m.name} (مؤرشف)` } : m))
+      : []);
     setTransactions(dataService.hasPermission('transactions_view') ? dataService.getTransactions() : []);
     setGeneratorLogs(dataService.hasPermission('generator_log') ? dataService.getGeneratorLogs() : []);
     setSettings(dataService.getSettings());
@@ -1128,6 +1135,10 @@ export default function Reports() {
                 <MenuItem key={m.id} value={m.id}>{renderOption(`${m.name} (${m.code})`, "item")}</MenuItem>
               ))}
             </TextField>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
+              <Checkbox size="small" checked={includeArchived} onChange={(e) => { setIncludeArchived(e.target.checked); setPage(0); }} slotProps={{ input: { 'aria-label': 'تضمين الأصناف المؤرشفة' } }} />
+              <Typography variant="caption">تضمين الأصناف المؤرشفة (موسومة «مؤرشف»)</Typography>
+            </Box>
           </Grid>
 
           <Grid size={{ xs: 12, sm: 6, md: 3 }}>

@@ -18,6 +18,7 @@ import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
 import LaunchIcon from '@mui/icons-material/Launch';
 
 import { dataService } from '../services/dataService';
+import { activeMaterialsOnly } from '../utils/materialLifecycle';
 import { Material, InventoryTransaction } from '../types';
 import { buildMaterialWarehouseView, buildTransactionLedger } from '../utils/inventoryLogic';
 import { useStorehouse } from '../context/StorehouseContext';
@@ -34,7 +35,8 @@ export default function Dashboard() {
 
   useEffect(() => {
     const load = () => {
-      setMaterials(dataService.getMaterials());
+      // R8-ARC-01: archived materials are excluded from active dashboards.
+      setMaterials(activeMaterialsOnly(dataService.getMaterials()));
       setTransactions(dataService.getTransactions());
       setSettings(dataService.getSettings());
     };

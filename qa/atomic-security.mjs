@@ -3,14 +3,14 @@ import assert from 'node:assert/strict';
 import {createIsolatedDatabase,seedAccounts,asUser,ids} from './schema.mjs';
 const db=await createIsolatedDatabase();await db.exec('CREATE TABLE auth.users(id uuid primary key,email text);');for(const [name,id]of Object.entries(ids))await db.query('insert into auth.users values($1,$2)',[id,name+'@qa.invalid']);
 await db.exec(fs.readFileSync(new URL('../database/inventory_atomic.sql',import.meta.url),'utf8'));
-const cfg={id:'app_config',organizationName:'QA',storehouseEntities:[{id:'qa-a',name:'QA-A',active:true},{id:'qa-b',name:'QA-B',active:true}],storehouses:['QA-A','QA-B'],storehouseIds:['qa-a','qa-b'],units:['قطعة'],categories:[{name:'QA'}],transactionCounters:{inbound:0,outbound:0,consumed:0,opening:0,transfer:0,adjustment:0}};
+const cfg={id:'app_config',organizationName:'QA',storehouseEntities:[{id:'qa-a',name:'QA-A',active:true},{id:'qa-b',name:'QA-B',active:true}],storehouses:['QA-A','QA-B'],storehouseIds:['qa-a','qa-b'],units:['قطعة'],categories:[{name:'QA',prefix:'QA',startRange:1000,endRange:2999}],transactionCounters:{inbound:0,outbound:0,consumed:0,opening:0,transfer:0,adjustment:0}};
 const mat=(id='m1',code='QA-1001')=>({id,code,name:'QA item',category:'QA',unit:'قطعة',minimumStock:0,initialStock:0,primaryStorehouseId:'qa-a',storageLocation:'QA-A'});
 const tr=(id='t1',n='W-0001',q=10,more={})=>({id,itemId:'m1',date:'2026-11-04',transactionNumber:n,transactionType:'وارد',storehouseId:'qa-a',quantity:q,...more});
 const set=(collection,docId,value,old=null)=>({collection,docId,kind:'set',value:{...value,id:docId},expected:old?{kind:'present',data:old}:{kind:'missing'}});
 const payload=operations=>({mode:'mutation',label:'QA',operations});let seq=0;
 const commit=async(who,p,id='qa-command-'+(++seq))=>(await asUser(db,who,tx=>tx.query('select public.inventory_commit($1,$2) ack',[id,JSON.stringify(p)]))).rows[0].ack;
 const preview=async b=>(await asUser(db,ids.admin,tx=>tx.query('select public.inventory_restore_preview($1) p',[JSON.stringify(b)]))).rows[0].p;
-const reset=async()=>{await db.exec('DELETE FROM audit_logs;DELETE FROM transactions;DELETE FROM materials;DELETE FROM generator_logs;DELETE FROM settings;DELETE FROM users;');await seedAccounts(db);await db.query('insert into settings(id,data) values($1,$2)',['app_config',JSON.stringify(cfg)]);await db.query('insert into materials(id,data) values($1,$2)',['m1',JSON.stringify(mat())]);};
+const reset=async()=>{await db.exec('DELETE FROM audit_logs;DELETE FROM transactions;DELETE FROM materials;DELETE FROM generator_logs;DELETE FROM settings;DELETE FROM users;DELETE FROM inventory_private.material_code_registry;');await seedAccounts(db);await db.query('insert into settings(id,data) values($1,$2)',['app_config',JSON.stringify(cfg)]);await db.query('insert into materials(id,data) values($1,$2)',['m1',JSON.stringify(mat())]);};
 const rejects=async(fn,codes)=>{let e;try{await fn();}catch(x){e=x;}assert.ok(e,'Expected rejection');if(codes)assert.ok(codes.includes(e.code),e.code+':'+e.message);};
 const count=async table=>Number((await db.query(`select count(*) n from ${table}`)).rows[0].n);
 const results=[];async function test(name,fn){await reset();try{await fn();results.push({name,status:'PASS'});}catch(e){results.push({name,status:'FAIL',error:e.message});}}

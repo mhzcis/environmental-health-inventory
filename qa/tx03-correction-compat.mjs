@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {createIsolatedDatabase,seedAccounts,asUser,ids} from './schema.mjs';
 const CANDIDATE=fs.readFileSync(new URL('../database/inventory_atomic.sql',import.meta.url),'utf8');
 const PR8=fs.readFileSync(new URL('./fixtures/inventory_atomic.pr8-8f56193.sql',import.meta.url),'utf8');
-const cfg={id:'app_config',organizationName:'QA',storehouseEntities:[{id:'qa-a',name:'QA-A',active:true}],storehouses:['QA-A'],storehouseIds:['qa-a'],units:['قطعة'],categories:[{name:'QA'}],transactionCounters:{inbound:0,outbound:0,consumed:0,opening:0,transfer:0,adjustment:0}};
+const cfg={id:'app_config',organizationName:'QA',storehouseEntities:[{id:'qa-a',name:'QA-A',active:true}],storehouses:['QA-A'],storehouseIds:['qa-a'],units:['قطعة'],categories:[{name:'QA',prefix:'QA',startRange:1000,endRange:2999}],transactionCounters:{inbound:0,outbound:0,consumed:0,opening:0,transfer:0,adjustment:0}};
 const mat={id:'m1',code:'QA-1001',name:'QA item',category:'QA',unit:'قطعة',minimumStock:0,initialStock:0,primaryStorehouseId:'qa-a',storageLocation:'QA-A'};
 const tr=(id,n,q,more={})=>({id,itemId:'m1',itemCode:'QA-1001',date:'2026-11-09',transactionNumber:n,transactionType:'وارد',storehouseId:'qa-a',quantity:q,...more});
 const set=(collection,docId,value,old=null)=>({collection,docId,kind:'set',value:{...value,id:docId},expected:old?{kind:'present',data:old}:{kind:'missing'}});

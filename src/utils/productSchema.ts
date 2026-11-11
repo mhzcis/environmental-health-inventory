@@ -130,6 +130,14 @@ const MATERIAL_KEYS = [
   'storageLocation', 'primaryStorehouseId', 'storageLocationDetail', 'warehouseStocks',
   'warehouseStocksById', 'notes', 'createdAt', 'updatedAt', 'type', 'manufacturer',
   'productionDate', 'expiryDate', 'hazardLevel',
+  // R8: server-owned projection/lifecycle fields (accepted in backups/reads; the server ignores client-sent values).
+  'ledgerTotalStock', 'lifecycleStatus', 'lifecycleVersion', 'archivedAt', 'archivedBy', 'archivedByName',
+  'archiveReason', 'archivePurpose', 'reactivatedAt', 'reactivatedBy', 'reactivatedByName', 'reactivationReason',
+] as const;
+export const SERVER_OWNED_MATERIAL_KEYS = [
+  'currentStock', 'warehouseStocks', 'warehouseStocksById', 'ledgerTotalStock', 'lifecycleStatus', 'lifecycleVersion',
+  'archivedAt', 'archivedBy', 'archivedByName', 'archiveReason', 'archivePurpose', 'reactivatedAt', 'reactivatedBy',
+  'reactivatedByName', 'reactivationReason',
 ] as const;
 
 const TRANSACTION_KEYS = [
@@ -180,7 +188,7 @@ const AUDIT_KEYS = [
 
 export const KNOWN_PERMISSION_IDS = new Set([
   'dashboard_view', 'materials_view', 'materials_create', 'materials_edit', 'materials_delete',
-  'materials_stocktake', 'transactions_view', 'transactions_create', 'transactions_delete',
+  'materials_stocktake', 'materials_archive', 'transactions_view', 'transactions_create', 'transactions_delete',
   'reports_view', 'reports_export', 'reports_print', 'audit_view', 'generator_log',
   'settings_view', 'settings_edit', 'users_manage', 'system_reset',
 ]);
@@ -212,7 +220,12 @@ const assertMaterial = (data: Record<string, unknown>): void => {
   for (const field of ['createdAt', 'updatedAt', 'productionDate', 'expiryDate']) {
     assertOptionalString(domain, data, field, PRODUCT_LIMITS.isoDateBytes);
   }
-  for (const field of ['minimumStock', 'currentStock', 'initialStock']) assertOptionalNumber(domain, data, field);
+  for (const field of ['minimumStock', 'currentStock', 'initialStock', 'ledgerTotalStock', 'lifecycleVersion']) assertOptionalNumber(domain, data, field);
+  for (const field of ['archivedAt', 'archivedBy', 'archivedByName', 'archiveReason', 'reactivatedAt', 'reactivatedBy', 'reactivatedByName', 'reactivationReason']) {
+    assertOptionalString(domain, data, field);
+  }
+  if (own(data, 'lifecycleStatus') && data.lifecycleStatus !== 'active' && data.lifecycleStatus !== 'archived') fail(domain, 'lifecycleStatus', 'UNKNOWN_VALUE');
+  if (own(data, 'archivePurpose') && data.archivePurpose !== 'qa_test_data' && data.archivePurpose !== 'discontinued') fail(domain, 'archivePurpose', 'UNKNOWN_VALUE');
   if (own(data, 'warehouseStocks')) assertNumberMap(domain, 'warehouseStocks', data.warehouseStocks, PRODUCT_LIMITS.warehouseStockEntries);
   if (own(data, 'warehouseStocksById')) assertNumberMap(domain, 'warehouseStocksById', data.warehouseStocksById, PRODUCT_LIMITS.warehouseStockEntries);
 };

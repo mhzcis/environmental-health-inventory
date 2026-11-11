@@ -30,6 +30,7 @@ import {
   monitoringPhaseColor,
   pendingDeliveryCount,
 } from '../services/dataService';
+import { activeMaterialsOnly } from '../utils/materialLifecycle';
 import { buildMaterialWarehouseView } from '../utils/inventoryLogic';
 import { useThemeMode } from '../theme/ThemeContext';
 import { useStorehouse } from '../context/StorehouseContext';
@@ -233,7 +234,7 @@ export default function AppLayout({ children }: Props) {
   const isAuthorized = !currentRoutePermission || dataService.hasPermission(currentRoutePermission);
 
   // Calculate some quick critical warning counts using active selected storehouse
-  const rawMaterials = dataService.getMaterials();
+  const rawMaterials = activeMaterialsOnly(dataService.getMaterials());
   const materials = buildMaterialWarehouseView(rawMaterials, selectedStorehouse, activeStorehouses.map((warehouse) => warehouse.name)).filter(m => !m.isSubRow);
   const totalStockIndex = buildTotalStockIndex(rawMaterials);
   const lowStockCount = materials.filter(m => isLowStockByTotal(m, totalStockIndex)).length;

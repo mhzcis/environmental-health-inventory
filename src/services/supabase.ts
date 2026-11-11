@@ -102,18 +102,30 @@ export interface InventoryRpcOperation {
   value?: Record<string, unknown>;
   expected?: { kind: 'present' | 'missing'; data?: Record<string, unknown> };
 }
+export interface InventoryLifecycleRequest {
+  action: 'archive' | 'reactivate';
+  materialId: string;
+  expectedLifecycleVersion: number;
+  reason: string;
+  purpose?: 'qa_test_data' | 'discontinued';
+}
 export interface InventoryRpcPayload {
-  /** 'correction' (QA-20261109 TX-03): cancel + replacement with an audit link; a server without correction support rejects it atomically. */
-  mode: 'mutation' | 'audit' | 'restore' | 'correction';
+  /** 'correction' (QA-20261109 TX-03): cancel + replacement with an audit link; a server without correction support rejects it atomically.
+   *  'lifecycle' (R8-ARC-01): archive/reactivate one material; an older server rejects it atomically (INVENTORY_OPERATIONS_INVALID). */
+  mode: 'mutation' | 'audit' | 'restore' | 'correction' | 'lifecycle';
   label: string;
   operations?: InventoryRpcOperation[];
   backup?: Record<string, unknown>;
   expectedState?: string;
+  lifecycle?: InventoryLifecycleRequest;
 }
 export interface InventoryRpcAck {
   audit: Record<string, unknown>;
   replayed: boolean;
+  /** R8-DATA-01: server-confirmed material rows (ledger projection recomputed inside the same transaction). Absent on older servers. */
+  materials?: Record<string, unknown>[];
 }
+export interface InventoryNextCode { code: string; prefix: string; number: number; category: string; provisional: true }
 export interface InventoryRestorePreview {
   expectedState: string;
   diffs: Record<string, { current: number; backup: number; added: number; removed: number; changed: number }>;
@@ -197,7 +209,27 @@ export const supabaseDb = {
     if (uid !== currentUser?.uid) throw new Error('INVENTORY_SESSION_CHANGED');
     if (!data || data.audit?.id !== mutationId) throw new Error('INVENTORY_ACK_INVALID');
     if (payload.operations) this.rememberOperations(payload.operations);
+    // R8-DATA-01: the server row (with recomputed projections) is the next expected baseline.
+    if (Array.isArray(data.materials)) {
+      baselineRevision++;
+      for (const row of data.materials as Record<string, unknown>[]) {
+        if (row && typeof row.id === 'string') remoteBaselines.set(`materials/${row.id}`, structuredClone(row));
+      }
+    }
     return data as InventoryRpcAck;
+  },
+  /** R8-CODE-01: central next-code read (provisional until commit_inventory reserves it). */
+  async nextMaterialCode(category: string): Promise<InventoryNextCode> {
+    const { data, error } = await client().rpc('inventory_next_material_code', { p_category: category });
+    if (error) throw error;
+    if (!data?.code) throw new Error('INVENTORY_CODE_INVALID_RESPONSE');
+    return data as InventoryNextCode;
+  },
+  /** R8-DATA-01: read-only drift check (no write). */
+  async projectionDrift(): Promise<{ materials: number; drift: number; rows: Record<string, unknown>[] }> {
+    const { data, error } = await client().rpc('inventory_projection_drift', {});
+    if (error) throw error;
+    return data;
   },
   async previewRestore(backup: Record<string, unknown>): Promise<InventoryRestorePreview> {
     const { data, error } = await client().rpc('inventory_restore_preview', { p_backup: backup });

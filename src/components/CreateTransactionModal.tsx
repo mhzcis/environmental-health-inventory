@@ -13,6 +13,7 @@ import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as zod from 'zod';
 import { dataService } from '../services/dataService';
+import { activeMaterialsOnly } from '../utils/materialLifecycle';
 import { InventoryTransaction, Material } from '../types';
 import MaterialFormDialog from './MaterialFormDialog';
 import { localDateString } from '../utils/localDate';
@@ -127,7 +128,8 @@ export default function CreateTransactionModal({ open, onClose, onSuccess, onErr
   useEffect(() => {
     if (open) {
       setSettings(dataService.getSettings());
-      setMaterials(dataService.getMaterials());
+      // R8-ARC-01: an archived material cannot receive new movements (server enforces INVENTORY_MATERIAL_ARCHIVED too).
+      setMaterials(activeMaterialsOnly(dataService.getMaterials()));
       // Reset form but keep default date
       reset({
         itemSelection: null as any,
@@ -407,7 +409,7 @@ export default function CreateTransactionModal({ open, onClose, onSuccess, onErr
 
   const handleItemModalSuccess = (msg: string) => {
     // Refresh materials
-    setMaterials(dataService.getMaterials());
+    setMaterials(activeMaterialsOnly(dataService.getMaterials()));
     setOpenItemModal(false);
     onSuccess(msg); // Show toast without closing tx modal
   };

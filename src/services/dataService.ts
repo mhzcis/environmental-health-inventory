@@ -1,4 +1,4 @@
-import { registerInventoryAckPublisher, startInventoryOutboxAutoResume, type InventorySyncOperation, runInventoryDeviceReset, getInventoryOutboxCounts, subscribeInventoryOutbox, cancelRejectedInventoryOutbox, enqueueInventoryMutation, enqueueInventoryRestore, InventoryPendingError, listInventoryOutbox, resumeInventoryProjection, retryInventoryOutbox } from './supabaseOutbox';
+import { registerInventoryAckPublisher, startInventoryOutboxAutoResume, type InventorySyncOperation, type InventoryProjectionMeta, enqueueInventoryLifecycle, runInventoryDeviceReset, getInventoryOutboxCounts, subscribeInventoryOutbox, cancelRejectedInventoryOutbox, enqueueInventoryMutation, enqueueInventoryRestore, InventoryPendingError, listInventoryOutbox, resumeInventoryProjection, retryInventoryOutbox } from './supabaseOutbox';
 import { IndexedDbSyncQueueStore } from './syncQueueStore';
 import { composeSupabaseAppSettings } from './supabaseSettings';
 import { Material, InventoryTransaction, AuditLog, AppSettings, SystemUser, GeneratorLogEntry, GeneratorLogSimulationResult, type AuditEventContext } from '../types';
@@ -119,6 +119,7 @@ import {
 } from '../security/p10AuthorityContract';
 import { assertProtectedCloudMutationAllowed } from '../security/pol4CloudMutationGate';
 import { fingerprintDocument, shouldAcceptAuthoritativeSnapshot, stripSyncMetadata } from '../utils/syncProtocol';
+import { isMaterialArchived } from '../utils/materialLifecycle';
 import { confirmedStateForAppliedValue, confirmedStateForRemote, decideRemoteDocument } from '../utils/syncReconciliation';
 import {
   addRemoteResolutionKeys,
@@ -533,10 +534,75 @@ const assertProtectedCloudEnqueueAllowed = (): void => {
   }
 };
 
-const applyInventoryProjection = (operations: InventorySyncOperation[]): void => {
+// R8 requirement 3 (root cause): material documents are written to STORAGE_KEYS.MATERIALS only from
+// server-confirmed data (bootstrap/realtime reads or an inventory_commit acknowledgement). A queued, rejected or
+// unconfirmed request lives in this owner-scoped overlay instead; it stays visible (flagged syncPending) and is
+// dropped only by the server ACK or by an explicit cancellation of a definitively rejected request.
+const PENDING_MATERIALS_KEY = 'remix_materials_pending_v1';
+interface PendingMaterialEntry { mutationId: string; ownerUid: string; docId: string; kind: 'set' | 'delete'; value?: Record<string, unknown> }
+const readPendingMaterials = (): PendingMaterialEntry[] => {
+  try { const parsed = JSON.parse(localStorage.getItem(PENDING_MATERIALS_KEY) || '[]'); return Array.isArray(parsed) ? parsed : []; }
+  catch { return []; }
+};
+const writePendingMaterials = (rows: PendingMaterialEntry[]): void => {
+  if (rows.length) localStorage.setItem(PENDING_MATERIALS_KEY, JSON.stringify(rows));
+  else localStorage.removeItem(PENDING_MATERIALS_KEY);
+};
+const stageMaterialProjection = (op: InventorySyncOperation, meta: InventoryProjectionMeta): void => {
+  const others = readPendingMaterials().filter(row => !(row.mutationId === meta.mutationId && row.docId === op.docId));
+  if (meta.phase === 'cancel') { writePendingMaterials(readPendingMaterials().filter(row => row.mutationId !== meta.mutationId)); return; }
+  const ownerUid = getCurrentAuthUser()?.uid;
+  if (!ownerUid) throw new Error('INVENTORY_AUTH_REQUIRED');
+  writePendingMaterials([...others, { mutationId: meta.mutationId, ownerUid, docId: op.docId, kind: op.kind,
+    ...(op.kind === 'set' ? { value: { ...op.value, id: op.docId } } : {}) }]);
+};
+const overlayPendingMaterials = (items: Material[]): Material[] => {
+  const uid = getCurrentAuthUser()?.uid;
+  if (!uid) return items;
+  let next = items;
+  for (const entry of readPendingMaterials()) {
+    if (entry.ownerUid !== uid) continue;
+    const index = next.findIndex(item => item.id === entry.docId);
+    if (entry.kind === 'delete') { if (index >= 0) next = next.filter(item => item.id !== entry.docId); continue; }
+    const pending = { ...(entry.value as unknown as Material), id: entry.docId, syncPending: true } as Material;
+    next = index >= 0 ? next.map((item, i) => (i === index ? pending : item)) : [pending, ...next];
+  }
+  return next;
+};
+const confirmMaterialsFromAck = (ack: { audit: Record<string, unknown>; materials?: Record<string, unknown>[] }): void => {
+  const mutationId = String(ack.audit?.id || '');
+  const pending = readPendingMaterials();
+  const mine = pending.filter(row => row.mutationId === mutationId);
+  const projected = Array.isArray(ack.audit?.projectedMaterialIds) ? (ack.audit.projectedMaterialIds as unknown[]).map(String) : null;
+  if (!(Array.isArray(ack.materials) && projected) && mine.length === 0) return;
+  let rows = JSON.parse(localStorage.getItem(STORAGE_KEYS.MATERIALS) || '[]') as Record<string, unknown>[];
+  if (Array.isArray(ack.materials) && projected) {
+    // Server-confirmed rows (ledger projection recomputed in the same transaction) replace the local copy.
+    for (const raw of ack.materials) {
+      const row = { ...(stripSyncMetadata(raw) as Record<string, unknown>), id: String(raw.id) };
+      const index = rows.findIndex(item => item.id === row.id);
+      rows = index >= 0 ? rows.map((item, i) => (i === index ? row : item)) : [row, ...rows];
+    }
+    const deleted = (Array.isArray(ack.audit.affectedEntities) ? ack.audit.affectedEntities as unknown[] : [])
+      .map(String).filter(entity => entity.startsWith('materials/')).map(entity => entity.slice('materials/'.length))
+      .filter(id => !projected.includes(id));
+    if (deleted.length) rows = rows.filter(item => !deleted.includes(String(item.id)));
+  } else {
+    // Older server (no projection in the ACK): the confirmed request's own values are applied now, never before.
+    for (const entry of mine) {
+      rows = rows.filter(item => item.id !== entry.docId);
+      if (entry.kind === 'set' && entry.value) rows.unshift({ ...entry.value, id: entry.docId });
+    }
+  }
+  localStorage.setItem(STORAGE_KEYS.MATERIALS, JSON.stringify(rows));
+  writePendingMaterials(pending.filter(row => row.mutationId !== mutationId));
+};
+
+const applyInventoryProjection = (operations: InventorySyncOperation[], meta?: InventoryProjectionMeta): void => {
   for (const op of operations) {
     // Permissions are installed locally only after a canonical server read.
     if (op.collection === 'users') continue;
+    if (op.collection === 'materials' && meta) { stageMaterialProjection(op, meta); continue; }
     const key = ({ materials: STORAGE_KEYS.MATERIALS, transactions: STORAGE_KEYS.TRANSACTIONS,
       generator_logs: STORAGE_KEYS.GENERATOR_LOGS, users: STORAGE_KEYS.USERS, audit_logs: STORAGE_KEYS.AUDIT_LOGS,
       settings: STORAGE_KEYS.SETTINGS } as Record<string, string>)[op.collection];
@@ -553,9 +619,10 @@ const applyInventoryProjection = (operations: InventorySyncOperation[]): void =>
     }
   }
 };
-const publishInventoryAck = (ack: { audit: Record<string, unknown> }): void => {
+const publishInventoryAck = (ack: { audit: Record<string, unknown>; materials?: Record<string, unknown>[] }): void => {
   const log = normalizeAuditLog(ack.audit);
   if (!log) throw new Error('INVENTORY_ACK_INVALID');
+  confirmMaterialsFromAck(ack);
   const logs = dataService.getAuditLogs().filter(row => row.id !== log.id);
   localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify([log, ...logs]));
 };
@@ -739,7 +806,68 @@ const ensureCloudSettingsSeeded = async (
   }
 };
 
+const LIFECYCLE_ERRORS_AR: Record<string, string> = {
+  INVENTORY_ARCHIVE_NONZERO_STOCK: 'لا يمكن أرشفة مادة رصيدها في السجل غير صفري إلا كبيانات اختبار (QA).',
+  INVENTORY_LIFECYCLE_STALE: 'تغيرت حالة المادة على الخادم؛ حدّث الصفحة ثم أعد المحاولة.',
+  INVENTORY_LIFECYCLE_DENIED: 'لا تملك صلاحية أرشفة المواد.',
+  INVENTORY_LIFECYCLE_INVALID: 'طلب الأرشفة غير صالح (السبب والغرض مطلوبان).',
+  INVENTORY_OPERATIONS_INVALID: 'الخادم الحالي لا يدعم الأرشفة بعد؛ لم يتغير شيء.',
+};
+const lifecycleErrorAr = (error: unknown): string => {
+  const raw = error instanceof Error ? error.message : String(error);
+  const key = Object.keys(LIFECYCLE_ERRORS_AR).find(code => raw.includes(code));
+  return key ? LIFECYCLE_ERRORS_AR[key] : 'تعذر تنفيذ طلب الأرشفة؛ لم يتغير شيء على الخادم.';
+};
+export { isMaterialArchived };
+
 export const dataService = {
+  isMaterialArchived,
+  /** Active (non-archived) materials: the default list for selectors, dashboards and active reports. */
+  getActiveMaterials: (): Material[] => dataService.getMaterials().filter(material => !isMaterialArchived(material)),
+  getArchivedMaterials: (): Material[] => dataService.getMaterials().filter(material => isMaterialArchived(material)),
+  /**
+   * R8-ARC-01: archive/reactivate through the server only (mode 'lifecycle'). Nothing is written locally until the
+   * server ACK returns the confirmed row; a queued request stays visible in the outbox.
+   */
+  setMaterialLifecycle: async (
+    materialId: string, action: 'archive' | 'reactivate', reason: string, purpose?: 'qa_test_data' | 'discontinued',
+  ): Promise<{ success: boolean; message: string; pending?: boolean }> => {
+    if (!dataService.hasPermission('materials_archive')) return { success: false, message: LIFECYCLE_ERRORS_AR.INVENTORY_LIFECYCLE_DENIED };
+    if (!isSupabaseConfigured() || !CLOUD_WRITES_ENABLED || !getCurrentAuthUser()) {
+      return { success: false, message: 'الأرشفة تتطلب جلسة مركزية متصلة بالخادم.' };
+    }
+    const material = dataService.getMaterials().find(item => item.id === materialId);
+    if (!material) return { success: false, message: 'المادة غير موجودة.' };
+    if (material.syncPending) return { success: false, message: 'للمادة تعديل لم يؤكده الخادم بعد؛ انتظر التأكيد أولاً.' };
+    const trimmed = reason.trim();
+    if (!trimmed) return { success: false, message: 'سبب الأرشفة/إعادة التفعيل مطلوب.' };
+    if (action === 'archive' && purpose !== 'qa_test_data' && purpose !== 'discontinued') return { success: false, message: LIFECYCLE_ERRORS_AR.INVENTORY_LIFECYCLE_INVALID };
+    if (action === 'archive' && isMaterialArchived(material)) return { success: false, message: 'المادة مؤرشفة بالفعل.' };
+    if (action === 'reactivate' && !isMaterialArchived(material)) return { success: false, message: 'المادة نشطة بالفعل.' };
+    const ledgerStock = Number(material.ledgerTotalStock ?? material.currentStock ?? 0);
+    if (action === 'archive' && purpose !== 'qa_test_data' && ledgerStock !== 0) return { success: false, message: LIFECYCLE_ERRORS_AR.INVENTORY_ARCHIVE_NONZERO_STOCK };
+    try {
+      const ack = await enqueueInventoryLifecycle({
+        action, materialId, expectedLifecycleVersion: Number(material.lifecycleVersion || 0), reason: trimmed,
+        ...(action === 'archive' ? { purpose } : {}),
+      }, createAuditId('domain'));
+      publishInventoryAck(ack);
+      dataService.notify();
+      return { success: true, message: action === 'archive' ? 'تمت أرشفة المادة بتأكيد الخادم.' : 'أعيد تفعيل المادة بتأكيد الخادم.' };
+    } catch (error) {
+      dataService.notify();
+      if (error instanceof InventoryPendingError) {
+        return { success: false, pending: true, message: 'الطلب محفوظ في قائمة الانتظار ولم يُطبّق بعد؛ سيُرسل عند توفر الاتصال.' };
+      }
+      return { success: false, message: lifecycleErrorAr(error) };
+    }
+  },
+  /** R8-CODE-01: the next code is allocated centrally (registry + all materials, archived included); never reused. */
+  suggestMaterialCode: async (category: string): Promise<string> => {
+    if (!isSupabaseConfigured() || !getCurrentAuthUser()) throw new Error('INVENTORY_CODE_SERVER_REQUIRED');
+    const next = await supabaseDb.nextMaterialCode(category);
+    return next.code;
+  },
   listPendingInventoryMutations: () => listInventoryOutbox(),
   cancelRejectedInventoryMutations: async (): Promise<number> => {
     const count = await cancelRejectedInventoryOutbox(applyInventoryProjection);
@@ -1186,6 +1314,7 @@ export const dataService = {
       const reparsed = JSON.parse(migratedItemsRaw);
       if (Array.isArray(reparsed)) items = reparsed;
     }
+    items = overlayPendingMaterials(items);
     const warehouseProjectionSettings = dataService.getSettings();
     const warehouseEntities = getStorehouseEntities(warehouseProjectionSettings);
     const warehouseById = new Map(warehouseEntities.map((entry) => [entry.id, entry] as const));
@@ -2492,7 +2621,7 @@ export const dataService = {
         // QA-20261106 SES-03: do not leave the signed-out account's business data readable on a shared device.
         // Pending writes live in the IndexedDB outbox (not these keys) and are untouched.
         for (const key of [STORAGE_KEYS.MATERIALS, STORAGE_KEYS.PESTICIDES, STORAGE_KEYS.TRANSACTIONS,
-          STORAGE_KEYS.AUDIT_LOGS, STORAGE_KEYS.USERS, STORAGE_KEYS.GENERATOR_LOGS]) {
+          STORAGE_KEYS.AUDIT_LOGS, STORAGE_KEYS.USERS, STORAGE_KEYS.GENERATOR_LOGS, PENDING_MATERIALS_KEY]) {
           localStorage.removeItem(key);
         }
       } catch {
