@@ -51,7 +51,7 @@ supabase?.auth.onAuthStateChange((event, session) => {
   acceptSession(session);
 });
 // QA-20261109 R8 Auth Token HTTP 400: if a stale refresh token is rejected on startup, clear local auth storage cleanly.
-if (supabase) {
+if (supabase && supabase.auth.getSession) {
   void supabase.auth.getSession().then(({ error }) => {
     if (error) {
       const msg = String(error.message || '').toLowerCase();
