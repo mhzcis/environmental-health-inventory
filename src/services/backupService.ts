@@ -14,16 +14,12 @@ import {
 import { buildWarehouseBackupProjection } from '../utils/warehouseBackup';
 import {
   composeSettingsForBackupExport,
-  extractTypedSettingsChildren,
-  isTypedSettingsCloudInactiveOrTombstone,
   prepareSettingsForBackupImport,
-  settingsDocKind,
 } from '../utils/settingsNormalization';
 import {
   getActiveOfflineDomainUserId,
   OFFLINE_PROJECTION_OWNER_KEY,
   offlineProjectionStorage,
-  persistSessionOwnedOfflineDomainProjection,
 } from './offlineDomainStore';
 import { buildAuditLog, normalizeAuditLog } from '../utils/auditPolicy';
 import { fingerprintDocument, stripSyncMetadata } from '../utils/syncProtocol';

@@ -1,11 +1,30 @@
 import InventorySyncPanel from '../components/InventorySyncPanel';
 import { buildTotalStockIndex, isLowStockByTotal } from '../utils/lowStock';
 import React, { useRef, useState } from 'react';
-import { 
-  Box, CssBaseline, AppBar, Toolbar, Typography, Drawer, List, ListItem, 
-  ListItemButton, ListItemIcon, ListItemText, Avatar, Divider, Chip, IconButton,
-  MenuItem, Button, Popover, Dialog, DialogTitle, DialogContent, 
-  DialogContentText, DialogActions, Menu
+import {
+  Box,
+  CssBaseline,
+  AppBar,
+  Toolbar,
+  Typography,
+  Drawer,
+  List,
+  ListItem,
+  ListItemButton,
+  ListItemIcon,
+  ListItemText,
+  Avatar,
+  Divider,
+  Chip,
+  IconButton,
+  MenuItem,
+  Button,
+  Popover,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Menu,
 } from '@mui/material';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import InventoryIcon from '@mui/icons-material/Inventory';
@@ -48,7 +67,7 @@ interface Props {
 
 export default function AppLayout({ children }: Props) {
   const { mode, toggleColorMode } = useThemeMode();
-  const { selectedStorehouse, activeStorehouses, setSelectedStorehouse } = useStorehouse();
+  const { selectedStorehouse, activeStorehouses, setSelectedStorehouse, scopeFallback, confirmAllWarehousesScope } = useStorehouse();
   const navigate = useNavigate();
 
   const location = useLocation();
@@ -935,6 +954,16 @@ export default function AppLayout({ children }: Props) {
           }
           return null;
         })()}
+        {scopeFallback && (
+          // R8-WH-01: persistent, explicit notice; never a silent switch to all warehouses.
+          <Box role="alert" data-testid="warehouse-scope-fallback" sx={{ mb: 2, p: 2, borderRadius: '12px', bgcolor: '#fff7ed', border: '1px solid #fdba74', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1.5 }}>
+            <Typography variant="body2" sx={{ fontFamily: '"Cairo", sans-serif', color: '#9a3412', fontWeight: 600, flex: 1, minWidth: 240 }}>
+              المستودع المختار سابقاً «{scopeFallback.previousName}» لم يعد فعالاً، فأصبح العرض الآن لجميع المستودعات (الإجمالي).
+              اختر مستودعاً صراحة قبل إصدار تقرير خاص بمستودع، أو أكّد العمل على جميع المستودعات.
+            </Typography>
+            <Button size="small" variant="outlined" color="warning" onClick={confirmAllWarehousesScope}>متابعة على جميع المستودعات</Button>
+          </Box>
+        )}
         <Box sx={{ flexGrow: 1 }}>
           {isAuthorized ? (
             children

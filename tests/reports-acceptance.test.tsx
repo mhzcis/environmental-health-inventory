@@ -4,9 +4,9 @@ import {afterEach,beforeEach,describe,it,expect,vi} from 'vitest';
 import {cleanup,render,screen,fireEvent,waitFor} from '@testing-library/react';
 import {Blob as NodeBlob} from 'node:buffer';
 import ExcelJS from 'exceljs';
-const fake=vi.hoisted(()=>({materials:[] as any[],transactions:[] as any[],logs:[] as any[],warehouse:'all',permissions:true,denied:[] as string[],blocked:false,retry:vi.fn(),pdf:vi.fn(),save:vi.fn()}));
+const fake=vi.hoisted(()=>({fallback:null as any,materials:[] as any[],transactions:[] as any[],logs:[] as any[],warehouse:'all',permissions:true,denied:[] as string[],blocked:false,retry:vi.fn(),pdf:vi.fn(),save:vi.fn()}));
 vi.mock('../src/services/dataService',()=>({dataService:{getSettings:()=>({organizationName:'QA معزول',departmentName:'QA فحص',expiryWarningThresholdDays:30,categories:[{name:'QA-C1'},{name:'QA-C2'}],units:['قطعة'],storehouses:['QA-A','QA-B'],partners:[]}),getMaterials:()=>fake.materials,getTransactions:()=>fake.transactions,getGeneratorLogs:()=>fake.logs,subscribe:()=>()=>{},hasPermission:(p:string)=>fake.permissions&&!fake.denied.includes(p),listPendingInventoryMutations:async()=>[{id:'qa-pending',status:fake.blocked?'blocked':'pending',operations:[],transport:'supabase-v1'}],retryPendingInventoryMutations:()=>fake.retry(),getOpeningStockAttachment:()=>null,getStorehouseInitialStock:(id:string,wh:string)=>fake.materials.find(m=>m.id===id)?.initialStocks?.[wh]||0}}));
-vi.mock('../src/context/StorehouseContext',()=>({useStorehouse:()=>({selectedStorehouse:fake.warehouse,activeStorehouses:['QA-A','QA-B']})}));
+vi.mock('../src/context/StorehouseContext',()=>({useStorehouse:()=>({selectedStorehouse:fake.warehouse,activeStorehouses:['QA-A','QA-B'],scopeFallback:fake.fallback})}));
 vi.mock('../src/utils/printHtml',()=>({requireStableStringPart:(s:any)=>{if(typeof s!=='string'||!s.trim())throw new Error('invalid id');return s.trim();},exportToPDF:(...a:any[])=>fake.pdf(...a)}));
 vi.mock('file-saver',()=>({saveAs:(...a:any[])=>fake.save(...a)}));
 vi.mock('../src/components/CreateTransactionModal',()=>({default:()=>null}));
@@ -17,7 +17,7 @@ import Reports from '../src/pages/Reports';
 import Transactions from '../src/pages/Transactions';
 import {MemoryRouter} from 'react-router-dom';
 beforeEach(()=>{
- fake.warehouse='all';fake.permissions=true;fake.denied=[];fake.retry.mockReset();fake.blocked=false;fake.pdf.mockReset().mockResolvedValue(undefined);fake.save.mockReset();vi.stubGlobal('Blob',NodeBlob);
+ fake.warehouse='all';fake.fallback=null;fake.permissions=true;fake.denied=[];fake.retry.mockReset();fake.blocked=false;fake.pdf.mockReset().mockResolvedValue(undefined);fake.save.mockReset();vi.stubGlobal('Blob',NodeBlob);
  const day=(n:number)=>new Date(Date.now()+n*86400000).toISOString().slice(0,10);
  fake.materials=Array.from({length:21},(_,i)=>({id:'qa-r'+i,code:'QA-'+String(1000+i),name:'QA صنف عربي '+i,category:i<10?'QA-C1':'QA-C2',type:'مادة',unit:'قطعة',minimumStock:5,currentStock:i,initialStock:i,initialStocks:{'QA-A':i},warehouseStocks:{'QA-A':i},storageLocation:'QA-A',expiryDate:i===1?day(-1):i===2?day(10):i===3?day(90):undefined}));
  fake.transactions=[{id:'qa-t1',itemId:'qa-r1',itemCode:'QA-1001',itemName:'QA صنف عربي 1',itemCategory:'QA-C1',unit:'قطعة',transactionType:'افتتاحي',quantity:1,date:'2026-11-01',transactionNumber:'QA-O1',storehouse:'QA-A',storehouseId:'qa-a',createdAt:'2026-11-01T00:00:00Z',executedBy:'QA'}];
@@ -96,4 +96,23 @@ it.each(['QA-A','all'])('OUT-01 bulk Excel maps balances and partner to ten matc
  expect(sheet.getRow(9).getCell(8).value).toBe('الرصيد قبل');expect(sheet.getRow(9).getCell(9).value).toBe('الرصيد بعد');
  expect(sheet.getRow(10).getCell(8).value).toBe(0);expect(sheet.getRow(10).getCell(9).value).toBe(1);expect(sheet.getRow(10).getCell(10).value).toBe('QA partner');
  if(warehouse==='all'){expect(sheet.getRow(11).getCell(3).value).toBe('↳ QA-A');expect(sheet.getRow(11).getCell(8).value).toBe(0);expect(sheet.getRow(11).getCell(9).value).toBe(1);}
+});
+
+describe('R8-WH-01 no unnoticed all-warehouse report',()=>{
+ it('R8-WH-R1 export and print are refused while the selected warehouse silently fell back to all',async()=>{
+  fake.fallback={previousId:'qa-b',previousName:'QA-B',at:'2026-11-11T00:00:00Z'};render(<Reports/>);
+  fireEvent.click(screen.getByRole('button',{name:'تصدير اكسل'}));fireEvent.click(screen.getByRole('button',{name:'طباعة pdf'}));
+  expect(await screen.findAllByText(/لم يعد فعالاً/)).not.toHaveLength(0);
+  expect(fake.save).not.toHaveBeenCalled();expect(fake.pdf).not.toHaveBeenCalled();
+ });
+ it('R8-WH-R2 an all-warehouse report is labelled in the view, the Excel title and the PDF metadata',async()=>{
+  render(<Reports/>);expect(screen.getByTestId('report-scope-all')).toBeTruthy();
+  const sheet=await excel();expect(String(sheet.getRow(4).getCell(1).value)).toContain('جميع المستودعات');
+  fireEvent.click(screen.getByRole('button',{name:'طباعة pdf'}));await waitFor(()=>expect(fake.pdf).toHaveBeenCalledOnce());
+  expect(fake.pdf.mock.calls[0][0].metaFields).toContainEqual({label:'نطاق المستودعات:',value:'جميع المستودعات (الإجمالي)'});
+ });
+ it('R8-WH-R3 a selected active warehouse is printed as that warehouse',async()=>{
+  fake.warehouse='QA-B';render(<Reports/>);fireEvent.click(screen.getByRole('button',{name:'طباعة pdf'}));await waitFor(()=>expect(fake.pdf).toHaveBeenCalledOnce());
+  expect(fake.pdf.mock.calls[0][0].metaFields).toContainEqual({label:'نطاق المستودعات:',value:'QA-B'});
+ });
 });

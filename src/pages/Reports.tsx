@@ -38,7 +38,7 @@ import { downloadPreparedMessage, isDownloadAbortError } from '../utils/download
 type ReportType = 'inventory' | 'low_stock' | 'expiry_warning' | 'transactions' | 'category_summary' | 'opening_stock' | 'generator_log';
 
 export default function Reports() {
-  const { selectedStorehouse } = useStorehouse();
+  const { selectedStorehouse, scopeFallback } = useStorehouse();
   const getDisplayStorageLocation = (item: any) => {
     if (item.isSubRow) {
       return item.storageLocation || 'المخزن الرئيسي';
@@ -81,6 +81,11 @@ export default function Reports() {
   const authorizeOutput = (permission: 'reports_export' | 'reports_print') => {
     if (!canReadReport(reportType) || !dataService.hasPermission(permission)) {
       setErrorMessage('لا تمتلك صلاحية عرض بيانات هذا التقرير أو إخراجه.');
+      return false;
+    }
+    // R8-WH-01: no unnoticed all-warehouse report after the selected warehouse was disabled/removed.
+    if (scopeFallback) {
+      setErrorMessage(`المستودع المختار سابقاً «${scopeFallback.previousName}» لم يعد فعالاً. اختر مستودعاً أو أكّد «جميع المستودعات» قبل التصدير أو الطباعة.`);
       return false;
     }
     return true;
@@ -528,7 +533,7 @@ export default function Reports() {
       worksheet.addRow([]); // Blank spacer
 
       // 2. Merged Title Row
-      const titleRow = worksheet.addRow([titleHeader]);
+      const titleRow = worksheet.addRow([`${titleHeader} — ${selectedStorehouse === 'all' ? 'جميع المستودعات (الإجمالي)' : `مستودع: ${selectedStorehouse}`}`]);
       titleRow.height = 35;
       worksheet.mergeCells(4, 1, 4, headers.length);
       const titleCell = titleRow.getCell(1);
@@ -930,7 +935,9 @@ export default function Reports() {
         orientation: reportType === 'transactions' ? 'landscape' : 'portrait',
         metaFields: [
           { label: 'تصنيف التقرير وعائلته:', value: reportType === 'inventory' ? 'مسرد الجرد الفعلي العام للعهود' : reportType === 'low_stock' ? 'تنبيهات نقص المخزون الحرج' : reportType === 'expiry_warning' ? 'متابعة نفاذ الصلاحية وضمان الجودة' : reportType === 'transactions' ? 'دفتر اليومية وحركات الصرف والتوريد' : reportType === 'opening_stock' ? 'سند توثيق الأرصدة الافتتاحية للمخزون' : reportType === 'generator_log' ? 'سجل متابعة وقراءات عداد المولد' : 'مصفوفة ملخص الفئات والمستودعات' },
-          { label: 'تعداد السجلات المدرجة:', value: `${currentReportData.length} سجل حركي دفتري` }
+          { label: 'تعداد السجلات المدرجة:', value: `${currentReportData.length} سجل حركي دفتري` },
+          // R8-WH-01: the warehouse scope is always printed (an all-warehouse report is never unlabelled).
+          { label: 'نطاق المستودعات:', value: selectedStorehouse === 'all' ? 'جميع المستودعات (الإجمالي)' : selectedStorehouse }
         ],
         tables: [
           {
@@ -1617,6 +1624,7 @@ export default function Reports() {
             {categoryFilter !== 'all' && <Chip label={`الفئة: ${categoryFilter}`} size="small" variant="outlined" sx={{ fontWeight: 'bold' }} />}
             {itemIdFilter !== 'all' && <Chip label={`صنف معين`} size="small" variant="outlined" sx={{ fontWeight: 'bold' }} />}
             {selectedStorehouse !== 'all' && <Chip label={`مستودع: ${selectedStorehouse}`} size="small" variant="outlined" sx={{ fontWeight: 'bold' }} />}
+            {selectedStorehouse === 'all' && <Chip data-testid="report-scope-all" label="النطاق: جميع المستودعات (الإجمالي)" size="small" color="warning" variant="outlined" sx={{ fontWeight: 'bold' }} />}
             {transactionTypeFilter !== 'all' && <Chip label={`الحركة: ${transactionTypeFilter}`} size="small" variant="outlined" sx={{ fontWeight: 'bold' }} />}
             {(dateFrom || dateTo) && <Chip label={`تاريخ مخصص`} size="small" variant="outlined" sx={{ fontWeight: 'bold' }} />}
             {partnerFilter !== 'all' && <Chip label={`الجهة/الشريك: ${partnerFilter}`} size="small" variant="outlined" sx={{ fontWeight: 'bold' }} />}

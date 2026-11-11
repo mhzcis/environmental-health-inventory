@@ -1,0 +1,25 @@
+src/layouts/AppLayout.tsx TS6133 'handleConfirmLogoutOnly' is declared but its value is never read.
+src/layouts/AppLayout.tsx TS6133 'logoutTimer' is declared but its value is never read.
+src/services/dataService.ts TS6133 'appSyncUnsubscribe' is declared but its value is never read.
+src/services/dataService.ts TS6133 'assertMonitoringLifecycleOwnerCurrent' is declared but its value is never read.
+src/services/dataService.ts TS6133 'assertMonitoringSessionCurrent' is declared but its value is never read.
+src/services/dataService.ts TS6133 'auditLogsUnsubscribe' is declared but its value is never read.
+src/services/dataService.ts TS6133 'ensureCloudSettingsSeeded' is declared but its value is never read.
+src/services/dataService.ts TS6133 'filtered' is declared but its value is never read.
+src/services/dataService.ts TS6133 'generatorLogsUnsubscribe' is declared but its value is never read.
+src/services/dataService.ts TS6133 'handleCloudListenerError' is declared but its value is never read.
+src/services/dataService.ts TS6133 'hasRemoteResolutionRequest' is declared but its value is never read.
+src/services/dataService.ts TS6133 'materialsUnsubscribe' is declared but its value is never read.
+src/services/dataService.ts TS6133 'prepareAtomicMutationAudits' is declared but its value is never read.
+src/services/dataService.ts TS6133 'publishAtomicMutationAudits' is declared but its value is never read.
+src/services/dataService.ts TS6133 'remainingTransactions' is declared but its value is never read.
+src/services/dataService.ts TS6133 'settingsUnsubscribe' is declared but its value is never read.
+src/services/dataService.ts TS6133 'slimSettingsCloudValue' is declared but its value is never read.
+src/services/dataService.ts TS6133 'stagedAtomicAuditStorage' is declared but its value is never read.
+src/services/dataService.ts TS6133 'transactionsUnsubscribe' is declared but its value is never read.
+src/services/dataService.ts TS6133 'usersUnsubscribe' is declared but its value is never read.
+src/services/dataService.ts TS6192 All imports in import declaration are unused.
+src/services/firestoreSyncTransport.ts TS6138 Property '_auth' is declared but its value is never read.
+src/services/firestoreSyncTransport.ts TS6138 Property '_db' is declared but its value is never read.
+src/services/supabase.ts TS6133 'encode' is declared but its value is never read.
+src/services/supabase.ts TS6133 'table' is declared but its value is never read.

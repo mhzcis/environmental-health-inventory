@@ -2,7 +2,7 @@ import { registerInventoryAckPublisher, startInventoryOutboxAutoResume, type Inv
 import { IndexedDbSyncQueueStore } from './syncQueueStore';
 import { composeSupabaseAppSettings } from './supabaseSettings';
 import { Material, InventoryTransaction, AuditLog, AppSettings, SystemUser, GeneratorLogEntry, GeneratorLogSimulationResult, type AuditEventContext } from '../types';
-import { db, auth } from './firebase';
+import { auth } from './firebase';
 import {
   getCurrentAuthUser,
   isSupabaseConfigured,
@@ -14,17 +14,12 @@ import {
 import { applyBackupLocally } from './backupService';
 import { ensureCanonicalCurrentUserProfile } from './legacyUserMigration';
 import {
-  beginCrashSafeLocalRestore,
-  clearRestoreRecoveryRecord,
-  clearRestoreRecoveryQuarantineAfterControlledRebootstrap,
   finalizeCrashSafeLocalRestoreAfterAudit,
   hasAuthoritativeRestoreAuditDeliveryProof,
   hasRestoreRecoveryQuarantine,
   markRestoreRecoveryAuditCommitted,
   persistRestoreRecoveryRecord,
-  readRestoreRecoveryRecord,
   recoverInterruptedLocalRestore,
-  type RestoreRecoveryRecord,
   resolveRestoreAuditOperationId,
   resolveRestoreAuditTimestamp,
   resolveRestoreDeliveryMutationId,
@@ -50,19 +45,8 @@ import { getStorehouseByReference, getStorehouseEntities, resolveWarehouseScope 
 import { migrateWarehouseModel } from '../utils/warehouseMigration';
 import { addOrReactivateWarehouse, canonicalizeWarehouseSettings, renameWarehouseEntity, reorderWarehouseEntity, setWarehouseEntityActive } from '../utils/warehouseSettings';
 import {
-  buildSettingsCloudMutationPlan,
-  composeAppSettingsFromNormalized,
-  extractTypedSettingsChildren,
-  hasNestedLegacySettingsKeys,
-  listSettingsChildDocIdsFromRoot,
   openingAttachmentDocId,
-  openingAttachmentCloudPayload,
-  openingAttachmentTombstonePayload,
-  settingsChildSyncProjection,
-  settingsRootSyncProjection,
-  stageSettingsCloudMutationPlan,
   toSlimSettingsRoot,
-  type TypedSettingsChildren,
 } from '../utils/settingsNormalization';
 import {
   assertComposedSettingsViewModel,
@@ -78,28 +62,16 @@ import {
   type IntegrityTransaction,
 } from '../utils/inventoryIntegrity';
 import {
-  clearActiveAppSyncQueue,
   createSyncDeleteOperation,
   createSyncSetOperation,
   getAppSyncSnapshot,
   getAppSyncLifecycle,
-  getConfirmedCollectionDocumentIds,
-  getConfirmedSyncState,
-  getUnresolvedSyncDocumentKeys,
   listAppSyncIssues,
-  isAppSyncLifecycleTokenCurrent,
-  flushAppSyncMutationAndRequireRemoteCommit,
   appSyncEnqueueState,
-  queueAppSyncMutation,
-  scheduleAppSyncFlush,
   discardAppSyncIssue,
   resolveConflictUsingLocal,
   retryBlockedAppSyncIssue,
-  setConfirmedSyncState,
-  setConfirmedSyncStateForUser,
-  startAppSync,
   stopAppSync,
-  subscribeAppSync,
   type SyncOperation,
   type AppSyncIssue,
 } from './appSyncService';
@@ -117,8 +89,7 @@ import {
   getProtectedCloudEnqueueBlockReason,
   type ProtectedEnqueueBlockReason,
 } from '../security/p10AuthorityContract';
-import { assertProtectedCloudMutationAllowed } from '../security/pol4CloudMutationGate';
-import { fingerprintDocument, shouldAcceptAuthoritativeSnapshot, stripSyncMetadata } from '../utils/syncProtocol';
+import { fingerprintDocument, stripSyncMetadata } from '../utils/syncProtocol';
 import { isMaterialArchived } from '../utils/materialLifecycle';
 import { isAuthNetworkUnavailable } from './authAvailability';
 import { confirmedStateForAppliedValue, confirmedStateForRemote, decideRemoteDocument } from '../utils/syncReconciliation';
@@ -129,30 +100,14 @@ import {
 } from '../utils/syncResolutionStore';
 import {
   clearOfflineDomainProjection,
-  clearActiveOfflineMutationJournals,
-  commitActiveOfflineMutation,
-  deactivateOfflineDomainForUser,
-  deleteActiveOfflineMutationJournal,
   getActiveOfflineDomainUserId,
   IndexedDbOfflineDomainStore,
-  getActiveOfflineMutationJournalCount,
-  listValidatedActiveOfflineMutationJournals,
-  OFFLINE_DOMAIN_STORAGE_KEYS,
-  OFFLINE_LEGACY_MIGRATION_KEY,
-  OFFLINE_PROJECTION_OWNER_KEY,
   offlineProjectionStorage,
-  persistActiveOfflineDomainState,
-  persistSessionOwnedOfflineDomainProjection,
-  readActiveOfflineDomainSnapshot,
-  rollbackActiveOfflineMutationJournal,
   OfflineDomainSessionChangedError,
   OfflineDomainJournalRecoveryRequiredError,
   OfflineDomainProjectionRecoveryRequiredError,
 } from './offlineDomainStore';
-import { validateSyncMutationForDurability } from './syncCoordinator';
 import {
-  assertLogoutAuditOwnership,
-  executeFailSafeLogout,
   LogoutSingleFlight,
   type LogoutResult,
 } from './logoutCoordinator';
@@ -170,7 +125,7 @@ import {
   buildAuditLog,
   normalizeAuditLog,
 } from '../utils/auditPolicy';
-import { bindDiagnosticsSession, classifyError, recordDiagnostic } from './operationalDiagnostics';
+import { bindDiagnosticsSession } from './operationalDiagnostics';
 import { safeErrorDetail, safeResultMessage, safeUserMessage } from './safeUserMessage';
 import { clearUnattributedRuntimeAlert } from './unattributedRuntimeAlert';
 import { localDateString } from '../utils/localDate';

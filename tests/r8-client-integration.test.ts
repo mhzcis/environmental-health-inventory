@@ -23,8 +23,6 @@ import {dataService,stopCloudSync,__p10EnqueueFenceTestApi} from '../src/service
 import {supabaseDb} from '../src/services/supabase';
 import {canonicalizeWarehouseSettings} from '../src/utils/warehouseSettings';
 import {IndexedDbSyncQueueStore} from '../src/services/syncQueueStore';
-import {createBackup} from '../src/services/backupService';
-import {updateManagedFirebaseUserProfile} from '../src/services/managedUserService';
 let cfg:any,user:any;
 const k={m:'remix_materials_v1',t:'remix_transactions_v1',s:'remix_settings_v1'};
 const material=(id='qa-m1',code='QA-1001')=>({id,code,name:'QA مادة',category:'QA',unit:'قطعة',minimumStock:0,initialStock:0,primaryStorehouseId:'qa-a',storageLocation:'QA-A'});

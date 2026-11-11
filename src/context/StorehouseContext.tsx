@@ -6,6 +6,29 @@ import { getActiveStorehouses, getStorehouseByReference, resolveWarehouseScope }
 
 const LEGACY_SCOPE_KEY = 'inventory_app_storehouse_filter';
 const V2_SCOPE_KEY = 'inventory_app_storehouse_scope_v2';
+// R8-WH-01: a disabled/missing selection still resolves to 'all' (a view filter, never a permission), but the
+// fallback is no longer silent: it is recorded here until the user explicitly selects a scope again.
+const SCOPE_FALLBACK_KEY = 'inventory_app_storehouse_scope_fallback_v1';
+
+export interface WarehouseScopeFallback { previousId: string; previousName: string; at: string }
+
+const readFallback = (): WarehouseScopeFallback | null => {
+  try {
+    const parsed = JSON.parse(globalThis.localStorage?.getItem(SCOPE_FALLBACK_KEY) || 'null');
+    return parsed && typeof parsed.previousId === 'string' ? parsed as WarehouseScopeFallback : null;
+  } catch { return null; }
+};
+const writeFallback = (value: WarehouseScopeFallback | null): void => {
+  try {
+    if (value) globalThis.localStorage?.setItem(SCOPE_FALLBACK_KEY, JSON.stringify(value));
+    else globalThis.localStorage?.removeItem(SCOPE_FALLBACK_KEY);
+  } catch { /* ignore storage errors */ }
+};
+const fallbackFrom = (raw: string, settings: ReturnType<typeof dataService.getSettings>): WarehouseScopeFallback => {
+  const entity = getStorehouseByReference(settings, raw, true);
+  const legacyName = globalThis.localStorage?.getItem(LEGACY_SCOPE_KEY) || '';
+  return { previousId: entity?.id || raw, previousName: entity?.name || (legacyName && legacyName !== 'all' ? legacyName : raw), at: new Date().toISOString() };
+};
 
 type WarehouseScopeId = 'all' | string;
 
@@ -14,6 +37,10 @@ interface StorehouseContextType {
   selectedStorehouseId: WarehouseScopeId;
   activeStorehouses: Storehouse[];
   setSelectedStorehouse: (storehouse: string) => Promise<void>;
+  /** R8-WH-01: set when a previously selected warehouse was disabled/removed and the view fell back to all. */
+  scopeFallback: WarehouseScopeFallback | null;
+  /** Explicitly accept the all-warehouses scope (clears the fallback notice). */
+  confirmAllWarehousesScope: () => void;
 }
 
 const StorehouseContext = createContext<StorehouseContextType>({
@@ -21,6 +48,8 @@ const StorehouseContext = createContext<StorehouseContextType>({
   selectedStorehouseId: 'all',
   activeStorehouses: [],
   setSelectedStorehouse: async () => {},
+  scopeFallback: null,
+  confirmAllWarehousesScope: () => {},
 });
 
 const readRawScope = (): string => {
@@ -47,10 +76,16 @@ const persistResolvedScope = (id: WarehouseScopeId, name: string): void => {
 export const StorehouseProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const durableScopeRef = useRef<string | null>(null);
   const [settings, setSettings] = useState(() => dataService.getSettings());
+  const [scopeFallback, setScopeFallback] = useState<WarehouseScopeFallback | null>(() => readFallback());
   const [selectedStorehouseId, setSelectedStorehouseId] = useState<WarehouseScopeId>(() => {
     const currentSettings = dataService.getSettings();
     const raw = readRawScope();
     const resolved = resolveWarehouseScope(currentSettings, raw);
+    if (raw !== 'all' && resolved.selectedStorehouseId === 'all') {
+      const fallback = fallbackFrom(raw, currentSettings);
+      writeFallback(fallback);
+      queueMicrotask(() => setScopeFallback(fallback));
+    }
     return resolved.selectedStorehouseId;
   });
 
@@ -67,23 +102,29 @@ export const StorehouseProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     if (durableScopeRef.current === durableKey) return;
     durableScopeRef.current = durableKey;
     if (selectedStorehouseId !== 'all' && !selectedEntity) {
+      const fallback = fallbackFrom(selectedStorehouseId, settings);
+      writeFallback(fallback);
+      setScopeFallback(fallback);
       persistResolvedScope('all', 'all');
       durableScopeRef.current = 'all\u0000all';
       setSelectedStorehouseId('all');
       return;
     }
     persistResolvedScope(selectedStorehouseId, selectedStorehouse);
-  }, [selectedStorehouseId, selectedStorehouse, selectedEntity]);
+  }, [selectedStorehouseId, selectedStorehouse, selectedEntity, settings]);
 
   const setSelectedStorehouse = async (reference: string): Promise<void> => {
     const resolved = resolveWarehouseScope(settings, reference);
     persistResolvedScope(resolved.selectedStorehouseId, resolved.selectedStorehouseName);
     durableScopeRef.current = `${resolved.selectedStorehouseId}\u0000${resolved.selectedStorehouseName}`;
     setSelectedStorehouseId(resolved.selectedStorehouseId);
+    // An explicit, valid choice ends the fallback notice.
+    if (resolved.valid !== false) { writeFallback(null); setScopeFallback(null); }
   };
+  const confirmAllWarehousesScope = (): void => { writeFallback(null); setScopeFallback(null); };
 
   return (
-    <StorehouseContext.Provider value={{ selectedStorehouse, selectedStorehouseId, activeStorehouses, setSelectedStorehouse }}>
+    <StorehouseContext.Provider value={{ selectedStorehouse, selectedStorehouseId, activeStorehouses, setSelectedStorehouse, scopeFallback, confirmAllWarehousesScope }}>
       {children}
     </StorehouseContext.Provider>
   );
