@@ -11,18 +11,26 @@ import { StorehouseProvider } from './context/StorehouseContext';
 import { presentResultMessage } from './services/safeUserMessage';
 import { bindDiagnosticsSession, clearDiagnostics } from './services/operationalDiagnostics';
 import { clearUnattributedRuntimeAlert } from './services/unattributedRuntimeAlert';
-import { Box, CircularProgress } from '@mui/material';
+import { Box, Button, CircularProgress, Typography } from '@mui/material';
 import {
+  hasPersistedAuthSession,
   isSupabaseConfigured,
-   subscribeAuthState,
+  subscribeAuthState,
   supabaseAuthSignOut,
+  type SupabaseAuthUser,
 } from './services/supabase';
+import { isAuthNetworkUnavailable, isBrowserOffline, isNetworkUnavailableMessage } from './services/authAvailability';
+import { setInventoryOutboxSendGate } from './services/supabaseOutbox';
 
 export default function App() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [authReady, setAuthReady] = useState(false);
   const [authTerminating, setAuthTerminating] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  // R8-AUTH-01: the live profile check could not reach the server. The session, owned local data and the outbox are
+  // kept; nothing is shown or sent until a live revalidation succeeds.
+  const [onlineRequired, setOnlineRequired] = useState(false);
+  const [retryOnline, setRetryOnline] = useState<(() => void) | null>(null);
 
   useEffect(() => {
     if (!isSupabaseConfigured()) {
@@ -34,9 +42,35 @@ export default function App() {
     let isMounted = true;
     let authAttempt = 0;
     let unsubscribeProfileWatcher: (() => void) | null = null;
+    let lastUser: SupabaseAuthUser | null = null;
+    let waitingForNetwork = false;
+
+    const requireOnline = () => {
+      if (!isMounted) return;
+      waitingForNetwork = true;
+      setInventoryOutboxSendGate(false);
+      if (unsubscribeProfileWatcher) {
+        unsubscribeProfileWatcher();
+        unsubscribeProfileWatcher = null;
+      }
+      stopCloudSync();
+      // Deliberately NOT: sign-out, clearing the current-user marker, local business data or the outbox.
+      setLoggedIn(false);
+      setAuthError(null);
+      setOnlineRequired(true);
+      setAuthTerminating(false);
+      setAuthReady(true);
+    };
+    const retry = () => { if (isMounted && waitingForNetwork && lastUser) handleAuthUser(lastUser); };
+    const onOnline = () => retry();
+    window.addEventListener('online', onOnline);
+    setRetryOnline(() => retry);
 
     const failClosed = async (message: string) => {
       if (!isMounted) return;
+      waitingForNetwork = false;
+      setOnlineRequired(false);
+      setInventoryOutboxSendGate(false);
       clearDiagnostics();
       clearUnattributedRuntimeAlert();
       setAuthError(message);
@@ -60,12 +94,24 @@ export default function App() {
       }
     };
 
-    const unsubscribeAuth = subscribeAuthState((user) => {
+    const handleAuthUser = (user: SupabaseAuthUser | null) => {
       if (!isMounted) return;
       const attempt = ++authAttempt;
       const isCurrentAttempt = () => isMounted && authAttempt === attempt;
+      setInventoryOutboxSendGate(false);
+
+      if ((!user || !user.email) && isBrowserOffline() && hasPersistedAuthSession()) {
+        // An offline start whose access token could not be refreshed: the persisted session is kept and the SDK
+        // re-emits it after reconnect. Show the online-required state instead of a login form.
+        lastUser = null;
+        requireOnline();
+        return;
+      }
 
       if (!user || !user.email) {
+        waitingForNetwork = false;
+        setOnlineRequired(false);
+        lastUser = null;
         bindDiagnosticsSession(null);
         clearUnattributedRuntimeAlert();
         if (unsubscribeProfileWatcher) {
@@ -85,6 +131,9 @@ export default function App() {
         return;
       }
 
+      lastUser = user;
+      waitingForNetwork = false;
+      setOnlineRequired(false);
       dataService.beginFirebaseAuthSession(user.uid);
       setAuthTerminating(false);
       setAuthReady(false);
@@ -100,6 +149,10 @@ export default function App() {
 
           const canonicalGate = await ensureCanonicalCurrentUserProfile(dataService.getUsers());
           if (!isCurrentAttempt()) return;
+          if (!canonicalGate.success && canonicalGate.reason === 'unavailable') {
+            requireOnline();
+            return;
+          }
           if (!canonicalGate.success) {
             await failClosed(presentResultMessage(canonicalGate.message, 'user-management'));
             return;
@@ -107,6 +160,10 @@ export default function App() {
 
           const bootstrapRes = await dataService.bootstrapCurrentFirebaseUser();
           if (!isCurrentAttempt()) return;
+          if (!bootstrapRes.success && isNetworkUnavailableMessage(bootstrapRes.message)) {
+            requireOnline();
+            return;
+          }
           if (!bootstrapRes.success || !bootstrapRes.user) {
             await failClosed(
               bootstrapRes.message
@@ -134,6 +191,8 @@ export default function App() {
           }
 
           dataService.setCurrentUser(found.id);
+          // Live revalidation passed for this exact account: queued work may be sent again.
+          setInventoryOutboxSendGate(true);
 
           await dataService.logAudit(
             'تسجيل الدخول',
@@ -157,17 +216,23 @@ export default function App() {
           setLoggedIn(true);
           setAuthReady(true);
         } catch (error) {
+          if (isCurrentAttempt() && isAuthNetworkUnavailable(error)) {
+            requireOnline();
+            return;
+          }
           console.error('Supabase bootstrap failed', error);
           if (isCurrentAttempt()) {
             await failClosed('تعذر إكمال تهيئة الجلسة بأمان.');
           }
         }
       })();
-    });
+    };
+    const unsubscribeAuth = subscribeAuthState(handleAuthUser);
 
     return () => {
       isMounted = false;
       authAttempt += 1;
+      window.removeEventListener('online', onOnline);
       if (unsubscribeProfileWatcher) unsubscribeProfileWatcher();
       stopCloudSync();
       unsubscribeAuth();
@@ -178,6 +243,19 @@ export default function App() {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', bgcolor: '#f8fafc' }}>
         <CircularProgress size={60} thickness={4} sx={{ color: '#006da3' }} />
+      </Box>
+    );
+  }
+
+  if (onlineRequired) {
+    return (
+      <Box role="alert" data-testid="online-required" sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2, p: 3, direction: 'rtl', textAlign: 'center', bgcolor: '#f8fafc' }}>
+        <Typography variant="h6" sx={{ fontWeight: 'bold', fontFamily: '"Cairo", sans-serif' }}>يتطلب التشغيل اتصالاً بالخادم</Typography>
+        <Typography sx={{ maxWidth: 520, fontFamily: '"Cairo", sans-serif' }}>
+          تعذر التحقق المباشر من صلاحية حسابك لأن الخادم غير متاح الآن. جلستك وبيانات هذا الجهاز والطلبات المحفوظة في قائمة الانتظار باقية كما هي،
+          ولن يُرسل أي طلب أو يُعرض أي بيانات قبل نجاح التحقق. ستتم إعادة المحاولة تلقائياً عند عودة الاتصال.
+        </Typography>
+        <Button variant="contained" onClick={() => retryOnline?.()}>إعادة المحاولة الآن</Button>
       </Box>
     );
   }

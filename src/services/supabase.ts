@@ -44,7 +44,26 @@ const acceptSession = (session: Session | null) => {
   });
 };
 supabase?.auth.onAuthStateChange((_event, session) => acceptSession(session));
+// R8-AUTH-01: read the persisted session explicitly at start (works offline from storage). Guarded because some
+// SDK builds/test doubles have no getSession; a failure leaves the onAuthStateChange path unchanged.
+if (supabase && typeof supabase.auth?.getSession === 'function') {
+  void Promise.resolve()
+    .then(() => supabase.auth.getSession())
+    .then(result => { const session = result?.data?.session; if (!initialized && session) acceptSession(session); })
+    .catch(() => { /* the auth state listener remains the source of truth */ });
+}
 export const getCurrentAuthUser = (): SupabaseAuthUser | null => currentUser;
+/** R8-AUTH-01: whether this device still holds a persisted Supabase session (presence only; the token is never read). */
+export const hasPersistedAuthSession = (): boolean => {
+  try {
+    if (typeof localStorage === 'undefined') return false;
+    for (let index = 0; index < localStorage.length; index++) {
+      const name = localStorage.key(index);
+      if (name && /^sb-[^-]+(?:-[^-]+)*-auth-token$/.test(name) && localStorage.getItem(name)) return true;
+    }
+  } catch { /* storage unavailable */ }
+  return false;
+};
 export const subscribeAuthState = (listener: (user: SupabaseAuthUser | null) => void): (() => void) => {
   authListeners.add(listener);
   if (initialized || !supabase) queueMicrotask(() => { if (authListeners.has(listener)) listener(currentUser); });

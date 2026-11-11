@@ -371,13 +371,17 @@ export async function enqueueInventoryRestore(backup: Record<string, unknown>, e
 // and a bounded backoff timer. Rejected requests are never auto-resent.
 let autoTimer: ReturnType<typeof setTimeout> | undefined; let autoRunning = false; let autoBackoff = 5_000;
 let autoStarted = false;
+// R8-AUTH-01: queued work is never sent automatically until the live profile check of this session has passed.
+let sendGateOpen = true;
+export const setInventoryOutboxSendGate = (open: boolean): void => { sendGateOpen = open; };
+export const isInventoryOutboxSendGateOpen = (): boolean => sendGateOpen;
 export function startInventoryOutboxAutoResume(after?: (result: InventoryDrainResult) => void): void {
   if (autoStarted || typeof window === 'undefined') return; autoStarted = true;
   const kick = (delay = 0) => { if (autoTimer) clearTimeout(autoTimer); autoTimer = setTimeout(() => { void run(); }, delay); };
   const run = async () => {
     if (autoRunning) { kick(1_000); return; }
     const uid = getCurrentAuthUser()?.uid;
-    if (!uid || (typeof navigator !== 'undefined' && navigator.onLine === false)) return;
+    if (!uid || !sendGateOpen || (typeof navigator !== 'undefined' && navigator.onLine === false)) return;
     autoRunning = true;
     try {
       const rows = await store.listForUser(uid);

@@ -120,6 +120,7 @@ import {
 import { assertProtectedCloudMutationAllowed } from '../security/pol4CloudMutationGate';
 import { fingerprintDocument, shouldAcceptAuthoritativeSnapshot, stripSyncMetadata } from '../utils/syncProtocol';
 import { isMaterialArchived } from '../utils/materialLifecycle';
+import { isAuthNetworkUnavailable } from './authAvailability';
 import { confirmedStateForAppliedValue, confirmedStateForRemote, decideRemoteDocument } from '../utils/syncReconciliation';
 import {
   addRemoteResolutionKeys,
@@ -2407,9 +2408,9 @@ export const dataService = {
 
       clearProtectedCloudEnqueueBlock();
       return { success: true, user: cleanUser, message: 'تم استرداد ملف المستخدم بنجاح.' };
-    } catch (err: any) {
-      const msg = String(err?.message || '').toLowerCase();
-      if (msg.includes('network') || msg.includes('fetch') || msg.includes('offline')) {
+    } catch (err: unknown) {
+      // R8-AUTH-01: keep the session, local data and outbox when the server is merely unreachable.
+      if (isAuthNetworkUnavailable(err)) {
         return { success: false, message: 'NETWORK_UNAVAILABLE:تعذر الوصول إلى الخادم للتحقق من ملف المستخدم.' };
       }
       await supabaseAuthSignOut().catch(() => {});
