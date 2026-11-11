@@ -129,7 +129,7 @@ const MATERIAL_KEYS = [
   'id', 'code', 'name', 'category', 'unit', 'minimumStock', 'currentStock', 'initialStock',
   'storageLocation', 'primaryStorehouseId', 'storageLocationDetail', 'warehouseStocks',
   'warehouseStocksById', 'notes', 'archived', 'archivedAt', 'archivedReason', 'createdAt',
-  'productionDate', 'expiryDate', 'hazardLevel',
+  'updatedAt', 'type', 'manufacturer', 'productionDate', 'expiryDate', 'hazardLevel',
 ] as const;
 
 const TRANSACTION_KEYS = [
@@ -206,7 +206,7 @@ const assertMaterial = (data: Record<string, unknown>): void => {
   assertString(domain, 'id', data.id, PRODUCT_LIMITS.documentIdBytes);
   assertString(domain, 'name', data.name);
   for (const field of ['code', 'category', 'unit', 'storageLocation', 'primaryStorehouseId',
-    'storageLocationDetail', 'notes', 'type', 'manufacturer', 'hazardLevel']) {
+    'storageLocationDetail', 'notes', 'archivedReason', 'type', 'manufacturer', 'hazardLevel']) {
     assertOptionalString(domain, data, field);
   }
   assertOptionalBoolean(domain, data, 'archived');
@@ -385,7 +385,6 @@ export const assertComposedSettingsViewModel = (data: Record<string, unknown>): 
     categoryPrefixes.add(normalizedPrefix);
     categoryRanges.push({ start: entry.startRange as number, end: entry.endRange as number });
   });
- 
 
   assertStringList(domain, 'units', data.units, PRODUCT_LIMITS.units, { nonEmpty: true });
   assertStringList(domain, 'storehouses', data.storehouses, PRODUCT_LIMITS.storehouses, { nonEmpty: true });

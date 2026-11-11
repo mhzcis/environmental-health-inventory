@@ -14,7 +14,7 @@ import {
 import { buildWarehouseBackupProjection } from '../utils/warehouseBackup';
 import {
   composeSettingsForBackupExport,
-    prepareSettingsForBackupImport,
+  prepareSettingsForBackupImport,
 } from '../utils/settingsNormalization';
 import {
   getActiveOfflineDomainUserId,

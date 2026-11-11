@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react';
-export const R8_MATERIALS_SEARCH_ARIA_LABEL = 'البحث في الأصناف بالاسم أو الكود'; // flexWrap: 'wrap'
 import { buildTotalStockIndex, isLowStockByTotal } from '../utils/lowStock';
 import { Link } from 'react-router-dom';
 import { presentResultMessage, safeUserMessage } from '../services/safeUserMessage';
@@ -98,6 +97,7 @@ export default function Materials() {
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [stockStatusFilter, setStockStatusFilter] = useState('all');
+  const [showArchived, setShowArchived] = useState(false);
 
   
   // Bulk selection states
@@ -330,8 +330,12 @@ export default function Materials() {
   }, [watchCategory, selectedMaterial, setValue]);
 
   const loadMaterials = () => {
-    setMaterials(dataService.getMaterials());
+    setMaterials(dataService.getMaterials({ includeArchived: showArchived }));
   };
+
+  useEffect(() => {
+    loadMaterials();
+  }, [showArchived]);
 
   useEffect(() => {
     setSelectedMaterialIds([]);
@@ -528,6 +532,24 @@ export default function Materials() {
       setErrorMessage(safeUserMessage(err, 'generic', { allowAppText: true, fallback: 'حدث خطأ أثناء حفظ الصنف' }));
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleToggleArchiveMaterial = async (item: MaterialViewRow) => {
+    const actualId = item._originalId || item.id;
+    const nextArchived = !item.archived;
+    const res = await dataService.setMaterialArchived(
+      actualId,
+      nextArchived,
+      nextArchived ? 'أرشفة منطقية لصنف ذي سجل حركات مع حفظ الدفتر والتدقيق' : '',
+    );
+    if (res.success) {
+      setSuccessMessage(res.message);
+      loadMaterials();
+      setTimeout(() => setSuccessMessage(null), 4000);
+    } else {
+      setErrorMessage(presentResultMessage(res.message));
+      setTimeout(() => setErrorMessage(null), 5000);
     }
   };
 
@@ -885,6 +907,7 @@ const handleOpenDeleteDialog = (item: Material) => {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               slotProps={{
+                htmlInput: { 'aria-label': 'البحث في الأصناف بالاسم أو الكود' },
                 input: {
                   startAdornment: <SearchIcon sx={{ color: '#94a3b8', ml: 1 }} />,
                   style: { borderRadius: '10px' }
@@ -923,7 +946,16 @@ const handleOpenDeleteDialog = (item: Material) => {
               <MenuItem value="critical">{renderOption("مستنفذ / تحت حد الأمان")}</MenuItem>
             </TextField>
           </Grid>
-                    <Grid size={{ xs: 12, md: 3 }} sx={{ display: 'flex', gap: 1.5, alignSelf: 'center', justifyContent: 'flex-end' }}>
+                    <Grid size={{ xs: 12, md: 3 }} sx={{ display: 'flex', gap: 1, alignSelf: 'center', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+            <Button
+              variant={showArchived ? 'contained' : 'outlined'}
+              size="small"
+              data-testid="toggle-archived-materials"
+              onClick={() => setShowArchived(prev => !prev)}
+              sx={{ borderRadius: '10px', px: 1.5, fontFamily: '"Cairo", sans-serif', fontWeight: 'bold' }}
+            >
+              {showArchived ? 'إخفاء المؤرشف' : 'عرض المؤرشف'}
+            </Button>
             <Tooltip title="تفريغ كافة فلاتر البحث وإعادتها للافتراضي">
               <Button
                 variant="outlined"
@@ -931,7 +963,7 @@ const handleOpenDeleteDialog = (item: Material) => {
                 onClick={handleClearFilters}
                 disabled={!searchQuery && categoryFilter === 'all' && stockStatusFilter === 'all'}
                 startIcon={<FilterAltOffIcon sx={{ ml: 1, mr: -0.5 }} />}
-                sx={{ borderRadius: '10px', px: 2, fontFamily: '"Cairo", sans-serif', width: '100%' }}
+                sx={{ borderRadius: '10px', px: 2, fontFamily: '"Cairo", sans-serif' }}
               >
                 مسح الفلاتر
               </Button>
@@ -1186,6 +1218,14 @@ const handleOpenDeleteDialog = (item: Material) => {
                         >
                           {item.name}
                         </Typography>
+                        {item.archived && (
+                          <Chip
+                            label="مؤرشف"
+                            size="small"
+                            data-testid={`archived-badge-${item.code}`}
+                            sx={{ fontSize: '10px', height: '18px', bgcolor: '#fef3c7', color: '#92400e', fontWeight: 'bold', fontFamily: '"Cairo", sans-serif' }}
+                          />
+                        )}
                         {item.isSubRow && (
                           <Chip 
                             label="مفرع حسب المستودع" 
@@ -1244,14 +1284,28 @@ const handleOpenDeleteDialog = (item: Material) => {
                         </Tooltip>
                         {!item.isSubRow && dataService.hasPermission('materials_edit') && (
                           <Tooltip title="تعديل بيانات الصنف">
-                            <IconButton size="small" color="primary" onClick={() => handleOpenEditDialog(item)}>
+                            <IconButton size="small" aria-label={`تعديل بيانات الصنف ${item.code}`} color="primary" onClick={() => handleOpenEditDialog(item)}>
                               <EditIcon fontSize="small" />
                             </IconButton>
                           </Tooltip>
                         )}
+                        {!item.isSubRow && dataService.hasPermission('materials_edit') && (
+                          <Tooltip title={item.archived ? 'إلغاء الأرشفة وإعادة التفعيل' : 'أرشفة الصنف مع حفظ تاريخه'}>
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              color={item.archived ? 'success' : 'warning'}
+                              aria-label={item.archived ? `إلغاء أرشفة ${item.code}` : `أرشفة ${item.code}`}
+                              onClick={() => void handleToggleArchiveMaterial(item)}
+                              sx={{ minWidth: 0, px: 1, py: 0.2, fontSize: '10px', fontWeight: 'bold', fontFamily: '"Cairo", sans-serif' }}
+                            >
+                              {item.archived ? 'استعادة' : 'أرشفة'}
+                            </Button>
+                          </Tooltip>
+                        )}
                         {!item.isSubRow && dataService.hasPermission('materials_delete') && (
                           <Tooltip title="حذف نهائي">
-                            <IconButton size="small" color="error" onClick={() => handleOpenDeleteDialog(item)}>
+                            <IconButton size="small" aria-label={`حذف نهائي ${item.code}`} color="error" onClick={() => handleOpenDeleteDialog(item)}>
                               <DeleteIcon fontSize="small" />
                             </IconButton>
                           </Tooltip>
@@ -1267,6 +1321,17 @@ const handleOpenDeleteDialog = (item: Material) => {
           </TableBody>
         </Table>
         <TablePagination
+          sx={{
+            '& .MuiTablePagination-toolbar': {
+              flexWrap: 'wrap',
+              justifyContent: { xs: 'center', sm: 'flex-end' },
+              px: { xs: 1, sm: 2 },
+              gap: 0.5,
+              minHeight: 'auto',
+              py: 1,
+            },
+            '& .MuiTablePagination-spacer': { display: { xs: 'none', sm: 'block' } },
+          }}
           rowsPerPageOptions={[5, 10, 25]}
           component="div"
           count={visibleMaterials.length}
@@ -1823,6 +1888,7 @@ const handleOpenDeleteDialog = (item: Material) => {
                           onChange={(e) => handlePhysicalCountChange(row.rowKey, e.target.value)}
                           onFocus={(e) => e.target.select()}
                           slotProps={{
+                            htmlInput: { 'aria-label': `الكمية الفعلية للصنف ${row.code} في ${row.storehouse}` },
                             input: {
                               style: { borderRadius: '8px', textAlign: 'center', fontWeight: 'bold' }
                             }

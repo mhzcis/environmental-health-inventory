@@ -114,10 +114,15 @@ export default function Reports() {
   const [rowsPerPage, setRowsPerPage] = useState(15);
   const [deactivatedReportWarehouse, setDeactivatedReportWarehouse] = useState<string | null>(null);
   const [prevReportStorehouse, setPrevReportStorehouse] = useState<string>(selectedStorehouse);
+
   useEffect(() => {
     if (prevReportStorehouse && prevReportStorehouse !== 'all' && selectedStorehouse === 'all') {
-      const inactive = (settings.storehouseEntities || []).some((w) => w.name === prevReportStorehouse && w.active === false);
-      if (inactive) setDeactivatedReportWarehouse(prevReportStorehouse);
+      const inactive = (settings.storehouseEntities || []).some(
+        (w) => w.name === prevReportStorehouse && w.active === false,
+      );
+      if (inactive) {
+        setDeactivatedReportWarehouse(prevReportStorehouse);
+      }
     } else if (selectedStorehouse !== 'all') {
       setDeactivatedReportWarehouse(null);
     }
@@ -1567,10 +1572,16 @@ export default function Reports() {
 
       <NotificationToast open={!!errorMessage} message={errorMessage} severity="error" onClose={() => setErrorMessage('')} />
       {deactivatedReportWarehouse && (
-        <Alert severity="warning" data-testid="report-deactivated-warehouse-alert" onClose={() => setDeactivatedReportWarehouse(null)} sx={{ mb: 2, borderRadius: '12px', fontFamily: '"Cairo", sans-serif', fontWeight: 'bold' }}>
+        <Alert
+          severity="warning"
+          data-testid="report-deactivated-warehouse-alert"
+          onClose={() => setDeactivatedReportWarehouse(null)}
+          sx={{ mb: 2, borderRadius: '12px', fontFamily: '"Cairo", sans-serif', fontWeight: 'bold' }}
+        >
           تنبيه: المستودع الذي كان محدداً للتقرير ({deactivatedReportWarehouse}) تم تعطيله، وتم تحويل نطاق التقرير إلى «جميع المستودعات».
         </Alert>
       )}
+
       {/* Printable Report Zone */}
       <Paper id="printable-reportZone" className="printable-report-sheet" sx={{ p: { xs: 2, sm: 5 }, bgcolor: '#fff', boxShadow: 'none' }}>
         
@@ -2005,6 +2016,17 @@ export default function Reports() {
           
           {reportType !== 'category_summary' && (
             <TablePagination
+              sx={{
+                '& .MuiTablePagination-toolbar': {
+                  flexWrap: 'wrap',
+                  justifyContent: { xs: 'center', sm: 'flex-end' },
+                  px: { xs: 1, sm: 2 },
+                  gap: 0.5,
+                  minHeight: 'auto',
+                  py: 1,
+                },
+                '& .MuiTablePagination-spacer': { display: { xs: 'none', sm: 'block' } },
+              }}
               rowsPerPageOptions={[5, 15, 30, 200]}
               component="div"
               count={currentReportData.length}

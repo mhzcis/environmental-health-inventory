@@ -64,9 +64,9 @@ export default function AppLayout({ children }: Props) {
   
   const [mobileOpen, setMobileOpen] = useState(false);
   const [notifAnchorEl, setNotifAnchorEl] = useState<null | HTMLElement>(null);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [deactivatedWarehouseNotice, setDeactivatedWarehouseNotice] = useState<string | null>(null);
   const lastActiveStorehouseRef = useRef<string>(selectedStorehouse);
-  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const logoutInFlightRef = useRef(false);
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
   const [storehouseAnchorEl, setStorehouseAnchorEl] = useState<null | HTMLElement>(null);
@@ -128,7 +128,7 @@ export default function AppLayout({ children }: Props) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [navigate]);
 
-   React.useEffect(() => {
+  React.useEffect(() => {
     const prevName = lastActiveStorehouseRef.current;
     if (prevName && prevName !== 'all' && selectedStorehouse === 'all') {
       const entities = settings.storehouseEntities || [];
@@ -139,6 +139,7 @@ export default function AppLayout({ children }: Props) {
     }
     lastActiveStorehouseRef.current = selectedStorehouse;
   }, [selectedStorehouse, settings.storehouseEntities]);
+
   const performLogout = async () => {
     if (logoutInFlightRef.current) return;
     logoutInFlightRef.current = true;
@@ -169,7 +170,6 @@ export default function AppLayout({ children }: Props) {
     await performLogout();
   };
 
-  
   const handleDrawerToggle = () => {
     setMobileOpen(!mobileOpen);
   };
@@ -774,8 +774,22 @@ export default function AppLayout({ children }: Props) {
         }}
       >
         <Toolbar sx={{ mb: 1 }} /> {/* Spacing helper for fixed AppBar */}
-                {deactivatedWarehouseNotice && (
-          <Box role="status" data-testid="deactivated-warehouse-notice" sx={{ mb: 2, p: 1.5, bgcolor: '#fffbeb', border: '1px solid #fcd34d', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1.5 }}>
+        {deactivatedWarehouseNotice && (
+          <Box
+            role="status"
+            data-testid="deactivated-warehouse-notice"
+            sx={{
+              mb: 2,
+              p: 1.5,
+              bgcolor: '#fffbeb',
+              border: '1px solid #fcd34d',
+              borderRadius: '12px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 1.5,
+            }}
+          >
             <Typography variant="body2" sx={{ fontFamily: '"Cairo", sans-serif', color: '#92400e', fontWeight: 'bold' }}>
               ⚠️ {deactivatedWarehouseNotice}
             </Typography>

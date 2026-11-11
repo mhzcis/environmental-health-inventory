@@ -1,5 +1,4 @@
 import { dryRunAuditLogSync, executeAuditLogSync } from '../services/backupService';
-export const R8_OBSERVER_ROLE_LABEL = 'مشاهدة فقط (مراقب)';
 import { AuditLogSyncDryRun, AuditLogSyncResult } from '../types';
 import { useState, useEffect } from 'react';
 import { Box, Typography, Paper, Divider, Button, TextField, CircularProgress, Alert, Dialog, DialogTitle, DialogContent, DialogActions, FormControl, InputLabel, Select, MenuItem, List, ListItem, ListItemText, IconButton, InputAdornment, Card, CardContent, Avatar, Chip, Checkbox, DialogContentText, Tabs, Tab, FormControlLabel } from '@mui/material';
@@ -29,14 +28,13 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import * as XLSX from 'xlsx';
 import { dataService } from '../services/dataService';
 import { presentResultMessage, safeUserMessage } from '../services/safeUserMessage';
-import { createBackup, validateBa, migrateValidatedBackupToFirestore, testFirestoreRbacReads, compareLocalAndCloudData, P7_CLOUD_MIGRATION_EXECUTION_ENABLED, isSystemAdminRole } from '../services/backupService';
+import { createBackup, validateBackup, migrateValidatedBackupToFirestore, testFirestoreRbacReads, compareLocalAndCloudData, P7_CLOUD_MIGRATION_EXECUTION_ENABLED, isSystemAdminRole } from '../services/backupService';
 import NotificationToast from '../components/NotificationToast';
 import { downloadPreparedMessage } from '../utils/downloadFeedback';
 
 import { AppSettings, CategoryConfig, SystemUser, MigrationLog, RbacTestReport, DataComparisonReport } from '../types';
 import { auth, isFirebaseAvailable } from '../services/firebase';
 import { supabaseAuthVerifyPassword } from '../services/supabase';
-import { useLocation } from 'react-router-dom';
 import { renderOption } from '../utils/emoji';
 import { PRODUCT_LIMITS, productLimitMessage } from '../utils/productSchema';
 import { getStorehouseByReference } from '../utils/warehouseDomain';
@@ -493,6 +491,11 @@ export default function Settings() {
       setErrorMsg('يجب إبقاء تصنيف واحد على الأقل بالنظام كقيمة مرجعية افتراضية لبطاقات المواد والمبيدات.');
       return;
     }
+    const inUse = dataService.getMaterials({ includeArchived: true }).some(m => m.category === name);
+    if (inUse) {
+      setErrorMsg(`لا يمكن حذف التصنيف "${name}" لوجود أصناف مسجلة مرتبطة به. انقل الأصناف أو أرشفها أولاً.`);
+      return;
+    }
     const updatedCategories = settings.categories.filter(c => c.name !== name);
     const updated = { ...settings, categories: updatedCategories };
     
@@ -540,6 +543,11 @@ export default function Settings() {
     }
     if (settings.units.length <= 1) {
       setErrorMsg('يجب الإبقاء على وحدة قياس واحدة على الأقل بالدائرة للمحاسبة.');
+      return;
+    }
+    const unitInUse = dataService.getMaterials({ includeArchived: true }).some(m => m.unit === unit);
+    if (unitInUse) {
+      setErrorMsg(`لا يمكن حذف وحدة القياس "${unit}" لوجود أصناف مسجلة مرتبطة بها.`);
       return;
     }
     const updatedUnits = settings.units.filter(u => u !== unit);
@@ -1500,6 +1508,7 @@ export default function Settings() {
                   fullWidth
                   size="small"
                   placeholder="مثال: مخزن خان يونس المركزي..."
+                  slotProps={{ htmlInput: { 'aria-label': 'اسم المستودع الجديد' } }}
                   value={newStorehouse}
                   onChange={(e) => setNewStorehouse(e.target.value)}
                 />
@@ -1561,6 +1570,7 @@ export default function Settings() {
                   fullWidth
                   size="small"
                   placeholder="أضف وحدة قياس: كجم، كرتونة، برميل..."
+                  slotProps={{ htmlInput: { 'aria-label': 'اسم وحدة القياس الجديدة' } }}
                   value={newUnit}
                   onChange={(e) => setNewUnit(e.target.value)}
                 />
@@ -1640,6 +1650,7 @@ export default function Settings() {
           <Box sx={{ mb: 4, display: 'flex', gap: 2, flexWrap: 'wrap', direction: 'rtl' }}>
             <TextField
               placeholder="ابحث باسم الشريك أو رقم الهاتف..."
+              slotProps={{ htmlInput: { 'aria-label': 'البحث باسم الشريك أو رقم الهاتف' } }}
               variant="outlined"
               size="small"
               value={partnerSearchQuery}
@@ -2036,7 +2047,7 @@ export default function Settings() {
                             setUserPermissions(APP_PERMISSIONS.map(p => p.id));
                           } else if (val === 'أمين مستودع') {
                             setUserPermissions(['dashboard_view', 'materials_view', 'materials_create', 'materials_edit', 'materials_stocktake', 'transactions_view', 'transactions_create', 'reports_view', 'reports_export', 'reports_print']);
-                          } else if (val === 'مراجع/مُشاهد') {
+                          } else if (val === 'مراجع/مُشاهد' || val === 'مشاهدة فقط') {
                             setUserPermissions(['dashboard_view', 'materials_view', 'transactions_view', 'reports_view', 'audit_view']);
                           }
                         }}
@@ -2045,6 +2056,7 @@ export default function Settings() {
                         <MenuItem value="مدير نظام">{renderOption("مدير نظام")}</MenuItem>
                         <MenuItem value="أمين مستودع">{renderOption("أمين مستودع")}</MenuItem>
                         <MenuItem value="مراجع/مُشاهد">{renderOption("مراجع/مُشاهد")}</MenuItem>
+                        <MenuItem value="مشاهدة فقط">{renderOption("مشاهدة فقط (مراقب)")}</MenuItem>
                       </Select>
                     </FormControl>
                   </Grid>

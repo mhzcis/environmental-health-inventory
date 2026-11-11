@@ -1,6 +1,4 @@
 import { registerInventoryAckPublisher, startInventoryOutboxAutoResume, type InventorySyncOperation, runInventoryDeviceReset, getInventoryOutboxCounts, subscribeInventoryOutbox, cancelRejectedInventoryOutbox, enqueueInventoryMutation, enqueueInventoryRestore, InventoryPendingError, listInventoryOutbox, resumeInventoryProjection, retryInventoryOutbox } from './supabaseOutbox';
-// QA-20261109 R8: status: 'offline-cached' & reversible archive runtime support
-export const R8_OFFLINE_CACHED_STATUS = { status: 'offline-cached' as const };
 import { IndexedDbSyncQueueStore } from './syncQueueStore';
 import { composeSupabaseAppSettings } from './supabaseSettings';
 import { Material, InventoryTransaction, AuditLog, AppSettings, SystemUser, GeneratorLogEntry, GeneratorLogSimulationResult, type AuditEventContext } from '../types';
@@ -535,7 +533,31 @@ const assertProtectedCloudEnqueueAllowed = (): void => {
   }
 };
 
+const syncLocalMaterialCachedBalances = (): void => {
+  try {
+    const rawMats = localStorage.getItem(STORAGE_KEYS.MATERIALS);
+    if (!rawMats) return;
+    const mats = JSON.parse(rawMats) as Material[];
+    if (!Array.isArray(mats) || mats.length === 0) return;
+    const computed = dataService.getMaterials({ includeArchived: true });
+    const byId = new Map(computed.map(m => [m.id, m] as const));
+    const synced = mats.map(m => {
+      const live = byId.get(m.id);
+      if (!live) return m;
+      return {
+        ...m,
+        currentStock: live.currentStock,
+        warehouseStocks: live.warehouseStocks,
+      };
+    });
+    localStorage.setItem(STORAGE_KEYS.MATERIALS, JSON.stringify(synced));
+  } catch {
+    // Ignore projection sync errors during bootstrap
+  }
+};
+
 const applyInventoryProjection = (operations: InventorySyncOperation[]): void => {
+  let touchedInventory = false;
   for (const op of operations) {
     // Permissions are installed locally only after a canonical server read.
     if (op.collection === 'users') continue;
@@ -547,13 +569,16 @@ const applyInventoryProjection = (operations: InventorySyncOperation[]): void =>
       if (op.kind !== 'set' || op.docId !== 'app_config') throw new Error('INVENTORY_SETTINGS_INVALID');
       const { id: _documentId, ...settings } = op.value;
       localStorage.setItem(key, JSON.stringify(settings));
+      touchedInventory = true;
     } else {
       const rows = JSON.parse(localStorage.getItem(key) || '[]') as Record<string, unknown>[];
       const next = rows.filter(row => row.id !== op.docId);
       if (op.kind === 'set') next.unshift({ ...op.value, id: op.docId });
       localStorage.setItem(key, JSON.stringify(next));
+      if (op.collection === 'materials' || op.collection === 'transactions') touchedInventory = true;
     }
   }
+  if (touchedInventory) syncLocalMaterialCachedBalances();
 };
 const publishInventoryAck = (ack: { audit: Record<string, unknown> }): void => {
   const log = normalizeAuditLog(ack.audit);
@@ -998,6 +1023,17 @@ export const dataService = {
     } catch (error) {
       throw new Error(productLimitMessage(error));
     }
+    const existingMaterials = dataService.getMaterials({ includeArchived: true });
+    const nextCategoryNames = new Set((settingsToSave.categories || []).map(c => c.name));
+    const orphanedMaterialByCategory = existingMaterials.find(m => m.category && !nextCategoryNames.has(m.category));
+    if (orphanedMaterialByCategory) {
+      throw new Error(`لا يمكن حذف التصنيف "${orphanedMaterialByCategory.category}" لوجود أصناف مسجلة مرتبطة به (${orphanedMaterialByCategory.code}).`);
+    }
+    const nextUnits = new Set(settingsToSave.units || []);
+    const orphanedMaterialByUnit = existingMaterials.find(m => m.unit && !nextUnits.has(m.unit));
+    if (orphanedMaterialByUnit) {
+      throw new Error(`لا يمكن حذف وحدة القياس "${orphanedMaterialByUnit.unit}" لوجود أصناف مسجلة مرتبطة بها (${orphanedMaterialByUnit.code}).`);
+    }
 
 
     try {
@@ -1130,7 +1166,7 @@ export const dataService = {
   },
 
   // MATERIALS
-  getMaterials: (): Material[] => {
+  getMaterials: (options?: { includeArchived?: boolean }): Material[] => {
     let data = localStorage.getItem(STORAGE_KEYS.MATERIALS);
     let items: Material[] = [];
     if (!data) {
@@ -1228,8 +1264,71 @@ export const dataService = {
           currentStock += stock;
         }
       }
-      return { ...item, primaryStorehouseId: defaultStorehouseId, currentStock, warehouseStocks, warehouseStocksById };
-    });
+      // QA-20261109 R8 OPS-QA: mark the pre-production acceptance test record PES-1001 (mat-1793795662160)
+      // as logically archived if not explicitly set, while keeping its 7 ledger transactions and audit trail intact.
+      const isLegacyQaItem = item.id === 'mat-1793795662160' && item.code === 'PES-1001' && String(item.name || '').includes('QA_ACCEPTANCE_20261104');
+      const archived = item.archived !== undefined ? Boolean(item.archived) : isLegacyQaItem;
+      return {
+        ...item,
+        ...(archived ? { archived: true } : {}),
+        primaryStorehouseId: defaultStorehouseId,
+        currentStock,
+        warehouseStocks,
+        warehouseStocksById,
+      };
+    }).filter((item) => options?.includeArchived ? true : !item.archived);
+  },
+
+  setMaterialArchived: async (id: string, archived: boolean, reason = 'أرشفة صنف تجريبي/تاريخي مع حفظ السجل الدفتري'): Promise<{ success: boolean; message: string }> => {
+    if (!dataService.hasPermission('materials_edit')) {
+      return { success: false, message: 'PERMISSION_DENIED: materials_edit' };
+    }
+    const allMaterials = dataService.getMaterials({ includeArchived: true });
+    const target = allMaterials.find((m) => m.id === id);
+    if (!target) return { success: false, message: 'المادة غير موجودة.' };
+    const previousRaw = localStorage.getItem(STORAGE_KEYS.MATERIALS);
+    const rawList: Material[] = previousRaw ? JSON.parse(previousRaw) : allMaterials;
+    const rawOriginal = rawList.find((m) => m.id === id) || target;
+    const now = new Date().toISOString();
+    const updatedMaterial: Material = {
+      ...target,
+      archived,
+      ...(archived
+        ? { archivedAt: now, archivedReason: reason.trim().slice(0, 300) }
+        : { archived: false }),
+      updatedAt: now,
+    };
+    if (!archived) {
+      delete updatedMaterial.archivedAt;
+      delete updatedMaterial.archivedReason;
+    }
+    delete (updatedMaterial as unknown as Record<string, unknown>).warehouseStocksById;
+    try {
+      await queueCloudMutation([
+        createSyncSetOperation('materials', id, updatedMaterial as unknown as Record<string, unknown>, rawOriginal as unknown as Record<string, unknown>),
+      ], 'update-material');
+    } catch (error) {
+      if (error instanceof InventoryPendingError) return { success: false, message: error.message };
+      if (!shouldRestoreLocalProjection(error)) throw error;
+      if (previousRaw === null) localStorage.removeItem(STORAGE_KEYS.MATERIALS);
+      else localStorage.setItem(STORAGE_KEYS.MATERIALS, previousRaw);
+      return { success: false, message: safeResultMessage(error, 'generic') };
+    }
+    await dataService.logAudit(
+      archived ? 'أرشفة صنف مخزني' : 'إلغاء أرشفة صنف مخزني',
+      archived
+        ? `تمت أرشفة الصنف ${target.name} (${target.code}) مع الاحتفاظ بكامل حركاته وسجلات التدقيق.`
+        : `تمت استعادة الصنف المؤرشف ${target.name} (${target.code}) إلى قائمة الأصناف النشطة.`,
+      'مادة',
+    );
+    dataService.recordLocalWrite();
+    dataService.notify();
+    return {
+      success: true,
+      message: archived
+        ? `تمت أرشفة الصنف (${target.code}) بنجاح مع حفظ كامل تاريخه وحركاته.`
+        : `تمت استعادة الصنف (${target.code}) إلى القائمة النشطة بنجاح.`,
+    };
   },
 
   saveMaterialWithOpeningStock: async (
@@ -1239,9 +1338,9 @@ export const dataService = {
     const previousMaterialsRaw = localStorage.getItem(STORAGE_KEYS.MATERIALS);
     const previousTransactionsRaw = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
     const previousSettingsRaw = localStorage.getItem(STORAGE_KEYS.SETTINGS);
-    const materials = dataService.getMaterials();
+    const materials = dataService.getMaterials({ includeArchived: true });
     if (materials.some(existing => existing.id === material.id)) throw new Error('MATERIAL_ID_COLLISION');
-    if (materials.some(existing => existing.code.toLowerCase() === material.code.toLowerCase())) {
+    if (materials.some(existing => existing.code.trim().toLowerCase() === material.code.trim().toLowerCase())) {
       throw new Error('UNIQUE_CODE_COLLISION');
     }
 
@@ -1289,9 +1388,21 @@ export const dataService = {
     } while (existingNumbers.has(transactionNumber));
     settings.transactionCounters = counters;
 
+    const catRule = settings.categories.find(c => c.name === material.category);
+    if (!catRule) throw new Error('التصنيف المحدد غير معرف في إعدادات النظام.');
+    if (catRule.prefix && catRule.startRange !== undefined && catRule.endRange !== undefined) {
+      const codeMatch = material.code.trim().match(/^([A-Za-z0-9]+)-(\d+)$/);
+      const codeNum = codeMatch ? Number(codeMatch[2]) : NaN;
+      if (!codeMatch || codeMatch[1].toUpperCase() !== catRule.prefix.trim().toUpperCase() || !Number.isInteger(codeNum) || codeNum < catRule.startRange || codeNum > catRule.endRange) {
+        throw new Error(`كود الصنف (${material.code}) يجب أن يتبع بادئة ومدى التصنيف (${catRule.prefix}-${catRule.startRange} إلى ${catRule.prefix}-${catRule.endRange}).`);
+      }
+    }
     const now = new Date().toISOString();
     const preparedMaterial: Material = {
       ...material,
+      code: material.code.trim().toUpperCase(),
+      currentStock: quantity,
+      warehouseStocks: { [targetWarehouse.name]: quantity },
       primaryStorehouseId: targetWarehouse.id,
       storageLocation: targetWarehouse.name,
     };
@@ -1363,7 +1474,7 @@ export const dataService = {
     if (input.length + openings.length + 1 > 450) throw new Error('الدفعة أكبر من 450 سجلًا مرتبطًا؛ قسّم الملف قبل الاستيراد.');
     const settings = dataService.getSettings();
     const previousSettings = structuredClone(settings);
-    const existing = dataService.getMaterials();
+    const existing = dataService.getMaterials({ includeArchived: true });
     const existingById = new Map(existing.map(m => [m.id, m]));
     const ids = new Set<string>(); const codes = new Set<string>();
     const prepared = input.map(raw => {
@@ -1409,7 +1520,7 @@ export const dataService = {
 
   saveMaterial: async (material: Material): Promise<void> => {
     const previousRaw = localStorage.getItem(STORAGE_KEYS.MATERIALS);
-    const materials = dataService.getMaterials();
+    const materials = dataService.getMaterials({ includeArchived: true });
     const index = materials.findIndex((m) => m.id === material.id);
     const isNew = index === -1;
     const previousMaterial = isNew ? undefined : { ...materials[index] };
@@ -1421,8 +1532,18 @@ export const dataService = {
       : undefined;
     const targetWarehouse = isNew && scopedWarehouse ? scopedWarehouse : requestedWarehouse;
     if (!targetWarehouse) throw new Error('يجب تحديد مستودع فعال وصالح للصنف.');
+    const catRule = warehouseWriteSettings.categories.find(c => c.name === material.category);
+    if (!catRule) throw new Error('التصنيف المحدد غير معرف في إعدادات النظام.');
+    if (catRule.prefix && catRule.startRange !== undefined && catRule.endRange !== undefined) {
+      const codeMatch = material.code.trim().match(/^([A-Za-z0-9]+)-(\d+)$/);
+      const codeNum = codeMatch ? Number(codeMatch[2]) : NaN;
+      if (!codeMatch || codeMatch[1].toUpperCase() !== catRule.prefix.trim().toUpperCase() || !Number.isInteger(codeNum) || codeNum < catRule.startRange || codeNum > catRule.endRange) {
+        throw new Error(`كود الصنف (${material.code}) يجب أن يتبع بادئة ومدى التصنيف (${catRule.prefix}-${catRule.startRange} إلى ${catRule.prefix}-${catRule.endRange}).`);
+      }
+    }
     material = {
       ...material,
+      code: material.code.trim().toUpperCase(),
       primaryStorehouseId: targetWarehouse.id,
       storageLocation: targetWarehouse.name,
     };
@@ -1475,14 +1596,7 @@ export const dataService = {
     const previousMaterialsRaw = localStorage.getItem(STORAGE_KEYS.MATERIALS);
     const previousTransactionsRaw = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
 
-    // If forcing and has transactions, delete them
-    if (hasTransactions && force) {
-      const remainingTransactions = transactions.filter((t) => t.itemId !== id);
-
-
-    }
-
-    const filtered = materials.filter((m) => m.id !== id);
+    // Deletion is applied atomically through queueCloudMutation below.
 
 
     try {
@@ -1519,7 +1633,7 @@ export const dataService = {
     const startRange = catConfig ? Number(catConfig.startRange) : 1000;
     const endRange = catConfig ? Number(catConfig.endRange) : 9999;
 
-    const items = dataService.getMaterials();
+    const items = dataService.getMaterials({ includeArchived: true });
     const codes = items
       .map((item) => {
         const regex = new RegExp(`^${prefix}-?(\\d+)$`, 'i');
@@ -1612,7 +1726,7 @@ export const dataService = {
     const settings = dataService.getSettings();
     const previousSettings = JSON.parse(JSON.stringify(settings)) as AppSettings;
     const warehouseEntities = getStorehouseEntities(settings);
-    const materials = dataService.getMaterials();
+    const materials = dataService.getMaterials({ includeArchived: true });
     const materialMap = new Map(materials.map((material) => [material.id, material] as const));
     const existingById = new Map(existing.map((tx) => [tx.id, tx] as const));
     const requestedIds = new Set<string>();
@@ -1988,7 +2102,7 @@ export const dataService = {
       updatedAt: now,
     };
     const next = [...transactions.filter((tx) => tx.id !== original.id), replacement];
-    const integrity = validateInventoryDataset(next, { materials: dataService.getMaterials(), storehouses: getStorehouseEntities(settings) });
+    const integrity = validateInventoryDataset(next, { materials: dataService.getMaterials({ includeArchived: true }), storehouses: getStorehouseEntities(settings) });
     const legacyTransferIds = new Set(next.filter((tx) => tx.transactionType === 'تحويل' && !tx.operationId && !tx.pairedTransactionId).map((tx) => tx.id));
     const blocking = integrity.errors.filter((error) => !(error.code === 'TRANSFER_OPERATION_REQUIRED' && !!error.transactionId && legacyTransferIds.has(error.transactionId)));
     if (blocking.length) {
@@ -2030,7 +2144,7 @@ export const dataService = {
     return { success: result.success, message: result.message };
   },
   getStorehouseInitialStock: (itemId: string, storehouse: string | undefined): number => {
-    const materials = dataService.getMaterials();
+    const materials = dataService.getMaterials({ includeArchived: true });
     const item = materials.find((m) => m.id === itemId);
     if (!item) return 0;
     const stockWarehouseSettings = dataService.getSettings();
@@ -2239,7 +2353,23 @@ export const dataService = {
         return { success: false, message: canonicalGate.message };
       }
 
-      const remoteUser = await supabaseDb.getDoc<SystemUser>('users', uid);
+      let remoteUser: SystemUser | null = null;
+      try {
+        remoteUser = await supabaseDb.getDoc<SystemUser>('users', uid);
+      } catch (readErr: any) {
+        const readMsg = String(readErr?.message || '').toLowerCase();
+        const isNet = readMsg.includes('network') || readMsg.includes('fetch') || readMsg.includes('offline')
+          || (typeof navigator !== 'undefined' && navigator.onLine === false);
+        if (isNet) {
+          const cached = dataService.getUsers().find(
+            u => (u.id === uid || u.authUid === uid) && u.username.trim().toLowerCase() === email && u.active !== false
+          );
+          if (cached) remoteUser = cached;
+          else throw readErr;
+        } else {
+          throw readErr;
+        }
+      }
       if (!remoteUser) {
         await supabaseAuthSignOut().catch(() => {});
         sessionStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
@@ -2431,6 +2561,26 @@ export const dataService = {
 
       return { success: true, status: 'bootstrapped' };
     } catch (err: any) {
+      const msg = String(err?.message || '').toLowerCase();
+      const isNet = msg.includes('network') || msg.includes('fetch') || msg.includes('offline')
+        || (typeof navigator !== 'undefined' && navigator.onLine === false);
+      const cachedSettingsRaw = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+      const cachedUsersRaw = localStorage.getItem(STORAGE_KEYS.USERS);
+      if (isNet && cachedSettingsRaw && cachedUsersRaw) {
+        try {
+          const parsedUsers = JSON.parse(cachedUsersRaw) as SystemUser[];
+          const ownsCache = Array.isArray(parsedUsers) && parsedUsers.some(u => (u.id === authUser.uid || u.authUid === authUser.uid) && u.active !== false);
+          if (ownsCache) {
+            return {
+              success: true,
+              status: 'offline-cached',
+              message: 'تم استئناف العمل بالنسخة المحلية المحفوظة لعدم توفر الاتصال بالشبكة.',
+            };
+          }
+        } catch {
+          // Fall through to error
+        }
+      }
       return { success: false, status: 'error', message: safeResultMessage(err, 'sync') };
     }
   },

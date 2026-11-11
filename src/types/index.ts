@@ -24,10 +24,11 @@ export interface Item {
   storageLocationDetail?: string;
   warehouseStocks?: Record<string, number>; // Legacy/display projection keyed by warehouse name.
   warehouseStocksById?: Record<string, number>; // Canonical warehouse stock projection keyed by stable warehouse id.
-  notes?: string; 
-    archived?: boolean;
-    archivedAt?: string;
-    archivedReason?: string;
+  notes?: string;
+  /** QA-20261109 R8 OPS-QA: reversible logical archive flag preserving full transaction and audit history. */
+  archived?: boolean;
+  archivedAt?: string;
+  archivedReason?: string;
   createdAt: string;
   updatedAt: string;
   type?: string; // Keep for backward compatibility or remove
