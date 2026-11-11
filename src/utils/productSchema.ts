@@ -128,7 +128,7 @@ function assertStringList(
 const MATERIAL_KEYS = [
   'id', 'code', 'name', 'category', 'unit', 'minimumStock', 'currentStock', 'initialStock',
   'storageLocation', 'primaryStorehouseId', 'storageLocationDetail', 'warehouseStocks',
-  'warehouseStocksById', 'notes', ''archived', 'archivedAt', 'archivedReason', createdAt', 'updatedAt', 'type', 'manufacturer',
+  'warehouseStocksById', 'notes', 'archived', 'archivedAt', 'archivedReason', 'createdAt',
   'productionDate', 'expiryDate', 'hazardLevel',
 ] as const;
 
@@ -206,7 +206,7 @@ const assertMaterial = (data: Record<string, unknown>): void => {
   assertString(domain, 'id', data.id, PRODUCT_LIMITS.documentIdBytes);
   assertString(domain, 'name', data.name);
   for (const field of ['code', 'category', 'unit', 'storageLocation', 'primaryStorehouseId',
-    'storageLocationDetail', 'notes', 'type', 'manufacturer', 'hazardLevel'], 'archivedReason') {
+    'storageLocationDetail', 'notes', 'type', 'manufacturer', 'hazardLevel']) {
     assertOptionalString(domain, data, field);
   }
   assertOptionalBoolean(domain, data, 'archived');
