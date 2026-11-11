@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+export const R8_MATERIALS_SEARCH_ARIA_LABEL = 'البحث في الأصناف بالاسم أو الكود'; // flexWrap: 'wrap'
 import { buildTotalStockIndex, isLowStockByTotal } from '../utils/lowStock';
 import { Link } from 'react-router-dom';
 import { presentResultMessage, safeUserMessage } from '../services/safeUserMessage';
