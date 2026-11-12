@@ -31,6 +31,8 @@ beforeEach(() => {
     functions: { invoke: vi.fn(async () => ({ data: { user: { id: 'created-uid', email: 'employee@example.com' } }, error: null })) },
     auth: {
       onAuthStateChange: vi.fn(callback => { fake.authCallback = callback; }),
+      // R8-AUTH-01: the adapter now reads the persisted session explicitly at start (guarded).
+      getSession: vi.fn(async () => ({ data: { session: null }, error: null })),
       signInWithPassword: vi.fn(),
       signOut: vi.fn(async () => ({ error: null })),
     },
@@ -202,5 +204,39 @@ describe('Supabase app_config projection', () => {
     };
     expect(() => composeSupabaseAppSettings({ ...defaults, settingsSchemaVersion: 99 }, defaults)).toThrow();
     expect(() => composeSupabaseAppSettings({ ...defaults, injected: true }, defaults)).toThrow();
+  });
+});
+
+describe('R8-AUTH-01 guarded session start and offline classification', () => {
+  const flush = async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
+  it('R8-AUTH-A1 a persisted session is accepted from getSession even before any auth event', async () => {
+    fake.client.auth.getSession.mockResolvedValueOnce({ data: { session: { access_token: 'synthetic-token', user: { id: 'uid-p', email: 'p@example.com' } } }, error: null });
+    const { getCurrentAuthUser } = await import('../src/services/supabase');
+    await flush();
+    expect(getCurrentAuthUser()?.uid).toBe('uid-p');
+  });
+  it('R8-AUTH-A2 a client without getSession (older SDK/test double) is tolerated', async () => {
+    delete fake.client.auth.getSession;
+    const mod = await import('../src/services/supabase');
+    await flush();
+    expect(mod.getCurrentAuthUser()).toBeNull();
+    fake.authCallback!('SIGNED_IN', { access_token: 'synthetic-token', user: { id: 'uid-2', email: 'two@example.com' } });
+    expect(mod.getCurrentAuthUser()?.uid).toBe('uid-2');
+  });
+  it('R8-AUTH-A3 a failing/empty getSession never signs the user out', async () => {
+    fake.client.auth.getSession.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    const mod = await import('../src/services/supabase');
+    fake.authCallback!('SIGNED_IN', { access_token: 'synthetic-token', user: { id: 'uid-3', email: 'three@example.com' } });
+    await flush();
+    expect(mod.getCurrentAuthUser()?.uid).toBe('uid-3');
+  });
+  it('R8-AUTH-A4 profile gate: transport failure is unavailable, a server denial is denied', async () => {
+    const { ensureCanonicalCurrentUserProfile } = await import('../src/services/legacyUserMigration');
+    fake.authCallback!('SIGNED_IN', { access_token: 'synthetic-token', user: { id: 'uid-4', email: 'four@example.com' } });
+    await flush();
+    fake.query.maybeSingle.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    expect((await ensureCanonicalCurrentUserProfile([])).reason).toBe('unavailable');
+    fake.query.maybeSingle.mockResolvedValueOnce({ data: null, error: { code: '42501', message: 'permission denied' } });
+    expect((await ensureCanonicalCurrentUserProfile([])).reason).toBe('denied');
   });
 });

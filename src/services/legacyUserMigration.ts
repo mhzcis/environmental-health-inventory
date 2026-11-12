@@ -1,6 +1,7 @@
 import type { SystemUser } from '../types';
 import { ALL_MANAGED_PERMISSIONS, validateCanonicalManagedUser } from './managedUserService';
 import { getCurrentAuthUser, isSupabaseConfigured, supabaseDb } from './supabase';
+import { isAuthNetworkUnavailable } from './authAvailability';
 
 export interface LegacyUserMigrationResult {
   success: boolean;
@@ -136,9 +137,9 @@ export async function ensureCanonicalCurrentUserProfile(
       reason: 'quarantined',
       message: 'حساب المستخدم غير موجود في جدول صلاحيات النظام. يرجى مراجعة مدير النظام.',
     };
-  } catch (error: any) {
-    const msg = String(error?.message || '').toLowerCase();
-    const isNetwork = msg.includes('fetch') || msg.includes('network') || msg.includes('offline');
+  } catch (error: unknown) {
+    // R8-AUTH-01: an unreachable server is 'unavailable' (online-required/retry), never treated as a denial.
+    const isNetwork = isAuthNetworkUnavailable(error);
     return {
       success: false,
       migrated: false,

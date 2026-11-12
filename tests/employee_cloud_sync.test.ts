@@ -3,14 +3,13 @@ import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SystemUser } from '../src/types';
 import { canonicalizeWarehouseSettings } from '../src/utils/warehouseSettings';
-import { toSlimSettingsRoot } from '../src/utils/settingsNormalization';
 
 const fake = vi.hoisted(() => ({
   getDoc: vi.fn(), getCollection: vi.fn(), upsertDoc: vi.fn(), upsertDocs: vi.fn(),
   appendAuditLogs: vi.fn(), updateExistingSettings: vi.fn(), deleteDocs: vi.fn(),
   subscribeTables: vi.fn(() => () => {}),
   prepareOperations: vi.fn((ops:any[])=>ops.map(op=>({...op,expected:op.expected.kind==='present'?{kind:'present',data:op.expected.exactLegacyPayload}:{kind:'missing'}}))),
-  rememberOperations: vi.fn(), commitMutation: vi.fn(async(id:string)=>({audit:{id,timestamp:new Date().toISOString(),user:'Synthetic employee',action:'اعتماد',details:'QA',itemType:'حركة'},replayed:false})),
+  rememberOperations: vi.fn(), commitMutation: vi.fn(async(id:string,_payload?:unknown)=>({audit:{id,timestamp:new Date().toISOString(),user:'Synthetic employee',action:'اعتماد',details:'QA',itemType:'حركة'},replayed:false})),
 }));
 vi.mock('../src/services/supabase', () => ({
   supabase: null, secondarySupabase: null, subscribeAuthState: () => () => {},
@@ -21,11 +20,10 @@ vi.mock('../src/services/supabase', () => ({
   supabaseAdminCreateAuthUser: vi.fn(), supabaseSendPasswordReset: vi.fn(),
 }));
 import { dataService, __p10EnqueueFenceTestApi } from '../src/services/dataService';
-import { createSyncSetOperation } from '../src/services/appSyncService';
 
 const employee: SystemUser = {
   id: 'synthetic-employee', authUid: 'synthetic-employee', username: 'employee@example.invalid',
-  fullName: 'Synthetic employee', role: 'أمين مستودع', active: true,
+  fullName: 'Synthetic employee', role: 'أمين مستودع', active: true, createdAt: '2026-11-01T00:00:00Z',
   permissions: ['materials_view', 'materials_create', 'materials_edit', 'transactions_view', 'transactions_create', 'reports_view'],
 };
 beforeEach(async () => {
@@ -67,7 +65,7 @@ describe('Employee operational cloud dependencies', () => {
     const remote=cloudSettings(); fake.getDoc.mockResolvedValue(remote);
     await dataService.bootstrapFreshDeviceData(employee); dataService.setCurrentUser(employee.id);
     const next={...remote,transactionCounters:{...remote.transactionCounters!,inbound:18}};
-    await __p10EnqueueFenceTestApi.queueCloudMutation([{kind:'set',collection:'settings',docId:'app_config',value:next,expected:{kind:'present',fingerprint:'synthetic',exactLegacyPayload:remote}}],'synthetic-command');
+    await __p10EnqueueFenceTestApi.queueCloudMutation([{kind:'set',collection:'settings',docId:'app_config',value:next as unknown as Record<string,unknown>,expected:{kind:'present',fingerprint:'synthetic',exactLegacyPayload:remote as unknown as Record<string,unknown>}}],'synthetic-command');
     expect(fake.commitMutation).toHaveBeenCalledOnce();
     expect(fake.commitMutation.mock.calls[0][1]).toMatchObject({mode:'mutation',operations:[{collection:'settings',expected:{kind:'present',data:remote},value:expect.objectContaining({transactionCounters:expect.objectContaining({inbound:18})})}]});
     expect(fake.upsertDocs).not.toHaveBeenCalled(); expect(fake.updateExistingSettings).not.toHaveBeenCalled();

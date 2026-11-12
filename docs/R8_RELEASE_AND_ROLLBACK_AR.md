@@ -1,0 +1,55 @@
+# R8 — ترتيب النشر والتراجع (مُعدّ فقط؛ لم يُنفّذ أي شيء على الإنتاج)
+
+> هذا المستند يصف خطوات مستقبلية تتطلب **موافقة صريحة ومنفصلة من المالك** لكل خطوة كتابة على الإنتاج.
+> لم يتم في R8 أي دمج أو نشر أو تشغيل SQL على الإنتاج أو تعديل لـ PES-1001.
+
+## الملفات
+| الملف | الغرض |
+|---|---|
+| `database/migrations/R8_PRODUCTION_MIGRATION.sql` | ترحيل الإنتاج (دوال + جدول سجل الأكواد الخاص). مولَّد من `database/inventory_atomic.sql` بواسطة `qa/build-r8-migration.mjs`. |
+| `database/migrations/R8_ROLLBACK.sql` | التراجع إلى SQL الفرع main (6933d16) مع إبقاء كل الصفوف والإيصالات وسجل الأكواد. |
+| `qa/r8-migration-rollback.mjs` | تمرين PGlite معزول: MIG-0..MIG-5 (انحراف الأساس، عدم تطابق السياسة، الترحيل، التراجع، إعادة الترحيل). |
+| `scripts/release-gate.mjs` | بوابة إصدار واحدة مغلقة عند الفشل (R8-OPS-01). |
+
+## ترتيب النشر (بعد موافقة المالك فقط)
+1. نافذة توقف قصيرة عن الإدخال؛ كل جهاز يُظهر 0 معلّق / 0 مرفوض في لوحة المزامنة. **لا تُمسح قوائم الانتظار للوصول إلى صفر.**
+2. نسخة احتياطية كاملة مُتحقق منها (انظر `R8_BACKUP_RESTORE_DRILL_AR.md`). سجّل `md5(prosrc)` للدالتين `commit_inventory` و`validate_inventory`.
+3. تشغيل `R8_PRODUCTION_MIGRATION.sql` **مرة واحدة** كمعاملة واحدة. يتوقف دون أي تغيير إذا:
+   - اختلفت بصمة الدوال عن main (`R8_MIGRATION_BASELINE_DRIFT`)، أو
+   - اختلفت الفئات/البادئات/النطاقات عن قرار المالك (`R8_MIGRATION_POLICY_MISMATCH`)، أو أسماء الفئات بترتيب البادئات (`R8_MIGRATION_CATEGORY_NAMES_MISMATCH`)، أو
+   - اختلفت بصمة `restore_preview`/`state_hash` عن main، أو كان جدول السجل موجوداً بشكل غير متوقع (`R8_MIGRATION_REGISTRY_SHAPE_UNEXPECTED`)، أو
+   - أُعيد استخدام كود محجوز أثناء فترة التراجع (`R8_MIGRATION_CODE_REUSED_DURING_ROLLBACK`).
+   التنفيذ: `psql -v ON_ERROR_STOP=1 -f R8_PRODUCTION_MIGRATION.sql` في جلسة واحدة.
+4. فحص قراءة فقط: `SELECT public.inventory_projection_drift();` — المتوقع ظهور PES-1001 كانحراف (المخزن 12، السجل 10 = 9 + 1).
+   **حارس الانحراف (جولة 1، RT-R8-02):** لا يصحّح أي حفظ عادي أو تعديل إعدادات هذا الانحراف ضمنياً. أي طلب يمس PES-1001 مباشرة (حركة، تعديل، حذف، أرشفة) يُرفض بـ `INVENTORY_RECONCILE_REQUIRED` دون أي تغيير؛ وتعديل إعدادات عام يُحفظ مع **إبقاء** صف PES-1001 كما هو ووضعه في `projectionDriftHeld` بإيصال التدقيق. التصحيح الوحيد: وضع `reconcile` (الخطوة 7).
+5. نشر نسخة الواجهة المطابقة **فقط** بعد مراجعة المالك ودمجه للـ PR عبر بوابة الإصدار:
+   ```
+   node scripts/release-gate.mjs --repo mhzcis/environmental-health-inventory --pr <N> \
+     --base <sha main المثبت> --head <sha الرأس المثبت> \
+     --check "sha256sum -c protected-files.sha256" --check "npm run typecheck:app" --check "npm run test:atomic" \
+     [--execute]
+   ```
+   بدون `--execute` تعمل كتشغيل تجريبي ولا تكتب شيئاً. أي فشل/UNKNOWN/قاعدة قديمة/رأس متغير/CI غير أخضر = صفر استدعاءات دمج.
+6. منح صلاحية `materials_archive` لحساب المدير المعني تغيير حساب منفصل يحتاج موافقة.
+7. تسوية PES-1001 (`mode: 'reconcile'`) تغيير منفصل يحتاج موافقة صريحة؛ ليس جزءاً من ملف الترحيل. **الأرشفة تتطلب رصيداً صفرياً لأي غرض** (جولة 1، R2-R8-01): بعد التسوية رصيد PES-1001 = 10، فلا يمكن أرشفته حتى يقرر المالك حركة معتمدة تصفّره (قرار منفصل؛ انظر `R8_UNRESOLVED.md`).
+
+## التوافق
+- العملاء القدامى يبقون متوافقين: الخادم يتجاهل الحقول المشتقة/حقول دورة الحياة المرسلة من العميل ويعيد حسابها.
+- خادم main لا يعرف `lifecycle`/`reconcile`: يرفضها ذرياً (`INVENTORY_OPERATIONS_INVALID`) ويبقى الطلب في قائمة الانتظار ويُرسل مرة واحدة بعد الترقية.
+
+## التراجع
+1. أوقف الإدخال كما في الخطوة 1 أعلاه.
+2. إذا كانت هناك مواد مؤرشفة، يرفض ملف التراجع العمل (`R8_ROLLBACK_BLOCKED_ARCHIVED_MATERIALS`) لأن خادم main لا يفهم الأرشفة. الخيارات:
+   - إعادة تفعيل المواد المؤرشفة أولاً عبر المسار المدقق، أو
+   - تأكيد تعليق الكتابة صراحة: `SET r8.rollback_hold_writes = 'confirmed';` في نفس الجلسة قبل التشغيل.
+3. تشغيل `R8_ROLLBACK.sql`: يعيد دوال main ويحذف دوال R8 العامة، **ولا يحذف** أي صف أو إيصال تدقيق أو سجل أكواد أو جدول سياسة؛ ويتحقق من بصمة md5.
+   **تعليق مُنفَّذ (جولة 1 + جولة 2 / RT-R8-D02):** إذا وُجدت مواد مؤرشفة وتم تأكيد التعليق، يسحب الملف `EXECUTE` على **كل مسار كتابة** يعرّضه خادم main:
+   - `public.inventory_commit(text,jsonb)` (الغلاف العام)
+   - `inventory_private.commit_inventory(text,jsonb)` (الدالة المعرِّفة؛ ومنها تمرّ أحداث التدقيق وتسجيل الدخول/الخروج وكل الكتابة)
+   من `authenticated` فعلياً. أذونات DML المباشرة على الجداول مسحوبة مسبقاً من main. يطبع الملف أيضاً `NOTICE R8_ROLLBACK_HOLD_OTHER_EXECUTABLE` لأي دالة VOLATILE أخرى في `public` أو `inventory_private` ما زالت قابلة للتنفيذ من `authenticated` (المتوقع: معاينة الاستعادة للقراءة فقط). **تحقق من لوحة التحكم (API → Exposed schemas) أن `inventory_private` غير معرَّض لـ PostgREST.** إعادة الترحيل تعيد المنحتين؛ أو بمنحة صريحة معتمدة لكليهما:
+   `GRANT EXECUTE ON FUNCTION inventory_private.commit_inventory(text,jsonb) TO authenticated;`
+   `GRANT EXECUTE ON FUNCTION public.inventory_commit(text,jsonb) TO authenticated;`
+   خلال فترة التراجع لا يعمل حارس السجل ولا حارس الانحراف؛ لذلك يتحقق الترحيل اللاحق من أي كود أُعيد استخدامه ويتوقف.
+   **إذا فُتحت نافذة تراجع بلا تعليق (أو أُعيد المنح يدوياً قبل إعادة الترحيل):** قبل إعادة فتح النظام أجرِ `SELECT public.inventory_projection_drift();` وصالِح أي انحراف بإجراء `reconcile` معتمد من المدير. أي كتابة خلال النافذة غير المعلّقة قد تعيد انحراف PES-1001 (أو غيره) بعد إعادة الترحيل (RT-R8-D06).
+4. أعد نشر واجهة main السابقة إن لزم.
+5. إعادة الترحيل لاحقاً آمنة ومتكررة (idempotent) وتحافظ على الحجوزات.

@@ -1,4 +1,4 @@
-import { getCurrentAuthUser, isSupabaseConfigured, supabase, secondarySupabase } from './supabase';
+import { getCurrentAuthUser, isSupabaseConfigured, supabase } from './supabase';
 
 const auth = {
   get currentUser() {

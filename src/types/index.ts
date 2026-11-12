@@ -24,6 +24,22 @@ export interface Item {
   storageLocationDetail?: string;
   warehouseStocks?: Record<string, number>; // Legacy/display projection keyed by warehouse name.
   warehouseStocksById?: Record<string, number>; // Canonical warehouse stock projection keyed by stable warehouse id.
+  /** R8-DATA-01: server-owned total across ALL warehouses (active display total is currentStock). */
+  ledgerTotalStock?: number;
+  /** R8-ARC-01: server-owned reversible lifecycle. Absent means active. */
+  lifecycleStatus?: 'active' | 'archived';
+  lifecycleVersion?: number;
+  archivedAt?: string;
+  archivedBy?: string;
+  archivedByName?: string;
+  archiveReason?: string;
+  archivePurpose?: 'qa_test_data' | 'discontinued';
+  reactivatedAt?: string;
+  reactivatedBy?: string;
+  reactivatedByName?: string;
+  reactivationReason?: string;
+  /** R8 requirement 3: set only on the in-memory view of a change still waiting for server confirmation. */
+  syncPending?: boolean;
   notes?: string;
   createdAt: string;
   updatedAt: string;

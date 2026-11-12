@@ -43,8 +43,47 @@ const acceptSession = (session: Session | null) => {
     for (const listener of authListeners) listener(delivered);
   });
 };
-supabase?.auth.onAuthStateChange((_event, session) => acceptSession(session));
+// R8-R1 (R2-R8-06): guarded like getSession below; a client/test double without auth never throws at module load.
+if (typeof supabase?.auth?.onAuthStateChange === 'function') supabase.auth.onAuthStateChange((_event, session) => acceptSession(session));
+// R8-AUTH-01: read the persisted session explicitly at start (works offline from storage). Guarded because some
+// SDK builds/test doubles have no getSession; a failure leaves the onAuthStateChange path unchanged.
+if (supabase && typeof supabase.auth?.getSession === 'function') {
+  void Promise.resolve()
+    .then(() => supabase.auth.getSession())
+    .then(result => { const session = result?.data?.session; if (!initialized && session) acceptSession(session); })
+    .catch(() => { /* the auth state listener remains the source of truth */ });
+}
 export const getCurrentAuthUser = (): SupabaseAuthUser | null => currentUser;
+/**
+ * R8-R1 (R2-R8-09): "retry now" from the online-required state when no user was delivered (offline cold start with an
+ * expired token). Asks the SDK to refresh the persisted session; a delivered session re-runs the normal live
+ * revalidation through the auth listeners. Never throws; resolves false when no session could be obtained.
+ */
+export const refreshAuthSession = async (): Promise<boolean> => {
+  try {
+    const auth = supabase?.auth as unknown as {
+      refreshSession?: () => Promise<{ data?: { session?: Session | null } }>;
+      getSession?: () => Promise<{ data?: { session?: Session | null } }>;
+    } | undefined;
+    const result = typeof auth?.refreshSession === 'function' ? await auth.refreshSession()
+      : typeof auth?.getSession === 'function' ? await auth.getSession() : null;
+    const session = result?.data?.session ?? null;
+    if (!session) return false;
+    acceptSession(session);
+    return true;
+  } catch { return false; }
+};
+/** R8-AUTH-01: whether this device still holds a persisted Supabase session (presence only; the token is never read). */
+export const hasPersistedAuthSession = (): boolean => {
+  try {
+    if (typeof localStorage === 'undefined') return false;
+    for (let index = 0; index < localStorage.length; index++) {
+      const name = localStorage.key(index);
+      if (name && /^sb-[^-]+(?:-[^-]+)*-auth-token$/.test(name) && localStorage.getItem(name)) return true;
+    }
+  } catch { /* storage unavailable */ }
+  return false;
+};
 export const subscribeAuthState = (listener: (user: SupabaseAuthUser | null) => void): (() => void) => {
   authListeners.add(listener);
   if (initialized || !supabase) queueMicrotask(() => { if (authListeners.has(listener)) listener(currentUser); });
@@ -102,23 +141,40 @@ export interface InventoryRpcOperation {
   value?: Record<string, unknown>;
   expected?: { kind: 'present' | 'missing'; data?: Record<string, unknown> };
 }
+export interface InventoryLifecycleRequest {
+  action: 'archive' | 'reactivate';
+  materialId: string;
+  expectedLifecycleVersion: number;
+  reason: string;
+  purpose?: 'qa_test_data' | 'discontinued';
+}
 export interface InventoryRpcPayload {
-  /** 'correction' (QA-20261109 TX-03): cancel + replacement with an audit link; a server without correction support rejects it atomically. */
-  mode: 'mutation' | 'audit' | 'restore' | 'correction';
+  /** 'correction' (QA-20261109 TX-03): cancel + replacement with an audit link; a server without correction support rejects it atomically.
+   *  'lifecycle' (R8-ARC-01): archive/reactivate one material; an older server rejects it atomically (INVENTORY_OPERATIONS_INVALID). */
+  mode: 'mutation' | 'audit' | 'restore' | 'correction' | 'lifecycle';
   label: string;
   operations?: InventoryRpcOperation[];
   backup?: Record<string, unknown>;
   expectedState?: string;
+  lifecycle?: InventoryLifecycleRequest;
 }
 export interface InventoryRpcAck {
   audit: Record<string, unknown>;
   replayed: boolean;
+  /** R8-DATA-01: server-confirmed material rows (ledger projection recomputed inside the same transaction). Absent on older servers. */
+  materials?: Record<string, unknown>[];
 }
+export interface InventoryNextCode { code: string; prefix: string; number: number; category: string; provisional: true }
 export interface InventoryRestorePreview {
   expectedState: string;
   diffs: Record<string, { current: number; backup: number; added: number; removed: number; changed: number }>;
   auditHistory: 'preserved';
   authIdentities: 'preserved';
+  registry?: {
+    ok: boolean; missingCodeRegistry: boolean; error?: string | null; warnings: unknown;
+    rejected: unknown; newReservations: unknown; tailReservations: unknown;
+    maxReferenced: unknown; conservativeMax: unknown; willRefuse?: boolean;
+  };
 }
 
 const encode = (table: SupabaseTableName, id: string, payload: Record<string, unknown>): Row => {
@@ -197,7 +253,34 @@ export const supabaseDb = {
     if (uid !== currentUser?.uid) throw new Error('INVENTORY_SESSION_CHANGED');
     if (!data || data.audit?.id !== mutationId) throw new Error('INVENTORY_ACK_INVALID');
     if (payload.operations) this.rememberOperations(payload.operations);
+    // R8-DATA-01: the server row (with recomputed projections) is the next expected baseline.
+    if (Array.isArray(data.materials)) {
+      baselineRevision++;
+      for (const row of data.materials as Record<string, unknown>[]) {
+        if (row && typeof row.id === 'string') remoteBaselines.set(`materials/${row.id}`, structuredClone(row));
+      }
+    }
     return data as InventoryRpcAck;
+  },
+  /** R8-CODE-01: central next-code read (provisional until commit_inventory reserves it). */
+  /** R8-R1 (RT-R8-04): the permanent code registry (live, archived and deleted reservations) for a full backup. Admin only. */
+  async codeRegistry(): Promise<{ code: string; materialId: string; deleted: boolean }[]> {
+    const { data, error } = await client().rpc('inventory_code_registry');
+    if (error) throw error;
+    if (!Array.isArray(data)) throw new Error('INVENTORY_CODE_REGISTRY_INVALID');
+    return data.map((row: Record<string, unknown>) => ({ code: String(row.code), materialId: String(row.materialId), deleted: row.deleted === true }));
+  },
+  async nextMaterialCode(category: string): Promise<InventoryNextCode> {
+    const { data, error } = await client().rpc('inventory_next_material_code', { p_category: category });
+    if (error) throw error;
+    if (!data?.code) throw new Error('INVENTORY_CODE_INVALID_RESPONSE');
+    return data as InventoryNextCode;
+  },
+  /** R8-DATA-01: read-only drift check (no write). */
+  async projectionDrift(): Promise<{ materials: number; drift: number; rows: Record<string, unknown>[] }> {
+    const { data, error } = await client().rpc('inventory_projection_drift', {});
+    if (error) throw error;
+    return data;
   },
   async previewRestore(backup: Record<string, unknown>): Promise<InventoryRestorePreview> {
     const { data, error } = await client().rpc('inventory_restore_preview', { p_backup: backup });

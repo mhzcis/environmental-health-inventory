@@ -9,11 +9,13 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
+    "lint:baseline": "node scripts/lint-baseline-gate.mjs",
+    "release:gate": "node scripts/release-gate.mjs",
     "test:unit": "vitest run",
     "typecheck:app": "tsc -p tsconfig.app.json --noEmit",
-    "test:deployment": "vitest run tests/supabase_adapter_deployment.test.ts src/utils/inventoryLogic.test.ts tests/p6_inventory_integrity.test.ts tests/p5_warehouse_centrality.test.ts tests/employee_account_form.test.tsx tests/password_recovery.test.tsx tests/password_recovery_sdk.test.ts tests/employee_cloud_sync.test.ts",
-    "test:atomic": "node qa/atomic-security.mjs && node qa/tx03-correction-compat.mjs && vitest run tests/atomic-integration.test.ts tests/import-validation.test.ts tests/tx03-correction-outbox-qa20261109.test.ts",
-    "test:repairs": "vitest run tests/remediation-domain.test.ts tests/remediation-audit-ui.test.tsx tests/remediation-material-ui.test.tsx tests/remediation-print.test.ts tests/reports-acceptance.test.tsx"
+    "test:deployment": "vitest run tests/supabase_adapter_deployment.test.ts src/utils/inventoryLogic.test.ts tests/p6_inventory_integrity.test.ts tests/p5_warehouse_centrality.test.ts tests/employee_account_form.test.tsx tests/password_recovery.test.tsx tests/password_recovery_sdk.test.ts tests/employee_cloud_sync.test.ts tests/r8-auth-offline.test.tsx tests/r8-round1-auth-guards.test.ts",
+    "test:atomic": "node qa/atomic-security.mjs && node qa/tx03-correction-compat.mjs && node qa/r8-readiness.mjs && node qa/r8-migration-rollback.mjs && node qa/build-r8-migration.mjs --check && node qa/r8-restore-drill.mjs && vitest run tests/atomic-integration.test.ts tests/import-validation.test.ts tests/tx03-correction-outbox-qa20261109.test.ts tests/r8-client-integration.test.ts tests/r8-readiness-unit.test.ts",
+    "test:repairs": "vitest run tests/remediation-domain.test.ts tests/remediation-audit-ui.test.tsx tests/remediation-material-ui.test.tsx tests/remediation-print.test.ts tests/reports-acceptance.test.tsx tests/r8-warehouse-scope.test.tsx tests/r8-release-gate.test.ts tests/r8-live-reconcile.test.ts tests/r8-round1-dashboard.test.tsx"
   },
   "dependencies": {
     "@emotion/cache": "^11.14.0",

@@ -286,6 +286,15 @@ export const createSyncSetOperation = (
   value: Record<string, unknown>,
   previousValue: unknown,
 ): SyncSetOperation => {
+  // R8 requirement 3: `syncPending` is a client-only view marker of unconfirmed work; it never leaves the device.
+  if (collection === 'materials') {
+    const { syncPending: _value, ...cleanMaterial } = value as Record<string, unknown> & { syncPending?: unknown };
+    value = cleanMaterial;
+    if (previousValue && typeof previousValue === 'object') {
+      const { syncPending: _previous, ...cleanPrevious } = previousValue as Record<string, unknown> & { syncPending?: unknown };
+      previousValue = cleanPrevious;
+    }
+  }
   const confirmed = getConfirmedSyncState(collection, docId);
   const authoritativeState = confirmed?.mutationId && confirmed.revision > 0
     ? { revision: confirmed.revision, mutationId: confirmed.mutationId }

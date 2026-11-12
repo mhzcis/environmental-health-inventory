@@ -2,7 +2,6 @@ import { dryRunAuditLogSync, executeAuditLogSync } from '../services/backupServi
 import { AuditLogSyncDryRun, AuditLogSyncResult } from '../types';
 import { useState, useEffect } from 'react';
 import { Box, Typography, Paper, Divider, Button, TextField, CircularProgress, Alert, Dialog, DialogTitle, DialogContent, DialogActions, FormControl, InputLabel, Select, MenuItem, List, ListItem, ListItemText, IconButton, InputAdornment, Card, CardContent, Avatar, Chip, Checkbox, DialogContentText, Tabs, Tab, FormControlLabel } from '@mui/material';
-import LoadingSpinner from '../components/LoadingSpinner';
 import Grid from '@mui/system/Grid';
 import SaveIcon from '@mui/icons-material/Save';
 import AddIcon from '@mui/icons-material/Add';
@@ -27,17 +26,15 @@ import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import SettingsIcon from '@mui/icons-material/Settings';
 import * as XLSX from 'xlsx';
-import ExcelJS from 'exceljs';
 import { dataService } from '../services/dataService';
-import { presentResultMessage, safeErrorDetail, safeUserMessage } from '../services/safeUserMessage';
-import { createBackup, validateBackup, migrateValidatedBackupToFirestore, testFirestoreRbacReads, compareLocalAndCloudData, P7_CLOUD_MIGRATION_EXECUTION_ENABLED, isSystemAdminRole } from '../services/backupService';
+import { presentResultMessage, safeUserMessage } from '../services/safeUserMessage';
+import { createBackup, validateBackup, formatRestoreConfirmDialog, migrateValidatedBackupToFirestore, testFirestoreRbacReads, compareLocalAndCloudData, P7_CLOUD_MIGRATION_EXECUTION_ENABLED, isSystemAdminRole } from '../services/backupService';
 import NotificationToast from '../components/NotificationToast';
 import { downloadPreparedMessage } from '../utils/downloadFeedback';
 
 import { AppSettings, CategoryConfig, SystemUser, MigrationLog, RbacTestReport, DataComparisonReport } from '../types';
 import { auth, isFirebaseAvailable } from '../services/firebase';
 import { supabaseAuthVerifyPassword } from '../services/supabase';
-import { useLocation } from 'react-router-dom';
 import { renderOption } from '../utils/emoji';
 import { PRODUCT_LIMITS, productLimitMessage } from '../utils/productSchema';
 import { getStorehouseByReference } from '../utils/warehouseDomain';
@@ -46,6 +43,7 @@ import { validateInventoryDataset } from '../utils/inventoryIntegrity';
 import { getStorehouseEntities } from '../utils/warehouseDomain';
 import type { Material, InventoryTransaction } from '../types';
 import { localDateString } from '../utils/localDate';
+import { readerPermissions } from '../security/rbacPresets';
 
 
 const APP_PERMISSIONS = [
@@ -55,6 +53,7 @@ const APP_PERMISSIONS = [
   { id: 'materials_edit', name: 'الأصناف - تعديل صنف', desc: 'تغيير بيانات بطاقة الصنف وحد الأمان والمخزن' },
   { id: 'materials_delete', name: 'الأصناف - حذف صنف', desc: 'حذف الأصناف والمواد من السجل (تتطلب عدم وجود معاملات)' },
   { id: 'materials_stocktake', name: 'الأصناف - تسوية الجرد السنوي الفعلي', desc: 'فتح تسوية الجرد الفعلي. حفظ التسوية يتطلب أيضًا صلاحية تسجيل الحركات.' },
+  { id: 'materials_archive', name: 'الأصناف - أرشفة / إعادة تفعيل صنف', desc: 'أرشفة صنف (يبقى سجله وتقاريره التاريخية) أو إعادة تفعيله، بسبب مكتوب وتأكيد الخادم.' },
   { id: 'transactions_view', name: 'الحركات - عرض الحركات', desc: 'استعراض الحركات المخزنية المسجلة من معاملات التوريد والصرف' },
   { id: 'transactions_create', name: 'الحركات - تسجيل معاملة', desc: 'تسجيل توريد مواد أو صرف أذونات إمداد للمراكز والبلديات' },
   { id: 'transactions_delete', name: 'الحركات - حذف / إلغاء حركة مخزنية', desc: 'حذف حركات التوريد والصرف وإعادة رصد أرصدة المخازن' },
@@ -777,7 +776,7 @@ export default function Settings() {
     setIsImporting(true); setErrorMsg(null); setSuccessMsg(null);
     try {
       const rows = await readImportRows(file);
-      const cfg = dataService.getSettings(); const existing = dataService.getMaterials();
+      const cfg = dataService.getSettings(); const existing = dataService.getWorkingMaterials();
       const items: Material[] = []; const openings: InventoryTransaction[] = []; const codes = new Set<string>();
       let added = 0; let updated = 0;
       for (let i = 1; i < rows.length; i++) {
@@ -820,7 +819,7 @@ export default function Settings() {
     setIsImportingTx(true); setErrorMsg(null); setSuccessMsg(null);
     try {
       const rows = await readImportRows(file); const cfg = dataService.getSettings();
-      const materials = dataService.getMaterials(); const existing = new Map(dataService.getTransactions().map(t => [t.id, t]));
+      const materials = dataService.getWorkingMaterials(); const existing = new Map(dataService.getTransactions().map(t => [t.id, t]));
       const transactions: InventoryTransaction[] = []; const occurrences = new Map<string, number>(); let repeated = 0; const rowOf = new Map<string, number>();
       const types: Record<string, InventoryTransaction['transactionType']> = { 'وارد': 'وارد', 'إدخال': 'وارد', 'ادخال': 'وارد', 'تزويد': 'وارد', 'صادر': 'صادر', 'إخراج': 'صادر', 'اخراج': 'صادر', 'صرف': 'صادر', 'توزيع': 'صادر', 'مستهلك': 'مستهلك', 'إتلاف': 'مستهلك', 'اتلاف': 'مستهلك', 'استهلاك': 'مستهلك', 'افتتاحي': 'افتتاحي' };
       for (let i = 1; i < rows.length; i++) {
@@ -867,7 +866,8 @@ export default function Settings() {
   // Local JSON Backup Export v2.0
   const handleExportBackup = async () => {
     try {
-      const backupData = await createBackup();
+      // R8-R1 (RT-R8-04): a cloud backup always includes the permanent code registry (covered by the checksum).
+      const backupData = await createBackup({ codeRegistry: await dataService.getCodeRegistryForBackup() });
       const fileContent = JSON.stringify(backupData, null, 2);
       const check = await validateBackup(JSON.parse(fileContent));
       if (!check.success) throw new Error(check.errors.join(' '));
@@ -890,9 +890,14 @@ export default function Settings() {
         if (!check.success || !check.backup) { setErrorMsg(`تم رفض النسخة: ${check.errors.join(' ')}`); return; }
         const m = check.backup.manifest;
         const preview = await dataService.previewBackupRestore(check.backup);
-        const labels: Record<string, string> = { materials: 'الأصناف', transactions: 'الحركات', users: 'ملفات المستخدمين', generator_logs: 'قراءات المولد' };
-        const differences = Object.entries(preview.diffs).map(([key, diff]) => `${labels[key] || key}: إضافة ${diff.added}، إزالة ${diff.removed}، اختلاف ${diff.changed}`).join('\n');
-        const ok = window.confirm(`معاينة الاستعادة مقابل الخادم\nالتاريخ: ${new Date(m.exportedAt).toLocaleString('ar-EG')}\n${differences}\nسيُستبدل مخزون التطبيق وإعداداته وملفات مستخدميه بالكامل بعد التحقق. تبقى حسابات المصادقة وكلمات المرور وسجل التدقيق الحالي. الدخول بعدها بالحساب نفسه وكلمة مروره الحالية. هل تعتمد الاستعادة؟`);
+        const dialog = formatRestoreConfirmDialog({
+          exportedAt: new Date(m.exportedAt).toLocaleString('ar-EG'),
+          diffs: preview.diffs,
+          registry: preview.registry,
+          validationWarnings: check.warnings,
+        });
+        if (dialog.blocked) { setErrorMsg(dialog.message); return; }
+        const ok = window.confirm(dialog.message);
         if (!ok) return;
         const result = await dataService.restoreBackupData(check.backup, preview);
         if (!result.success) { setErrorMsg(presentResultMessage(result.message, 'user-management')); return; }
@@ -2038,7 +2043,8 @@ export default function Settings() {
                           } else if (val === 'أمين مستودع') {
                             setUserPermissions(['dashboard_view', 'materials_view', 'materials_create', 'materials_edit', 'materials_stocktake', 'transactions_view', 'transactions_create', 'reports_view', 'reports_export', 'reports_print']);
                           } else if (val === 'مراجع/مُشاهد') {
-                            setUserPermissions(['dashboard_view', 'materials_view', 'transactions_view', 'reports_view', 'audit_view']);
+                            // R8-RBAC-01: least-privilege reader preset; export/print are ticked explicitly if approved.
+                            setUserPermissions(readerPermissions());
                           }
                         }}
                         sx={{ fontFamily: '"Cairo", sans-serif', fontWeight: 'bold' }}

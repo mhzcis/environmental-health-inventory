@@ -1,8 +1,8 @@
-import { registerInventoryAckPublisher, startInventoryOutboxAutoResume, type InventorySyncOperation, runInventoryDeviceReset, getInventoryOutboxCounts, subscribeInventoryOutbox, cancelRejectedInventoryOutbox, enqueueInventoryMutation, enqueueInventoryRestore, InventoryPendingError, listInventoryOutbox, resumeInventoryProjection, retryInventoryOutbox } from './supabaseOutbox';
+import { registerInventoryAckPublisher, startInventoryOutboxAutoResume, type InventorySyncOperation, type InventoryProjectionMeta, enqueueInventoryLifecycle, runInventoryDeviceReset, getInventoryOutboxCounts, subscribeInventoryOutbox, cancelRejectedInventoryOutbox, enqueueInventoryMutation, enqueueInventoryRestore, InventoryPendingError, listInventoryOutbox, resumeInventoryProjection, retryInventoryOutbox } from './supabaseOutbox';
 import { IndexedDbSyncQueueStore } from './syncQueueStore';
 import { composeSupabaseAppSettings } from './supabaseSettings';
 import { Material, InventoryTransaction, AuditLog, AppSettings, SystemUser, GeneratorLogEntry, GeneratorLogSimulationResult, type AuditEventContext } from '../types';
-import { db, auth } from './firebase';
+import { auth } from './firebase';
 import {
   getCurrentAuthUser,
   isSupabaseConfigured,
@@ -14,17 +14,12 @@ import {
 import { applyBackupLocally } from './backupService';
 import { ensureCanonicalCurrentUserProfile } from './legacyUserMigration';
 import {
-  beginCrashSafeLocalRestore,
-  clearRestoreRecoveryRecord,
-  clearRestoreRecoveryQuarantineAfterControlledRebootstrap,
   finalizeCrashSafeLocalRestoreAfterAudit,
   hasAuthoritativeRestoreAuditDeliveryProof,
   hasRestoreRecoveryQuarantine,
   markRestoreRecoveryAuditCommitted,
   persistRestoreRecoveryRecord,
-  readRestoreRecoveryRecord,
   recoverInterruptedLocalRestore,
-  type RestoreRecoveryRecord,
   resolveRestoreAuditOperationId,
   resolveRestoreAuditTimestamp,
   resolveRestoreDeliveryMutationId,
@@ -50,19 +45,8 @@ import { getStorehouseByReference, getStorehouseEntities, resolveWarehouseScope 
 import { migrateWarehouseModel } from '../utils/warehouseMigration';
 import { addOrReactivateWarehouse, canonicalizeWarehouseSettings, renameWarehouseEntity, reorderWarehouseEntity, setWarehouseEntityActive } from '../utils/warehouseSettings';
 import {
-  buildSettingsCloudMutationPlan,
-  composeAppSettingsFromNormalized,
-  extractTypedSettingsChildren,
-  hasNestedLegacySettingsKeys,
-  listSettingsChildDocIdsFromRoot,
   openingAttachmentDocId,
-  openingAttachmentCloudPayload,
-  openingAttachmentTombstonePayload,
-  settingsChildSyncProjection,
-  settingsRootSyncProjection,
-  stageSettingsCloudMutationPlan,
   toSlimSettingsRoot,
-  type TypedSettingsChildren,
 } from '../utils/settingsNormalization';
 import {
   assertComposedSettingsViewModel,
@@ -78,28 +62,16 @@ import {
   type IntegrityTransaction,
 } from '../utils/inventoryIntegrity';
 import {
-  clearActiveAppSyncQueue,
   createSyncDeleteOperation,
   createSyncSetOperation,
   getAppSyncSnapshot,
   getAppSyncLifecycle,
-  getConfirmedCollectionDocumentIds,
-  getConfirmedSyncState,
-  getUnresolvedSyncDocumentKeys,
   listAppSyncIssues,
-  isAppSyncLifecycleTokenCurrent,
-  flushAppSyncMutationAndRequireRemoteCommit,
   appSyncEnqueueState,
-  queueAppSyncMutation,
-  scheduleAppSyncFlush,
   discardAppSyncIssue,
   resolveConflictUsingLocal,
   retryBlockedAppSyncIssue,
-  setConfirmedSyncState,
-  setConfirmedSyncStateForUser,
-  startAppSync,
   stopAppSync,
-  subscribeAppSync,
   type SyncOperation,
   type AppSyncIssue,
 } from './appSyncService';
@@ -117,8 +89,9 @@ import {
   getProtectedCloudEnqueueBlockReason,
   type ProtectedEnqueueBlockReason,
 } from '../security/p10AuthorityContract';
-import { assertProtectedCloudMutationAllowed } from '../security/pol4CloudMutationGate';
-import { fingerprintDocument, shouldAcceptAuthoritativeSnapshot, stripSyncMetadata } from '../utils/syncProtocol';
+import { fingerprintDocument, stripSyncMetadata } from '../utils/syncProtocol';
+import { isMaterialArchived } from '../utils/materialLifecycle';
+import { isAuthNetworkUnavailable } from './authAvailability';
 import { confirmedStateForAppliedValue, confirmedStateForRemote, decideRemoteDocument } from '../utils/syncReconciliation';
 import {
   addRemoteResolutionKeys,
@@ -127,30 +100,14 @@ import {
 } from '../utils/syncResolutionStore';
 import {
   clearOfflineDomainProjection,
-  clearActiveOfflineMutationJournals,
-  commitActiveOfflineMutation,
-  deactivateOfflineDomainForUser,
-  deleteActiveOfflineMutationJournal,
   getActiveOfflineDomainUserId,
   IndexedDbOfflineDomainStore,
-  getActiveOfflineMutationJournalCount,
-  listValidatedActiveOfflineMutationJournals,
-  OFFLINE_DOMAIN_STORAGE_KEYS,
-  OFFLINE_LEGACY_MIGRATION_KEY,
-  OFFLINE_PROJECTION_OWNER_KEY,
   offlineProjectionStorage,
-  persistActiveOfflineDomainState,
-  persistSessionOwnedOfflineDomainProjection,
-  readActiveOfflineDomainSnapshot,
-  rollbackActiveOfflineMutationJournal,
   OfflineDomainSessionChangedError,
   OfflineDomainJournalRecoveryRequiredError,
   OfflineDomainProjectionRecoveryRequiredError,
 } from './offlineDomainStore';
-import { validateSyncMutationForDurability } from './syncCoordinator';
 import {
-  assertLogoutAuditOwnership,
-  executeFailSafeLogout,
   LogoutSingleFlight,
   type LogoutResult,
 } from './logoutCoordinator';
@@ -168,7 +125,7 @@ import {
   buildAuditLog,
   normalizeAuditLog,
 } from '../utils/auditPolicy';
-import { bindDiagnosticsSession, classifyError, recordDiagnostic } from './operationalDiagnostics';
+import { bindDiagnosticsSession } from './operationalDiagnostics';
 import { safeErrorDetail, safeResultMessage, safeUserMessage } from './safeUserMessage';
 import { clearUnattributedRuntimeAlert } from './unattributedRuntimeAlert';
 import { localDateString } from '../utils/localDate';
@@ -533,10 +490,134 @@ const assertProtectedCloudEnqueueAllowed = (): void => {
   }
 };
 
-const applyInventoryProjection = (operations: InventorySyncOperation[]): void => {
+// R8 requirement 3 (root cause): material documents are written to STORAGE_KEYS.MATERIALS only from
+// server-confirmed data (bootstrap/realtime reads or an inventory_commit acknowledgement). A queued, rejected or
+// unconfirmed request lives in this owner-scoped overlay instead; it stays visible (flagged syncPending) and is
+// dropped only by the server ACK or by an explicit cancellation of a definitively rejected request.
+const PENDING_MATERIALS_KEY = 'remix_materials_pending_v1';
+interface PendingMaterialEntry { mutationId: string; ownerUid: string; docId: string; kind: 'set' | 'delete'; value?: Record<string, unknown> }
+const readPendingMaterials = (): PendingMaterialEntry[] => {
+  try { const parsed = JSON.parse(localStorage.getItem(PENDING_MATERIALS_KEY) || '[]'); return Array.isArray(parsed) ? parsed : []; }
+  catch { return []; }
+};
+const writePendingMaterials = (rows: PendingMaterialEntry[]): void => {
+  if (rows.length) localStorage.setItem(PENDING_MATERIALS_KEY, JSON.stringify(rows));
+  else localStorage.removeItem(PENDING_MATERIALS_KEY);
+};
+const stageMaterialProjection = (op: InventorySyncOperation, meta: InventoryProjectionMeta): void => {
+  const others = readPendingMaterials().filter(row => !(row.mutationId === meta.mutationId && row.docId === op.docId));
+  if (meta.phase === 'cancel') { writePendingMaterials(readPendingMaterials().filter(row => row.mutationId !== meta.mutationId)); return; }
+  const ownerUid = getCurrentAuthUser()?.uid;
+  if (!ownerUid) throw new Error('INVENTORY_AUTH_REQUIRED');
+  writePendingMaterials([...others, { mutationId: meta.mutationId, ownerUid, docId: op.docId, kind: op.kind,
+    ...(op.kind === 'set' ? { value: { ...op.value, id: op.docId } } : {}) }]);
+};
+// R8-R1 (RT-R8-01): server-owned keys (derived stock + lifecycle) are NEVER taken from a pending value; they always come
+// from the confirmed row (mirrors inventory_private.server_owned_material_keys()).
+export const SERVER_OWNED_MATERIAL_KEYS = ['currentStock', 'warehouseStocks', 'warehouseStocksById', 'ledgerTotalStock',
+  'lifecycleStatus', 'lifecycleVersion', 'archivedAt', 'archivedBy', 'archivedByName', 'archiveReason', 'archivePurpose',
+  'reactivatedAt', 'reactivatedBy', 'reactivatedByName', 'reactivationReason'] as const;
+const businessFieldsOnly = (value: Record<string, unknown> | undefined): Record<string, unknown> => {
+  const out: Record<string, unknown> = { ...(value || {}) };
+  for (const key of SERVER_OWNED_MATERIAL_KEYS) delete out[key];
+  return out;
+};
+/**
+ * Working view used ONLY by write paths (expected documents of chained requests). UI consumers (Materials, Reports,
+ * Dashboard, transaction form) read the confirmed view (dataService.getMaterials) plus getPendingMaterialChanges().
+ */
+const overlayPendingMaterials = (items: Material[]): Material[] => {
+  const uid = getCurrentAuthUser()?.uid;
+  if (!uid) return items;
+  let next = items;
+  for (const entry of readPendingMaterials()) {
+    if (entry.ownerUid !== uid) continue;
+    const index = next.findIndex(item => item.id === entry.docId);
+    if (entry.kind === 'delete') { if (index >= 0) next = next.filter(item => item.id !== entry.docId); continue; }
+    const confirmed = index >= 0 ? next[index] as unknown as Record<string, unknown> : {};
+    const owned = Object.fromEntries(SERVER_OWNED_MATERIAL_KEYS.filter(key => key in confirmed).map(key => [key, confirmed[key]]));
+    const pending = { ...businessFieldsOnly(entry.value), ...owned, id: entry.docId, syncPending: true } as unknown as Material;
+    next = index >= 0 ? next.map((item, i) => (i === index ? pending : item)) : [pending, ...next];
+  }
+  return next;
+};
+// R8-R1 (R2-R8-08): every unconfirmed transaction write keeps the confirmed value it replaced, so a confirmed view can be
+// derived (stock, reports, dashboard, exports never include a queued, rejected or cancelled transaction).
+const PENDING_TRANSACTIONS_KEY = 'remix_transactions_pending_v1';
+interface PendingTransactionEntry { mutationId: string; docId: string; previous: Record<string, unknown> | null }
+const readPendingTransactions = (): PendingTransactionEntry[] => {
+  try { const parsed = JSON.parse(localStorage.getItem(PENDING_TRANSACTIONS_KEY) || '[]'); return Array.isArray(parsed) ? parsed : []; }
+  catch { return []; }
+};
+const writePendingTransactions = (rows: PendingTransactionEntry[]): void => {
+  if (rows.length) localStorage.setItem(PENDING_TRANSACTIONS_KEY, JSON.stringify(rows));
+  else localStorage.removeItem(PENDING_TRANSACTIONS_KEY);
+};
+const stageTransactionProjection = (op: InventorySyncOperation, meta: InventoryProjectionMeta): void => {
+  const entries = readPendingTransactions();
+  if (meta.phase === 'cancel') { writePendingTransactions(entries.filter(row => row.mutationId !== meta.mutationId)); return; }
+  if (entries.some(row => row.mutationId === meta.mutationId && row.docId === op.docId)) return; // resume: keep the first previous
+  const rows = JSON.parse(localStorage.getItem(STORAGE_KEYS.TRANSACTIONS) || '[]') as Record<string, unknown>[];
+  const previous = rows.find(row => row.id === op.docId) || null;
+  writePendingTransactions([...entries, { mutationId: meta.mutationId, docId: op.docId, previous }]);
+};
+const confirmedTransactionsView = <T extends { id: string }>(rows: T[]): T[] => {
+  const entries = readPendingTransactions();
+  if (!entries.length) return rows;
+  const first = new Map<string, PendingTransactionEntry>();
+  for (const entry of entries) if (!first.has(entry.docId)) first.set(entry.docId, entry);
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const row of rows) {
+    const entry = first.get(row.id);
+    if (!entry) { out.push(row); continue; }
+    seen.add(row.id);
+    if (entry.previous) out.push({ ...(entry.previous as unknown as T), id: row.id });
+  }
+  for (const entry of first.values()) if (!seen.has(entry.docId) && entry.previous) out.push({ ...(entry.previous as unknown as T), id: entry.docId });
+  return out;
+};
+/** R8-R1 (R2-R8-07): drop overlay/mirror entries whose request is no longer in the outbox (ACK lost, reload, cancel). */
+const pruneInventoryOverlays = (liveMutationIds: Set<string>): void => {
+  writePendingMaterials(readPendingMaterials().filter(row => liveMutationIds.has(row.mutationId)));
+  writePendingTransactions(readPendingTransactions().filter(row => liveMutationIds.has(row.mutationId)));
+};
+const confirmMaterialsFromAck = (ack: { audit: Record<string, unknown>; materials?: Record<string, unknown>[] }): void => {
+  const mutationId = String(ack.audit?.id || '');
+  if (mutationId) writePendingTransactions(readPendingTransactions().filter(row => row.mutationId !== mutationId));
+  const pending = readPendingMaterials();
+  const mine = pending.filter(row => row.mutationId === mutationId);
+  const projected = Array.isArray(ack.audit?.projectedMaterialIds) ? (ack.audit.projectedMaterialIds as unknown[]).map(String) : null;
+  if (!(Array.isArray(ack.materials) && projected) && mine.length === 0) return;
+  let rows = JSON.parse(localStorage.getItem(STORAGE_KEYS.MATERIALS) || '[]') as Record<string, unknown>[];
+  if (Array.isArray(ack.materials) && projected) {
+    // Server-confirmed rows (ledger projection recomputed in the same transaction) replace the local copy.
+    for (const raw of ack.materials) {
+      const row = { ...(stripSyncMetadata(raw) as Record<string, unknown>), id: String(raw.id) };
+      const index = rows.findIndex(item => item.id === row.id);
+      rows = index >= 0 ? rows.map((item, i) => (i === index ? row : item)) : [row, ...rows];
+    }
+    const deleted = (Array.isArray(ack.audit.affectedEntities) ? ack.audit.affectedEntities as unknown[] : [])
+      .map(String).filter(entity => entity.startsWith('materials/')).map(entity => entity.slice('materials/'.length))
+      .filter(id => !projected.includes(id));
+    if (deleted.length) rows = rows.filter(item => !deleted.includes(String(item.id)));
+  } else {
+    // Older server (no projection in the ACK): the confirmed request's own values are applied now, never before.
+    for (const entry of mine) {
+      rows = rows.filter(item => item.id !== entry.docId);
+      if (entry.kind === 'set' && entry.value) rows.unshift({ ...entry.value, id: entry.docId });
+    }
+  }
+  localStorage.setItem(STORAGE_KEYS.MATERIALS, JSON.stringify(rows));
+  writePendingMaterials(pending.filter(row => row.mutationId !== mutationId));
+};
+
+const applyInventoryProjection = (operations: InventorySyncOperation[], meta?: InventoryProjectionMeta): void => {
   for (const op of operations) {
     // Permissions are installed locally only after a canonical server read.
     if (op.collection === 'users') continue;
+    if (op.collection === 'materials' && meta) { stageMaterialProjection(op, meta); continue; }
+    if (op.collection === 'transactions' && meta) stageTransactionProjection(op, meta);
     const key = ({ materials: STORAGE_KEYS.MATERIALS, transactions: STORAGE_KEYS.TRANSACTIONS,
       generator_logs: STORAGE_KEYS.GENERATOR_LOGS, users: STORAGE_KEYS.USERS, audit_logs: STORAGE_KEYS.AUDIT_LOGS,
       settings: STORAGE_KEYS.SETTINGS } as Record<string, string>)[op.collection];
@@ -553,7 +634,9 @@ const applyInventoryProjection = (operations: InventorySyncOperation[]): void =>
     }
   }
 };
-const publishInventoryAck = (ack: { audit: Record<string, unknown> }): void => {
+const publishInventoryAck = (ack: { audit: Record<string, unknown>; materials?: Record<string, unknown>[] }): void => {
+  // R8-R1 (R2-R8-07): confirm first, so an unreadable audit receipt can never strand a stale overlay.
+  confirmMaterialsFromAck(ack);
   const log = normalizeAuditLog(ack.audit);
   if (!log) throw new Error('INVENTORY_ACK_INVALID');
   const logs = dataService.getAuditLogs().filter(row => row.id !== log.id);
@@ -739,7 +822,116 @@ const ensureCloudSettingsSeeded = async (
   }
 };
 
+const LIFECYCLE_ERRORS_AR: Record<string, string> = {
+  INVENTORY_ARCHIVE_NONZERO_STOCK: 'لا يمكن أرشفة مادة رصيدها في السجل غير صفري لأي غرض (ولا كبيانات اختبار)؛ يلزم صرف أو تحويل أو تسوية معتمدة أولًا.',
+  INVENTORY_RECONCILE_REQUIRED: 'الرصيد المخزن لهذه المادة يختلف عن سجل الحركات؛ لا يُصحَّح ضمنيًا. يلزم إجراء تسوية معتمد (reconcile) أولًا.',
+  INVENTORY_LIFECYCLE_STALE: 'تغيرت حالة المادة على الخادم؛ حدّث الصفحة ثم أعد المحاولة.',
+  INVENTORY_LIFECYCLE_DENIED: 'لا تملك صلاحية أرشفة المواد.',
+  INVENTORY_LIFECYCLE_INVALID: 'طلب الأرشفة غير صالح (السبب والغرض مطلوبان).',
+  INVENTORY_OPERATIONS_INVALID: 'الخادم الحالي لا يدعم الأرشفة بعد؛ لم يتغير شيء.',
+};
+const lifecycleErrorAr = (error: unknown): string => {
+  const raw = error instanceof Error ? error.message : String(error);
+  const key = Object.keys(LIFECYCLE_ERRORS_AR).find(code => raw.includes(code));
+  return key ? LIFECYCLE_ERRORS_AR[key] : 'تعذر تنفيذ طلب الأرشفة؛ لم يتغير شيء على الخادم.';
+};
+export { isMaterialArchived };
+// R8-R1 (RT-R8-04): the restore payload carries the backup's code registry, so a restore into a fresh environment keeps
+// every reservation (deleted codes included) and the server never re-issues a code.
+const restorePayloadOf = (b: { settings: unknown; materials: unknown; transactions: unknown; generatorLogs: unknown; users: unknown; codeRegistry?: { code: string; materialId: string; deleted?: boolean }[] }): Record<string, unknown> => ({
+  settings: b.settings, materials: b.materials, transactions: b.transactions, generatorLogs: b.generatorLogs, users: b.users,
+  ...(Array.isArray(b.codeRegistry) ? { codeRegistry: b.codeRegistry.map(r => ({ code: r.code, materialId: r.materialId, deleted: r.deleted === true })) } : {}),
+});
+
 export const dataService = {
+  isMaterialArchived,
+  /** Active (non-archived) materials: the default list for selectors, dashboards and active reports. */
+  getActiveMaterials: (): Material[] => dataService.getMaterials().filter(material => !isMaterialArchived(material)),
+  /** R8-R1 (RT-R8-01): the user's own unconfirmed material requests, shown separately and marked pending. */
+  getPendingMaterialChanges: (): { mutationId: string; docId: string; kind: 'set' | 'delete'; code?: string; name?: string; confirmed?: Material }[] => {
+    const uid = getCurrentAuthUser()?.uid;
+    const confirmed = dataService.getMaterials();
+    return readPendingMaterials().filter(entry => entry.ownerUid === uid).map(entry => ({
+      mutationId: entry.mutationId, docId: entry.docId, kind: entry.kind,
+      code: typeof entry.value?.code === 'string' ? entry.value.code : undefined,
+      name: typeof entry.value?.name === 'string' ? entry.value.name : undefined,
+      confirmed: confirmed.find(item => item.id === entry.docId),
+    }));
+  },
+  /** R8-R1 (R2-R8-08): ids of transactions whose current local value is not yet server-confirmed. */
+  getPendingTransactionIds: (): Set<string> => new Set(readPendingTransactions().map(entry => entry.docId)),
+  /**
+   * R8-R3 (R2-R8-E02): pending ids that have no confirmed snapshot (brand-new queued or rejected rows).
+   * A confirmed movement with a queued or rejected edit is NOT included — the register shows its confirmed version.
+   */
+  getUnconfirmedPendingTransactionIds: (): Set<string> => {
+    const pending = dataService.getPendingTransactionIds();
+    const confirmed = new Set(dataService.getConfirmedTransactions().map(t => t.id));
+    return new Set([...pending].filter(id => !confirmed.has(id)));
+  },
+  /** True when a confirmed movement has a queued or rejected edit on top. */
+  hasPendingTransactionEdit: (id: string): boolean => (
+    dataService.getPendingTransactionIds().has(id) && dataService.getConfirmedTransactions().some(t => t.id === id)
+  ),
+  /** Server-confirmed transactions only (queued/rejected writes replaced by the value they would change). */
+  getConfirmedTransactions: (): InventoryTransaction[] => confirmedTransactionsView(dataService.getTransactions()),
+  getArchivedMaterials: (): Material[] => dataService.getMaterials().filter(material => isMaterialArchived(material)),
+  /**
+   * R8-ARC-01: archive/reactivate through the server only (mode 'lifecycle'). Nothing is written locally until the
+   * server ACK returns the confirmed row; a queued request stays visible in the outbox.
+   */
+  setMaterialLifecycle: async (
+    materialId: string, action: 'archive' | 'reactivate', reason: string, purpose?: 'qa_test_data' | 'discontinued',
+  ): Promise<{ success: boolean; message: string; pending?: boolean }> => {
+    if (!dataService.hasPermission('materials_archive')) return { success: false, message: LIFECYCLE_ERRORS_AR.INVENTORY_LIFECYCLE_DENIED };
+    if (!isSupabaseConfigured() || !CLOUD_WRITES_ENABLED || !getCurrentAuthUser()) {
+      return { success: false, message: 'الأرشفة تتطلب جلسة مركزية متصلة بالخادم.' };
+    }
+    const material = dataService.getWorkingMaterials().find(item => item.id === materialId);
+    if (!material) return { success: false, message: 'المادة غير موجودة.' };
+    if (material.syncPending) return { success: false, message: 'للمادة تعديل لم يؤكده الخادم بعد؛ انتظر التأكيد أولاً.' };
+    const trimmed = reason.trim();
+    if (!trimmed) return { success: false, message: 'سبب الأرشفة/إعادة التفعيل مطلوب.' };
+    if (action === 'archive' && purpose !== 'qa_test_data' && purpose !== 'discontinued') return { success: false, message: LIFECYCLE_ERRORS_AR.INVENTORY_LIFECYCLE_INVALID };
+    if (action === 'archive' && isMaterialArchived(material)) return { success: false, message: 'المادة مؤرشفة بالفعل.' };
+    if (action === 'reactivate' && !isMaterialArchived(material)) return { success: false, message: 'المادة نشطة بالفعل.' };
+    const ledgerStock = Number(material.ledgerTotalStock ?? material.currentStock ?? 0);
+    // R8-R1 (R2-R8-01): nonzero stock is never archivable, whatever the purpose (the server enforces the same rule).
+    if (action === 'archive' && ledgerStock !== 0) return { success: false, message: LIFECYCLE_ERRORS_AR.INVENTORY_ARCHIVE_NONZERO_STOCK };
+    try {
+      const ack = await enqueueInventoryLifecycle({
+        action, materialId, expectedLifecycleVersion: Number(material.lifecycleVersion || 0), reason: trimmed,
+        ...(action === 'archive' ? { purpose } : {}),
+      }, createAuditId('domain'));
+      publishInventoryAck(ack);
+      dataService.notify();
+      return { success: true, message: action === 'archive' ? 'تمت أرشفة المادة بتأكيد الخادم.' : 'أعيد تفعيل المادة بتأكيد الخادم.' };
+    } catch (error) {
+      dataService.notify();
+      if (error instanceof InventoryPendingError) {
+        return { success: false, pending: true, message: 'الطلب محفوظ في قائمة الانتظار ولم يُطبّق بعد؛ سيُرسل عند توفر الاتصال.' };
+      }
+      return { success: false, message: lifecycleErrorAr(error) };
+    }
+  },
+  /** R8-CODE-01: the next code is allocated centrally (registry + all materials, archived included); never reused. */
+  suggestMaterialCode: async (category: string): Promise<string> => {
+    if (!isSupabaseConfigured() || !getCurrentAuthUser()) throw new Error('INVENTORY_CODE_SERVER_REQUIRED');
+    const next = await supabaseDb.nextMaterialCode(category);
+    return next.code;
+  },
+  /**
+   * R8-R1 (RT-R8-04): registry for a full backup. Cloud mode: required (an export without it would let a fresh-environment
+   * restore re-issue deleted codes), administrators only. Local-only mode: undefined.
+   */
+  getCodeRegistryForBackup: async (): Promise<{ code: string; materialId: string; deleted: boolean }[] | undefined> => {
+    // Local-only (no cloud): there is no central registry; the file is labelled partial by createBackup.
+    if (!isSupabaseConfigured()) return undefined;
+    // Cloud mode: a missing session must not produce an unlabelled "full" backup (RT-R8-D01).
+    if (!getCurrentAuthUser()) throw new Error('تعذر قراءة سجل الأكواد المركزي من الخادم؛ لا تُصدَّر نسخة كاملة بدونه (يلزم اتصال وصلاحيات المدير).');
+    try { return await supabaseDb.codeRegistry(); }
+    catch { throw new Error('تعذر قراءة سجل الأكواد المركزي من الخادم؛ لا تُصدَّر نسخة كاملة بدونه (يلزم اتصال وصلاحيات المدير).'); }
+  },
   listPendingInventoryMutations: () => listInventoryOutbox(),
   cancelRejectedInventoryMutations: async (): Promise<number> => {
     const count = await cancelRejectedInventoryOutbox(applyInventoryProjection);
@@ -1114,7 +1306,7 @@ export const dataService = {
       units: previous.units.map(u => type === 'unit' && u === oldValue ? newValue : u),
     };
     assertComposedSettingsViewModel(next as unknown as Record<string,unknown>);
-    const materials = dataService.getMaterials(); const transactions = dataService.getTransactions();
+    const materials = dataService.getWorkingMaterials(); const transactions = dataService.getTransactions();
     const changedMaterials = oldValue === newValue ? [] : materials.filter(m => type === 'category' ? m.category === oldValue : m.unit === oldValue);
     const changedTransactions = oldValue === newValue ? [] : transactions.filter(t => type === 'category' ? t.itemCategory === oldValue : t.unit === oldValue);
     if (changedMaterials.length && !dataService.hasPermission('materials_edit') || changedTransactions.length && !dataService.hasPermission('transactions_create')) throw new Error('تحديث السجلات المرتبطة يتطلب صلاحية تعديل الأصناف وتسجيل الحركات.');
@@ -1128,7 +1320,11 @@ export const dataService = {
   },
 
   // MATERIALS
-  getMaterials: (): Material[] => {
+  /** R8-R1 (RT-R8-01): server-confirmed materials with stock from confirmed transactions only. UI reads this. */
+  getMaterials: (): Material[] => dataService.materialsView(true),
+  /** Write paths only: confirmed rows with the user's pending business-field edits (never server-owned keys). */
+  getWorkingMaterials: (): Material[] => dataService.materialsView(false),
+  materialsView: (confirmedOnly: boolean): Material[] => {
     let data = localStorage.getItem(STORAGE_KEYS.MATERIALS);
     let items: Material[] = [];
     if (!data) {
@@ -1180,12 +1376,14 @@ export const dataService = {
     }
 
     // Calculate currentStock dynamically from canonical transaction warehouse ids.
-    const transactions = dataService.getTransactions();
+    const allTransactions = dataService.getTransactions();
+    const transactions = confirmedOnly ? confirmedTransactionsView(allTransactions) : allTransactions;
     const migratedItemsRaw = localStorage.getItem(STORAGE_KEYS.MATERIALS);
     if (migratedItemsRaw) {
       const reparsed = JSON.parse(migratedItemsRaw);
       if (Array.isArray(reparsed)) items = reparsed;
     }
+    if (!confirmedOnly) items = overlayPendingMaterials(items);
     const warehouseProjectionSettings = dataService.getSettings();
     const warehouseEntities = getStorehouseEntities(warehouseProjectionSettings);
     const warehouseById = new Map(warehouseEntities.map((entry) => [entry.id, entry] as const));
@@ -1237,7 +1435,7 @@ export const dataService = {
     const previousMaterialsRaw = localStorage.getItem(STORAGE_KEYS.MATERIALS);
     const previousTransactionsRaw = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
     const previousSettingsRaw = localStorage.getItem(STORAGE_KEYS.SETTINGS);
-    const materials = dataService.getMaterials();
+    const materials = dataService.getWorkingMaterials();
     if (materials.some(existing => existing.id === material.id)) throw new Error('MATERIAL_ID_COLLISION');
     if (materials.some(existing => existing.code.toLowerCase() === material.code.toLowerCase())) {
       throw new Error('UNIQUE_CODE_COLLISION');
@@ -1361,7 +1559,7 @@ export const dataService = {
     if (input.length + openings.length + 1 > 450) throw new Error('الدفعة أكبر من 450 سجلًا مرتبطًا؛ قسّم الملف قبل الاستيراد.');
     const settings = dataService.getSettings();
     const previousSettings = structuredClone(settings);
-    const existing = dataService.getMaterials();
+    const existing = dataService.getWorkingMaterials();
     const existingById = new Map(existing.map(m => [m.id, m]));
     const ids = new Set<string>(); const codes = new Set<string>();
     const prepared = input.map(raw => {
@@ -1407,7 +1605,7 @@ export const dataService = {
 
   saveMaterial: async (material: Material): Promise<void> => {
     const previousRaw = localStorage.getItem(STORAGE_KEYS.MATERIALS);
-    const materials = dataService.getMaterials();
+    const materials = dataService.getWorkingMaterials();
     const index = materials.findIndex((m) => m.id === material.id);
     const isNew = index === -1;
     const previousMaterial = isNew ? undefined : { ...materials[index] };
@@ -1464,7 +1662,7 @@ export const dataService = {
       };
     }
 
-    const materials = dataService.getMaterials();
+    const materials = dataService.getWorkingMaterials();
     const material = materials.find((m) => m.id === id);
     if (!material) return { success: false, message: 'المادة غير موجودة' };
     const toDelete = hasTransactions && force ? transactions.filter((t) => t.itemId === id) : [];
@@ -1517,7 +1715,7 @@ export const dataService = {
     const startRange = catConfig ? Number(catConfig.startRange) : 1000;
     const endRange = catConfig ? Number(catConfig.endRange) : 9999;
 
-    const items = dataService.getMaterials();
+    const items = dataService.getWorkingMaterials();
     const codes = items
       .map((item) => {
         const regex = new RegExp(`^${prefix}-?(\\d+)$`, 'i');
@@ -1610,7 +1808,7 @@ export const dataService = {
     const settings = dataService.getSettings();
     const previousSettings = JSON.parse(JSON.stringify(settings)) as AppSettings;
     const warehouseEntities = getStorehouseEntities(settings);
-    const materials = dataService.getMaterials();
+    const materials = dataService.getWorkingMaterials();
     const materialMap = new Map(materials.map((material) => [material.id, material] as const));
     const existingById = new Map(existing.map((tx) => [tx.id, tx] as const));
     const requestedIds = new Set<string>();
@@ -1986,7 +2184,7 @@ export const dataService = {
       updatedAt: now,
     };
     const next = [...transactions.filter((tx) => tx.id !== original.id), replacement];
-    const integrity = validateInventoryDataset(next, { materials: dataService.getMaterials(), storehouses: getStorehouseEntities(settings) });
+    const integrity = validateInventoryDataset(next, { materials: dataService.getWorkingMaterials(), storehouses: getStorehouseEntities(settings) });
     const legacyTransferIds = new Set(next.filter((tx) => tx.transactionType === 'تحويل' && !tx.operationId && !tx.pairedTransactionId).map((tx) => tx.id));
     const blocking = integrity.errors.filter((error) => !(error.code === 'TRANSFER_OPERATION_REQUIRED' && !!error.transactionId && legacyTransferIds.has(error.transactionId)));
     if (blocking.length) {
@@ -2028,13 +2226,13 @@ export const dataService = {
     return { success: result.success, message: result.message };
   },
   getStorehouseInitialStock: (itemId: string, storehouse: string | undefined): number => {
-    const materials = dataService.getMaterials();
+    const materials = dataService.getMaterials(); // R8-R1: reports read confirmed data only
     const item = materials.find((m) => m.id === itemId);
     if (!item) return 0;
     const stockWarehouseSettings = dataService.getSettings();
     const activeIds = new Set(getStorehouseEntities(stockWarehouseSettings).filter((entry) => entry.active).map((entry) => entry.id));
     const defaultId = item.primaryStorehouseId || getStorehouseByReference(stockWarehouseSettings, item.storageLocation, true)?.id;
-    const initTransactions = dataService.getTransactions().filter((t) => t.itemId === itemId && (t.id.startsWith('tr-init') || t.transactionType === 'افتتاحي'));
+    const initTransactions = dataService.getConfirmedTransactions().filter((t) => t.itemId === itemId && (t.id.startsWith('tr-init') || t.transactionType === 'افتتاحي'));
     const txWarehouseId = (tx: InventoryTransaction) => tx.storehouseId || getStorehouseByReference(stockWarehouseSettings, tx.storehouse, true)?.id;
 
     if (storehouse && storehouse !== 'all') {
@@ -2055,14 +2253,23 @@ export const dataService = {
     return 0;
   },
 
+  /**
+   * R8-R1 (R2-R8-08): balance used by the transaction form and every stock check = the server-confirmed balance, reduced
+   * (never increased) by this device's queued requests. An unconfirmed inflow can never be issued before it is confirmed.
+   */
   getStorehouseStockExcludingTransaction: (itemId: string, storehouse: string | undefined, excludeTxId: string): number => {
-    const materials = dataService.getMaterials();
+    const confirmed = dataService.stockFromView(true, itemId, storehouse, excludeTxId);
+    if (!readPendingTransactions().length && !readPendingMaterials().length) return confirmed;
+    return Math.min(confirmed, dataService.stockFromView(false, itemId, storehouse, excludeTxId));
+  },
+  stockFromView: (confirmedOnly: boolean, itemId: string, storehouse: string | undefined, excludeTxId: string): number => {
+    const materials = confirmedOnly ? dataService.getMaterials() : dataService.getWorkingMaterials();
     const item = materials.find((m) => m.id === itemId);
     if (!item) return 0;
     const stockWarehouseSettings = dataService.getSettings();
     const activeIds = new Set(getStorehouseEntities(stockWarehouseSettings).filter((entry) => entry.active).map((entry) => entry.id));
     const defaultId = item.primaryStorehouseId || getStorehouseByReference(stockWarehouseSettings, item.storageLocation, true)?.id;
-    const allItemTxs = dataService.getTransactions().filter((t) => t.itemId === itemId);
+    const allItemTxs = (confirmedOnly ? dataService.getConfirmedTransactions() : dataService.getTransactions()).filter((t) => t.itemId === itemId);
     const excludedTx = allItemTxs.find((t) => t.id === excludeTxId);
     const isExcludedTxInit = !!excludedTx && (excludedTx.id.startsWith('tr-init') || excludedTx.transactionType === 'افتتاحي');
     const itemTxs = allItemTxs.filter((t) => t.id !== excludeTxId);
@@ -2090,9 +2297,11 @@ export const dataService = {
   },
 
   getItemStock: (itemId: string, _itemType: string | undefined): number => {
-    const materials = dataService.getMaterials();
-    const found = materials.find((m) => m.id === itemId);
-    return found ? found.currentStock : 0;
+    // R8-R2 (RT-R8-D04): same conservative rule as getStorehouseStockExcludingTransaction — the lower of
+    // the server-confirmed ledger and the working (pending-aware) ledger. A pending outbound lowers the
+    // form balance; a pending inbound never raises it. (Comparing material.currentStock is not enough:
+    // that field is server-owned, so confirmed and working copies are equal.)
+    return dataService.getStorehouseStockExcludingTransaction(itemId, undefined, 'non-existent-id');
   },
 
   getItemStockByStorehouse: (itemId: string, storehouse: string): number => {
@@ -2278,9 +2487,9 @@ export const dataService = {
 
       clearProtectedCloudEnqueueBlock();
       return { success: true, user: cleanUser, message: 'تم استرداد ملف المستخدم بنجاح.' };
-    } catch (err: any) {
-      const msg = String(err?.message || '').toLowerCase();
-      if (msg.includes('network') || msg.includes('fetch') || msg.includes('offline')) {
+    } catch (err: unknown) {
+      // R8-AUTH-01: keep the session, local data and outbox when the server is merely unreachable.
+      if (isAuthNetworkUnavailable(err)) {
         return { success: false, message: 'NETWORK_UNAVAILABLE:تعذر الوصول إلى الخادم للتحقق من ملف المستخدم.' };
       }
       await supabaseAuthSignOut().catch(() => {});
@@ -2305,6 +2514,8 @@ export const dataService = {
       if (pending.length > 0) {
         if (await getOutstandingSyncWorkCount() > pending.length + pendingCloudWritesCount) throw new Error('INVENTORY_SESSION_CHANGED');
         if (pending.some(row => row.userId !== authUser.uid)) throw new Error('INVENTORY_SESSION_CHANGED');
+        // R8-R1 (R2-R8-07/RT-R8-10): overlay entries exist only for requests still in the outbox; resume re-stages them.
+        pruneInventoryOverlays(new Set(pending.map(row => row.id)));
         await resumeInventoryProjection(applyInventoryProjection);
         return { success: true, status: 'pending-local', message: 'توجد طلبات محفوظة على الجهاز تنتظر الإقرار؛ راجع لوحة المزامنة.' };
       }
@@ -2313,6 +2524,8 @@ export const dataService = {
         throw new Error('على هذا الجهاز طلبات محفوظة لحساب آخر لم يؤكدها الخادم بعد. لن تُرسل باسمك ولن تُحذف. اطلب من صاحب تلك الطلبات تسجيل الدخول على هذا الجهاز لإرسالها، ثم سجّل دخولك.');
       }
       await assertNoOutstandingSyncWork(false);
+      // R8-R1 (R2-R8-07): an empty outbox means nothing is unconfirmed; any leftover overlay is stale.
+      pruneInventoryOverlays(new Set());
       let materials: Material[] = [];
       let transactions: InventoryTransaction[] = [];
       let settings: AppSettings | null = null;
@@ -2492,7 +2705,7 @@ export const dataService = {
         // QA-20261106 SES-03: do not leave the signed-out account's business data readable on a shared device.
         // Pending writes live in the IndexedDB outbox (not these keys) and are untouched.
         for (const key of [STORAGE_KEYS.MATERIALS, STORAGE_KEYS.PESTICIDES, STORAGE_KEYS.TRANSACTIONS,
-          STORAGE_KEYS.AUDIT_LOGS, STORAGE_KEYS.USERS, STORAGE_KEYS.GENERATOR_LOGS]) {
+          STORAGE_KEYS.AUDIT_LOGS, STORAGE_KEYS.USERS, STORAGE_KEYS.GENERATOR_LOGS, PENDING_MATERIALS_KEY, PENDING_TRANSACTIONS_KEY]) {
           localStorage.removeItem(key);
         }
       } catch {
@@ -3028,7 +3241,7 @@ export const dataService = {
     try {
       await assertNoOutstandingSyncWork();
       const operations: SyncOperation[] = [settingsRootSyncOp(dataService.getSettings(), dataService.getSettings())];
-      for (const [collection, rows] of [ ['materials', dataService.getMaterials()], ['transactions', dataService.getTransactions()], ['generator_logs', dataService.getGeneratorLogs()] ] as const) {
+      for (const [collection, rows] of [ ['materials', dataService.getWorkingMaterials()], ['transactions', dataService.getTransactions()], ['generator_logs', dataService.getGeneratorLogs()] ] as const) {
         for (const row of rows) operations.push(createSyncSetOperation(collection, row.id, row as unknown as Record<string, unknown>, row as unknown as Record<string, unknown>));
       }
       if (operations.length > 450) return { success: false, message: 'حجم الدمج يتجاوز حد العملية الواحدة؛ صدّر نسخة محلية واستخدم الاستعادة المعاينة.' };
@@ -3043,7 +3256,7 @@ export const dataService = {
     const check = await validateBackup(parsed);
     if (!check.success || !check.backup) throw new Error('INVENTORY_BACKUP_INVALID');
     const b = check.backup;
-    const backup = { settings: b.settings, materials: b.materials, transactions: b.transactions, generatorLogs: b.generatorLogs, users: b.users } as unknown as Record<string, unknown>;
+    const backup = restorePayloadOf(b);
     return supabaseDb.previewRestore(backup);
   },
 
@@ -3055,7 +3268,7 @@ export const dataService = {
     try {
       await assertNoOutstandingSyncWork();
       const b = check.backup;
-      const backup = { settings: b.settings, materials: b.materials, transactions: b.transactions, generatorLogs: b.generatorLogs, users: b.users } as unknown as Record<string, unknown>;
+      const backup = restorePayloadOf(b);
       const ack = await enqueueInventoryRestore(backup, preview.expectedState);
       publishInventoryAck(ack);
       try {
@@ -3302,7 +3515,7 @@ export const dataService = {
     notes: string,
     transactionDate?: string
   ): Promise<{ success: boolean; message: string }> => {
-    const materials = dataService.getMaterials();
+    const materials = dataService.getWorkingMaterials();
     const item = materials.find((material) => material.id === itemId);
     if (!item) return { success: false, message: 'الصنف غير موجود' };
 
@@ -3866,6 +4079,7 @@ export async function initCloudSync() {
     }
     try {
       if (await getOutstandingSyncWorkCount() > 0) return;
+      pruneInventoryOverlays(new Set()); // R8-R1 (R2-R8-07): pull with no outstanding work clears any stale overlay
       if (table === 'settings') {
         const remoteSettings = await supabaseDb.getDoc<Record<string, unknown>>('settings', 'app_config');
         if (remoteSettings && cloudSyncGeneration === sessionGeneration && await getOutstandingSyncWorkCount() === 0) {
@@ -3898,7 +4112,7 @@ export async function initCloudSync() {
         const rows = await supabaseDb.getCollection<InventoryTransaction>('transactions');
         if (cloudSyncGeneration === sessionGeneration && await getOutstandingSyncWorkCount() === 0) {
           const currentSettings = dataService.getSettings();
-          const currentMaterials = dataService.getMaterials();
+          const currentMaterials = dataService.getWorkingMaterials();
           const cleaned = rows.map(r => ({ ...(stripSyncMetadata(r) as unknown as InventoryTransaction), id: r.id }));
           const normalized = migrateWarehouseModel({
             settings: currentSettings,

@@ -69,7 +69,7 @@ export default function MaterialFormDialog({ open, onClose, selectedMaterial, on
   useEffect(() => {
     if (open) {
       setSettings(dataService.getSettings());
-      setMaterials(dataService.getMaterials());
+      setMaterials(dataService.getWorkingMaterials());
     }
   }, [open]);
 

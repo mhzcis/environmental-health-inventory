@@ -34,6 +34,7 @@ export const ALL_MANAGED_PERMISSIONS: string[] = [
   'materials_edit',
   'materials_delete',
   'materials_stocktake',
+  'materials_archive',
   'transactions_view',
   'transactions_create',
   'transactions_delete',
@@ -49,6 +50,7 @@ export const ALL_MANAGED_PERMISSIONS: string[] = [
 ];
 
 const MANAGED_PERMISSION_IDS = new Set(ALL_MANAGED_PERMISSIONS);
+
 
 export const validateCanonicalManagedUser = (
   documentId: string,

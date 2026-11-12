@@ -67,6 +67,8 @@ const CONTEXT_FALLBACK_CATEGORY: Readonly<Record<SafeMessageContext, DiagnosticC
 
 /** Fixed Arabic text per domain-code prefix. Longest matching prefix wins; first entry of a tie wins. */
 const DOMAIN_RULES: ReadonlyArray<readonly [prefix: string, text: string]> = [
+  ['INVENTORY_RESTORE_REGISTRY_INVALID', 'سجل الأكواد في النسخة يحتوي حجوزات غير صالحة (خارج المدى أو غير متصلة بالمواد والحركات). رُفضت الاستعادة ولم يتغير شيء.'],
+  ['INVENTORY_RESTORE_REGISTRY_REQUIRED', 'لا يمكن استعادة هذه النسخة لأنها لا تحتوي سجل الأكواد المركزي.'],
   ['INVENTORY_PENDING', 'الطلب محفوظ على هذا الجهاز وينتظر الإقرار المركزي. راجع لوحة المزامنة قبل إعادة إدخاله.'],
   ['INVENTORY_CONFLICT', 'تغيرت البيانات على الخادم؛ احتفظ بالطلب وراجعه من لوحة المزامنة.'],
   ['INVENTORY_', 'تعذر اعتماد الطلب. راجع البيانات والصلاحيات وحالة المزامنة.'],

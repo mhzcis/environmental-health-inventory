@@ -76,7 +76,14 @@ export const migrateWarehouseModel = (input: WarehouseMigrationInput): Warehouse
   if (entities.filter((item) => item.active).length === 0) errors.push('WAREHOUSE_NO_ACTIVE_ENTITY');
 
   const byId = new Map(entities.map((item) => [item.id, item] as const));
+  // R8 root cause of WAREHOUSE_MIGRATION_BLOCKED / MATERIAL_STOCK_CONFLICT: currentStock, warehouseStocks and
+  // warehouseStocksById are PROJECTIONS of the ledger (server-owned since R8). For a material that has ledger rows
+  // (or a server-computed projection) they are not independent inputs, so a disagreement between two stale caches
+  // must not block the whole device; reads recompute from the ledger. Strict conflict detection stays for legacy
+  // pre-ledger records, whose cached maps are the only stock evidence.
+  const ledgerItemIds = new Set(input.transactions.map((transaction) => transaction.itemId));
   const materials = input.materials.map((material) => {
+    const derivedOnly = ledgerItemIds.has(material.id) || typeof (material as Material & { ledgerTotalStock?: unknown }).ledgerTotalStock === 'number';
     let changed = false;
     let primary = material.primaryStorehouseId ? byId.get(material.primaryStorehouseId) : undefined;
     let detail = material.storageLocationDetail;
@@ -139,6 +146,11 @@ export const migrateWarehouseModel = (input: WarehouseMigrationInput): Warehouse
       }
       const previous = canonicalStocks[resolved.storehouse.id];
       if (previous !== undefined && !sameNumber(previous, quantity)) {
+        if (derivedOnly) {
+          // Both maps are stale caches of the same ledger: keep the id-keyed value, report, never block.
+          warnings.push(`MATERIAL_STOCK_CACHE_SUPERSEDED_BY_LEDGER:${material.id}:${resolved.storehouse.id}:${previous}:${quantity}`);
+          continue;
+        }
         errors.push(`MATERIAL_STOCK_CONFLICT:${material.id}:${resolved.storehouse.id}:${previous}:${quantity}`);
         continue;
       }

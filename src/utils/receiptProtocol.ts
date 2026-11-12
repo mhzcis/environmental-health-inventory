@@ -59,6 +59,8 @@ const ROOT_PAYLOAD_KEYS: Record<string, ReadonlySet<string>> = {
     'storageLocation', 'primaryStorehouseId', 'storageLocationDetail', 'warehouseStocks',
     'warehouseStocksById', 'notes', 'createdAt', 'updatedAt', 'type', 'manufacturer',
     'productionDate', 'expiryDate', 'hazardLevel',
+    'ledgerTotalStock', 'lifecycleStatus', 'lifecycleVersion', 'archivedAt', 'archivedBy', 'archivedByName',
+    'archiveReason', 'archivePurpose', 'reactivatedAt', 'reactivatedBy', 'reactivatedByName', 'reactivationReason',
   ]),
   transactions: new Set([
     'id', 'transactionNumber', 'date', 'itemType', 'itemId', 'itemCode', 'itemName',

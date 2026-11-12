@@ -2,13 +2,13 @@ import { requireStableStringPart } from '../utils/printHtml';
 import { buildTotalStockIndex, isLowStockByTotal } from '../utils/lowStock';
 import { safeErrorDetail, safeUserMessage } from '../services/safeUserMessage';
 import { exportToPDF } from '../utils/printHtml';
-import { Fragment, useState, useEffect, useMemo } from 'react';
+import { Fragment, useState, useEffect, useMemo, useRef } from 'react';
 import NotificationToast from '../components/NotificationToast';
 import { 
   Box, Typography, Paper, Grid, MenuItem, Button, Table, TableBody, 
   TableCell, TableContainer, TableHead, TableRow, TablePagination, TextField, 
   Divider, Card, Chip, IconButton, Tooltip, Alert,
-  Dialog, DialogTitle, DialogContent
+  Dialog, DialogTitle, DialogContent, Checkbox
 } from '@mui/material';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import PrintIcon from '@mui/icons-material/Print';
@@ -24,6 +24,7 @@ import DownloadIcon from '@mui/icons-material/Download';
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 import { dataService } from '../services/dataService';
+import { isMaterialArchived, scopeTransactionsByArchive, archivedRowsLast } from '../utils/materialLifecycle';
 import { buildMaterialWarehouseView, buildOpeningStockReportView, buildTransactionLedger } from '../utils/inventoryLogic';
 import { useStorehouse } from '../context/StorehouseContext';
 import { InventoryTransaction } from '../types';
@@ -37,7 +38,7 @@ import { downloadPreparedMessage, isDownloadAbortError } from '../utils/download
 type ReportType = 'inventory' | 'low_stock' | 'expiry_warning' | 'transactions' | 'category_summary' | 'opening_stock' | 'generator_log';
 
 export default function Reports() {
-  const { selectedStorehouse } = useStorehouse();
+  const { selectedStorehouse, scopeFallback } = useStorehouse();
   const getDisplayStorageLocation = (item: any) => {
     if (item.isSubRow) {
       return item.storageLocation || 'المخزن الرئيسي';
@@ -82,9 +83,16 @@ export default function Reports() {
       setErrorMessage('لا تمتلك صلاحية عرض بيانات هذا التقرير أو إخراجه.');
       return false;
     }
+    // R8-WH-01: no unnoticed all-warehouse report after the selected warehouse was disabled/removed.
+    if (scopeFallback) {
+      setErrorMessage(`المستودع المختار سابقاً «${scopeFallback.previousName}» لم يعد فعالاً. اختر مستودعاً أو أكّد «جميع المستودعات» قبل التصدير أو الطباعة.`);
+      return false;
+    }
     return true;
   };
   const [materials, setMaterials] = useState<any[]>([]);
+  // R8-ARC-01: active reports exclude archived materials unless the user explicitly includes them (labelled).
+  const [includeArchived, setIncludeArchived] = useState(false);
   const [transactions, setTransactions] = useState<InventoryTransaction[]>([]);
   const [generatorLogs, setGeneratorLogs] = useState<any[]>([]);
   const [settings, setSettings] = useState(dataService.getSettings());
@@ -149,9 +157,17 @@ export default function Reports() {
     return dataService.subscribe(load);
   }, []);
 
+  const includeArchivedRef = useRef(includeArchived);
+  useEffect(() => { includeArchivedRef.current = includeArchived; loadData(); }, [includeArchived]);
+  // R8-R1 (RT-R8-01/R2-R8-08): reports read server-confirmed data only; queued or rejected requests are counted separately.
+  const [unconfirmedCount, setUnconfirmedCount] = useState(0);
   const loadData = () => {
-    setMaterials(dataService.hasPermission('materials_view') ? dataService.getMaterials() : []);
-    setTransactions(dataService.hasPermission('transactions_view') ? dataService.getTransactions() : []);
+    const confirmedMaterials = dataService.hasPermission('materials_view') ? dataService.getMaterials() : [];
+    setMaterials(confirmedMaterials.filter(m => includeArchivedRef.current || !isMaterialArchived(m)).map(m => (isMaterialArchived(m) ? { ...m, name: `${m.name} (مؤرشف)` } : m)));
+    // R8-R1 (R2-R8-02): archived materials' movements are excluded by default (report, Excel, PDF); included only on request, labelled and listed last.
+    setTransactions(dataService.hasPermission('transactions_view')
+      ? scopeTransactionsByArchive(dataService.getConfirmedTransactions(), confirmedMaterials, includeArchivedRef.current) : []);
+    setUnconfirmedCount(dataService.getPendingTransactionIds().size + dataService.getPendingMaterialChanges().length);
     setGeneratorLogs(dataService.hasPermission('generator_log') ? dataService.getGeneratorLogs() : []);
     setSettings(dataService.getSettings());
   };
@@ -245,7 +261,7 @@ export default function Reports() {
       
       case 'transactions': {
         const ledger = buildTransactionLedger(transactions, selectedStorehouse, settings.storehouses, materials);
-        return ledger.filter(t => {
+        const filtered = ledger.filter(t => {
           let matches = true;
           if (transactionTypeFilter !== 'all' && t.transactionType !== transactionTypeFilter) matches = false;
           if (itemIdFilter !== 'all' && t.itemId !== itemIdFilter) matches = false;
@@ -262,6 +278,8 @@ export default function Reports() {
           }
           return matches;
         });
+        // R8-R1 (R2-R8-02): included archived movements are always listed after the active ones (and labelled).
+        return archivedRowsLast(filtered as (typeof filtered[number] & { archivedMaterial?: boolean })[]);
       }
 
       case 'category_summary': {
@@ -521,7 +539,7 @@ export default function Reports() {
       worksheet.addRow([]); // Blank spacer
 
       // 2. Merged Title Row
-      const titleRow = worksheet.addRow([titleHeader]);
+      const titleRow = worksheet.addRow([`${titleHeader} — ${selectedStorehouse === 'all' ? 'جميع المستودعات (الإجمالي)' : `مستودع: ${selectedStorehouse}`}`]);
       titleRow.height = 35;
       worksheet.mergeCells(4, 1, 4, headers.length);
       const titleCell = titleRow.getCell(1);
@@ -923,7 +941,9 @@ export default function Reports() {
         orientation: reportType === 'transactions' ? 'landscape' : 'portrait',
         metaFields: [
           { label: 'تصنيف التقرير وعائلته:', value: reportType === 'inventory' ? 'مسرد الجرد الفعلي العام للعهود' : reportType === 'low_stock' ? 'تنبيهات نقص المخزون الحرج' : reportType === 'expiry_warning' ? 'متابعة نفاذ الصلاحية وضمان الجودة' : reportType === 'transactions' ? 'دفتر اليومية وحركات الصرف والتوريد' : reportType === 'opening_stock' ? 'سند توثيق الأرصدة الافتتاحية للمخزون' : reportType === 'generator_log' ? 'سجل متابعة وقراءات عداد المولد' : 'مصفوفة ملخص الفئات والمستودعات' },
-          { label: 'تعداد السجلات المدرجة:', value: `${currentReportData.length} سجل حركي دفتري` }
+          { label: 'تعداد السجلات المدرجة:', value: `${currentReportData.length} سجل حركي دفتري` },
+          // R8-WH-01: the warehouse scope is always printed (an all-warehouse report is never unlabelled).
+          { label: 'نطاق المستودعات:', value: selectedStorehouse === 'all' ? 'جميع المستودعات (الإجمالي)' : selectedStorehouse }
         ],
         tables: [
           {
@@ -1128,6 +1148,15 @@ export default function Reports() {
                 <MenuItem key={m.id} value={m.id}>{renderOption(`${m.name} (${m.code})`, "item")}</MenuItem>
               ))}
             </TextField>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
+              <Checkbox size="small" checked={includeArchived} onChange={(e) => { setIncludeArchived(e.target.checked); setPage(0); }} slotProps={{ input: { 'aria-label': 'تضمين الأصناف المؤرشفة' } }} />
+              <Typography variant="caption">تضمين الأصناف المؤرشفة (موسومة «مؤرشف»)</Typography>
+            </Box>
+            {unconfirmedCount > 0 && (
+              <Alert severity="info" sx={{ mt: 1, py: 0 }} data-testid="reports-unconfirmed-note">
+                {`يوجد ${unconfirmedCount} طلب لم يؤكده الخادم بعد؛ التقرير وتصديره يعرضان البيانات المؤكدة فقط ولا يشملان هذه الطلبات.`}
+              </Alert>
+            )}
           </Grid>
 
           <Grid size={{ xs: 12, sm: 6, md: 3 }}>
@@ -1606,6 +1635,7 @@ export default function Reports() {
             {categoryFilter !== 'all' && <Chip label={`الفئة: ${categoryFilter}`} size="small" variant="outlined" sx={{ fontWeight: 'bold' }} />}
             {itemIdFilter !== 'all' && <Chip label={`صنف معين`} size="small" variant="outlined" sx={{ fontWeight: 'bold' }} />}
             {selectedStorehouse !== 'all' && <Chip label={`مستودع: ${selectedStorehouse}`} size="small" variant="outlined" sx={{ fontWeight: 'bold' }} />}
+            {selectedStorehouse === 'all' && <Chip data-testid="report-scope-all" label="النطاق: جميع المستودعات (الإجمالي)" size="small" color="warning" variant="outlined" sx={{ fontWeight: 'bold' }} />}
             {transactionTypeFilter !== 'all' && <Chip label={`الحركة: ${transactionTypeFilter}`} size="small" variant="outlined" sx={{ fontWeight: 'bold' }} />}
             {(dateFrom || dateTo) && <Chip label={`تاريخ مخصص`} size="small" variant="outlined" sx={{ fontWeight: 'bold' }} />}
             {partnerFilter !== 'all' && <Chip label={`الجهة/الشريك: ${partnerFilter}`} size="small" variant="outlined" sx={{ fontWeight: 'bold' }} />}

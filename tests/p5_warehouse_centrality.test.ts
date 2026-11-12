@@ -132,7 +132,8 @@ describe('P5-D active-scope UI consistency', () => {
   });
   it('exports selected movements from the scoped ledger and clears selections on scope change', () => {
     const source = fs.readFileSync('src/pages/Transactions.tsx', 'utf8');
-    expect(source.match(/const selectedItems = ledgerTransactions.filter/g)?.length).toBe(2);
+    expect(source).toContain('const ledgerTransactions = buildTransactionLedger');
+    expect(source.match(/const selectedItems = filteredTransactions.filter/g)?.length).toBe(2);
     expect(source).toContain('setSelectedTransactionIds([])');
   });
   it('global selector is backed by active warehouse entities', () => {

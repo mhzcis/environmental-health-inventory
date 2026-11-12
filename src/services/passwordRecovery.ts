@@ -30,7 +30,8 @@ export function createPasswordRecovery(storage: Storage = window.sessionStorage,
   let disposed = false;
   let notifyRecovery: () => void = () => {};
   const recoveryEvent = new Promise<void>(resolve => { notifyRecovery = resolve; });
-  const { data: { subscription } } = client.auth.onAuthStateChange((event, session) => {
+  // R8-R1 (R2-R8-06): without an auth listener no recovery event can ever arrive, so initialize() fails closed.
+  const listener = typeof client.auth?.onAuthStateChange === 'function' ? client.auth.onAuthStateChange((event, session) => {
     if (disposed) return;
     if (event === 'PASSWORD_RECOVERY' && session && (!hasCallback || expectsRecovery)) {
       owner = session.user.id;
@@ -40,11 +41,14 @@ export function createPasswordRecovery(storage: Storage = window.sessionStorage,
       owner = null;
       storage.removeItem(OWNER_KEY);
     }
-  });
+  }) : null;
+  const subscription = listener?.data?.subscription;
 
   const verifyOwner = async (): Promise<string> => {
     const expected = owner;
     if (!expected || passwordChanged || disposed) throw new Error('RECOVERY_LINK_INVALID');
+    // R8-R1 (R2-R8-06): a client without getUser fails closed (never an unhandled TypeError).
+    if (typeof client.auth?.getUser !== 'function') throw new Error('RECOVERY_LINK_INVALID');
     const { data, error } = await client.auth.getUser();
     if (error || !data.user || data.user.id !== expected || owner !== expected || disposed) {
       throw new Error('RECOVERY_LINK_INVALID');
@@ -56,6 +60,7 @@ export function createPasswordRecovery(storage: Storage = window.sessionStorage,
     initialize(): Promise<void> {
       initialization ??= (async () => {
         if (hasCallback && !expectsRecovery) throw new Error('RECOVERY_LINK_INVALID');
+        if (!listener || typeof client.auth?.getSession !== 'function') throw new Error('RECOVERY_LINK_INVALID');
         const { data, error } = await client.auth.getSession();
         if (error || !data.session) throw new Error('RECOVERY_LINK_INVALID');
         // auth-js resolves getSession before its setTimeout-delivered PASSWORD_RECOVERY.
@@ -92,7 +97,7 @@ export function createPasswordRecovery(storage: Storage = window.sessionStorage,
         } catch { return { signedOut: false }; }
       } finally { updating = false; }
     },
-    dispose() { disposed = true; notifyRecovery(); subscription.unsubscribe(); },
+    dispose() { disposed = true; notifyRecovery(); subscription?.unsubscribe(); },
   };
 }
 

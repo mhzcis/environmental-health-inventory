@@ -4,9 +4,9 @@ import {afterEach,beforeEach,describe,it,expect,vi} from 'vitest';
 import {cleanup,render,screen,fireEvent,waitFor} from '@testing-library/react';
 import {Blob as NodeBlob} from 'node:buffer';
 import ExcelJS from 'exceljs';
-const fake=vi.hoisted(()=>({materials:[] as any[],transactions:[] as any[],logs:[] as any[],warehouse:'all',permissions:true,denied:[] as string[],blocked:false,retry:vi.fn(),pdf:vi.fn(),save:vi.fn()}));
-vi.mock('../src/services/dataService',()=>({dataService:{getSettings:()=>({organizationName:'QA معزول',departmentName:'QA فحص',expiryWarningThresholdDays:30,categories:[{name:'QA-C1'},{name:'QA-C2'}],units:['قطعة'],storehouses:['QA-A','QA-B'],partners:[]}),getMaterials:()=>fake.materials,getTransactions:()=>fake.transactions,getGeneratorLogs:()=>fake.logs,subscribe:()=>()=>{},hasPermission:(p:string)=>fake.permissions&&!fake.denied.includes(p),listPendingInventoryMutations:async()=>[{id:'qa-pending',status:fake.blocked?'blocked':'pending',operations:[],transport:'supabase-v1'}],retryPendingInventoryMutations:()=>fake.retry(),getOpeningStockAttachment:()=>null,getStorehouseInitialStock:(id:string,wh:string)=>fake.materials.find(m=>m.id===id)?.initialStocks?.[wh]||0}}));
-vi.mock('../src/context/StorehouseContext',()=>({useStorehouse:()=>({selectedStorehouse:fake.warehouse,activeStorehouses:['QA-A','QA-B']})}));
+const fake=vi.hoisted(()=>({fallback:null as any,materials:[] as any[],transactions:[] as any[],logs:[] as any[],warehouse:'all',permissions:true,denied:[] as string[],blocked:false,retry:vi.fn(),pdf:vi.fn(),save:vi.fn()}));
+vi.mock('../src/services/dataService',()=>({dataService:{getSettings:()=>({organizationName:'QA معزول',departmentName:'QA فحص',expiryWarningThresholdDays:30,categories:[{name:'QA-C1'},{name:'QA-C2'}],units:['قطعة'],storehouses:['QA-A','QA-B'],partners:[]}),getMaterials:()=>fake.materials,getTransactions:()=>fake.transactions,getConfirmedTransactions:()=>{const edits=new Set((fake as any).pendingEdits||[]);const unconfirmed=new Set(((fake as any).pendingTx||[]).filter((id:string)=>!edits.has(id)));return fake.transactions.filter((t:any)=>!unconfirmed.has(t.id));},getPendingTransactionIds:()=>new Set([...((fake as any).pendingTx||[]),...((fake as any).pendingEdits||[])]),getUnconfirmedPendingTransactionIds:()=>new Set(((fake as any).pendingTx||[]).filter((id:string)=>!((fake as any).pendingEdits||[]).includes(id))),hasPendingTransactionEdit:(id:string)=>((fake as any).pendingEdits||[]).includes(id),getPendingMaterialChanges:()=>[],getWorkingMaterials:()=>fake.materials,getGeneratorLogs:()=>fake.logs,subscribe:()=>()=>{},hasPermission:(p:string)=>fake.permissions&&!fake.denied.includes(p),listPendingInventoryMutations:async()=>[{id:'qa-pending',status:fake.blocked?'blocked':'pending',operations:[],transport:'supabase-v1'}],retryPendingInventoryMutations:()=>fake.retry(),getOpeningStockAttachment:()=>null,getStorehouseInitialStock:(id:string,wh:string)=>fake.materials.find(m=>m.id===id)?.initialStocks?.[wh]||0}}));
+vi.mock('../src/context/StorehouseContext',()=>({useStorehouse:()=>({selectedStorehouse:fake.warehouse,activeStorehouses:['QA-A','QA-B'],scopeFallback:fake.fallback})}));
 vi.mock('../src/utils/printHtml',()=>({requireStableStringPart:(s:any)=>{if(typeof s!=='string'||!s.trim())throw new Error('invalid id');return s.trim();},exportToPDF:(...a:any[])=>fake.pdf(...a)}));
 vi.mock('file-saver',()=>({saveAs:(...a:any[])=>fake.save(...a)}));
 vi.mock('../src/components/CreateTransactionModal',()=>({default:()=>null}));
@@ -17,7 +17,7 @@ import Reports from '../src/pages/Reports';
 import Transactions from '../src/pages/Transactions';
 import {MemoryRouter} from 'react-router-dom';
 beforeEach(()=>{
- fake.warehouse='all';fake.permissions=true;fake.denied=[];fake.retry.mockReset();fake.blocked=false;fake.pdf.mockReset().mockResolvedValue(undefined);fake.save.mockReset();vi.stubGlobal('Blob',NodeBlob);
+ fake.warehouse='all';fake.fallback=null;fake.permissions=true;fake.denied=[];fake.retry.mockReset();fake.blocked=false;fake.pdf.mockReset().mockResolvedValue(undefined);fake.save.mockReset();vi.stubGlobal('Blob',NodeBlob);
  const day=(n:number)=>new Date(Date.now()+n*86400000).toISOString().slice(0,10);
  fake.materials=Array.from({length:21},(_,i)=>({id:'qa-r'+i,code:'QA-'+String(1000+i),name:'QA صنف عربي '+i,category:i<10?'QA-C1':'QA-C2',type:'مادة',unit:'قطعة',minimumStock:5,currentStock:i,initialStock:i,initialStocks:{'QA-A':i},warehouseStocks:{'QA-A':i},storageLocation:'QA-A',expiryDate:i===1?day(-1):i===2?day(10):i===3?day(90):undefined}));
  fake.transactions=[{id:'qa-t1',itemId:'qa-r1',itemCode:'QA-1001',itemName:'QA صنف عربي 1',itemCategory:'QA-C1',unit:'قطعة',transactionType:'افتتاحي',quantity:1,date:'2026-11-01',transactionNumber:'QA-O1',storehouse:'QA-A',storehouseId:'qa-a',createdAt:'2026-11-01T00:00:00Z',executedBy:'QA'}];
@@ -27,6 +27,22 @@ afterEach(()=>{cleanup();vi.restoreAllMocks();vi.unstubAllGlobals();});
 const labels=['تقرير الجرد العام وجرد الأرصدة المتوفرة حالياً','تقرير إنفاد مخزون الأمان','تقرير كشف فترات الصلاحيات وحالة الأصناف المشروطة بالصلاحية','سجل حركات المستودع التفصيلي','تقرير الموازنة والملخص الشامل','سند توثيق الأرصدة الافتتاحية','سجل تشغيل ومتابعة عداد المولد'];
 async function choose(label:string){fireEvent.mouseDown(screen.getByRole('combobox',{name:'تحديد نوع التقرير الفني المراد توليده'}));fireEvent.click(await screen.findByRole('option',{name:new RegExp(label)}));}
 async function excel(){fireEvent.click(screen.getByRole('button',{name:'تصدير اكسل'}));await waitFor(()=>expect(fake.save).toHaveBeenCalledOnce());const wb=new ExcelJS.Workbook();await wb.xlsx.load(await fake.save.mock.calls[0][0].arrayBuffer());return wb.worksheets[0];}
+describe('R8-R1 R2-R8-02 archived movements in the movement report, Excel and PDF',()=>{
+ const arrange=()=>{fake.materials[1]={...fake.materials[1],lifecycleStatus:'archived',archivePurpose:'qa_test_data'};
+  fake.transactions=[{...fake.transactions[0]},{id:'qa-t2',itemId:'qa-r2',itemCode:'QA-1002',itemName:'QA صنف عربي 2',itemCategory:'QA-C1',unit:'قطعة',transactionType:'افتتاحي',quantity:2,date:'2026-11-02',transactionNumber:'QA-O2',storehouse:'QA-A',storehouseId:'qa-a',createdAt:'2026-11-02T00:00:00Z',executedBy:'QA'}];};
+ const texts=(sheet:any)=>Array.from({length:sheet.rowCount},(_,i)=>sheet.getRow(i+1).values.filter(Boolean).map(String).join('|'));
+ it('R1-R2-02-a default: the archived item movement is absent from the report Excel and PDF',async()=>{arrange();render(<Reports/>);await choose(labels[3]);
+  const lines=texts(await excel());expect(lines.some(l=>l.includes('QA-1001'))).toBe(false);expect(lines.some(l=>l.includes('QA-1002'))).toBe(true);
+  fireEvent.click(screen.getByRole('button',{name:'طباعة pdf'}));await waitFor(()=>expect(fake.pdf).toHaveBeenCalledOnce());
+  const pdfText=JSON.stringify(fake.pdf.mock.calls[0][0].tables);expect(pdfText).not.toContain('QA-1001');expect(pdfText).toContain('QA-1002');});
+ it('R1-R2-02-b include-archived: archived movements appear AFTER active ones and labelled (مؤرشف) in Excel and PDF',async()=>{arrange();render(<Reports/>);await choose(labels[3]);
+  fireEvent.click(screen.getByRole('checkbox',{name:'تضمين الأصناف المؤرشفة'}));
+  const lines=texts(await excel()).filter(l=>l.includes('QA-100'));const iActive=lines.findIndex(l=>l.includes('QA-1002'));const iArch=lines.findIndex(l=>l.includes('QA-1001'));
+  expect(iActive).toBeGreaterThanOrEqual(0);expect(iArch).toBeGreaterThan(iActive);expect(lines[iArch]).toContain('(مؤرشف)');expect(lines[iActive]).not.toContain('(مؤرشف)');
+  fireEvent.click(screen.getByRole('button',{name:'طباعة pdf'}));await waitFor(()=>expect(fake.pdf).toHaveBeenCalledOnce());
+  expect(JSON.stringify(fake.pdf.mock.calls[0][0].tables)).toContain('(مؤرشف)');});
+ it('R1-RT01-c the report states that unconfirmed requests are not included',async()=>{(fake as any).pendingTx=['qa-pending-tx'];try{render(<Reports/>);expect((await screen.findByTestId('reports-unconfirmed-note')).textContent).toContain('المؤكدة فقط');}finally{(fake as any).pendingTx=[];}});
+});
 describe('QA_FULL Reports real UI with real Excel serialization; isolated data',()=>{
  it.each(labels.map((label,i)=>({label,i,count:[21,6,2,2,2,20,1][i]})))('OUT-01 OUT-02: actual Excel report $i has expected record count',async({label,i,count})=>{render(<Reports/>);if(i)await choose(label);const sheet=await excel();expect(sheet.rowCount-6).toBe(count);expect(sheet.views[0].rightToLeft).toBe(true);expect(sheet.getRow(6).actualCellCount).toBeGreaterThan(0);});
  it('OUT-02 SEC-03: spreadsheet keeps formula-like item names as strings',async()=>{fake.materials[0].name='=1+1';render(<Reports/>);const sheet=await excel();expect(sheet.getRow(7).getCell(2).value).toBe('=1+1');expect(sheet.getRow(7).getCell(2).type).toBe(ExcelJS.ValueType.String);});
@@ -96,4 +112,98 @@ it.each(['QA-A','all'])('OUT-01 bulk Excel maps balances and partner to ten matc
  expect(sheet.getRow(9).getCell(8).value).toBe('الرصيد قبل');expect(sheet.getRow(9).getCell(9).value).toBe('الرصيد بعد');
  expect(sheet.getRow(10).getCell(8).value).toBe(0);expect(sheet.getRow(10).getCell(9).value).toBe(1);expect(sheet.getRow(10).getCell(10).value).toBe('QA partner');
  if(warehouse==='all'){expect(sheet.getRow(11).getCell(3).value).toBe('↳ QA-A');expect(sheet.getRow(11).getCell(8).value).toBe(0);expect(sheet.getRow(11).getCell(9).value).toBe(1);}
+});
+
+describe('R8-WH-01 no unnoticed all-warehouse report',()=>{
+ it('R8-WH-R1 export and print are refused while the selected warehouse silently fell back to all',async()=>{
+  fake.fallback={previousId:'qa-b',previousName:'QA-B',at:'2026-11-11T00:00:00Z'};render(<Reports/>);
+  fireEvent.click(screen.getByRole('button',{name:'تصدير اكسل'}));fireEvent.click(screen.getByRole('button',{name:'طباعة pdf'}));
+  expect(await screen.findAllByText(/لم يعد فعالاً/)).not.toHaveLength(0);
+  expect(fake.save).not.toHaveBeenCalled();expect(fake.pdf).not.toHaveBeenCalled();
+ });
+ it('R8-WH-R2 an all-warehouse report is labelled in the view, the Excel title and the PDF metadata',async()=>{
+  render(<Reports/>);expect(screen.getByTestId('report-scope-all')).toBeTruthy();
+  const sheet=await excel();expect(String(sheet.getRow(4).getCell(1).value)).toContain('جميع المستودعات');
+  fireEvent.click(screen.getByRole('button',{name:'طباعة pdf'}));await waitFor(()=>expect(fake.pdf).toHaveBeenCalledOnce());
+  expect(fake.pdf.mock.calls[0][0].metaFields).toContainEqual({label:'نطاق المستودعات:',value:'جميع المستودعات (الإجمالي)'});
+ });
+ it('R8-WH-R3 a selected active warehouse is printed as that warehouse',async()=>{
+  fake.warehouse='QA-B';render(<Reports/>);fireEvent.click(screen.getByRole('button',{name:'طباعة pdf'}));await waitFor(()=>expect(fake.pdf).toHaveBeenCalledOnce());
+  expect(fake.pdf.mock.calls[0][0].metaFields).toContainEqual({label:'نطاق المستودعات:',value:'QA-B'});
+ });
+});
+
+describe('R8-R2 R2-R8-D01 Transactions page, bulk Excel/PDF and voucher print',()=>{
+ const arrange=()=>{
+  fake.materials[0]={...fake.materials[0],lifecycleStatus:'active'};
+  fake.materials[1]={...fake.materials[1],lifecycleStatus:'archived',archivePurpose:'qa_test_data'};
+  const base=(id:string,itemId:string,code:string,name:string,number:string,date:string)=>({id,itemId,itemCode:code,itemName:name,itemCategory:'QA-C1',unit:'قطعة',transactionType:'صادر',quantity:1,date,transactionNumber:number,storehouse:'QA-A',storehouseId:'qa-a',createdAt:date+'T00:00:00Z',executedBy:'QA'});
+  fake.transactions=[
+   base('qa-confirmed','qa-r0','QA-1000','QA صنف عربي 0','QA-O0','2026-11-01'),
+   base('qa-archived','qa-r1','QA-1001','QA صنف عربي 1','QA-A1','2026-11-03'),
+   base('qa-queued','qa-r0','QA-1000','QA صنف عربي 0','QA-Q1','2026-11-04'),
+   base('qa-rejected','qa-r0','QA-1000','QA صنف عربي 0','QA-R1','2026-11-05'),
+  ];
+  (fake as any).pendingTx=['qa-queued','qa-rejected'];
+ };
+ const texts=(sheet:any)=>Array.from({length:sheet.rowCount},(_,i)=>sheet.getRow(i+1).values.filter(Boolean).map(String).join('|'));
+ const bulkExcel=async()=>{fireEvent.click(document.getElementById('select-all-transactions')!);fireEvent.click(document.getElementById('bulk-export-transactions-excel')!);await waitFor(()=>expect(fake.save).toHaveBeenCalledOnce());const wb=new ExcelJS.Workbook();await wb.xlsx.load(await fake.save.mock.calls[0][0].arrayBuffer());return wb.worksheets[0];};
+ const bulkPdf=async()=>{fireEvent.click(document.getElementById('select-all-transactions')!);fireEvent.click(document.getElementById('bulk-export-transactions-pdf')!);await waitFor(()=>expect(fake.pdf).toHaveBeenCalledOnce());return JSON.stringify(fake.pdf.mock.calls[0][0]);};
+ afterEach(()=>{(fake as any).pendingTx=[];(fake as any).pendingEdits=[];});
+ it('R2-D01-a default: archived, queued and rejected rows are absent from the list and from bulk Excel/PDF',async()=>{
+  arrange();mountTransactions();
+  expect(screen.getByText('QA-O0')).toBeTruthy();
+  expect(screen.queryByText('QA-A1')).toBeNull();
+  expect(screen.queryByText('QA-Q1')).toBeNull();
+  expect(screen.queryByText('QA-R1')).toBeNull();
+  expect(screen.queryByText('(مؤرشف)')).toBeNull();
+  const lines=texts(await bulkExcel());
+  expect(lines.some(l=>l.includes('QA-O0'))).toBe(true);
+  expect(lines.some(l=>l.includes('QA-A1')||l.includes('QA-Q1')||l.includes('QA-R1')||l.includes('مؤرشف'))).toBe(false);
+  cleanup();arrange();mountTransactions();
+  const pdf=await bulkPdf();
+  expect(pdf).toContain('QA-O0');expect(pdf).not.toContain('QA-A1');expect(pdf).not.toContain('QA-Q1');expect(pdf).not.toContain('QA-R1');
+ });
+ it('R2-D01-b include-archived: archived rows come last, labelled (مؤرشف), in the list and in Excel/PDF; queued and rejected stay out',async()=>{
+  arrange();mountTransactions();
+  fireEvent.click(screen.getByRole('checkbox',{name:'تضمين الأصناف المؤرشفة'}));
+  expect(screen.getByText('QA-A1')).toBeTruthy();
+  expect(screen.getByText('QA صنف عربي 1 (مؤرشف)')).toBeTruthy();
+  expect(screen.queryByText('QA-Q1')).toBeNull();
+  expect(screen.queryByText('QA-R1')).toBeNull();
+  const lines=texts(await bulkExcel()).filter(l=>l.includes('QA-O0')||l.includes('QA-A1'));
+  const iActive=lines.findIndex(l=>l.includes('QA-O0'));const iArch=lines.findIndex(l=>l.includes('QA-A1'));
+  expect(iActive).toBeGreaterThanOrEqual(0);expect(iArch).toBeGreaterThan(iActive);expect(lines[iArch]).toContain('(مؤرشف)');expect(lines[iActive]).not.toContain('(مؤرشف)');
+  expect(lines.some(l=>l.includes('QA-Q1')||l.includes('QA-R1'))).toBe(false);
+  cleanup();arrange();mountTransactions();fireEvent.click(screen.getByRole('checkbox',{name:'تضمين الأصناف المؤرشفة'}));
+  fake.save.mockReset();fake.pdf.mockReset();
+  const pdf=await bulkPdf();
+  expect(pdf).toContain('(مؤرشف)');expect(pdf).toContain('QA-A1');expect(pdf).not.toContain('QA-Q1');expect(pdf).not.toContain('QA-R1');
+ });
+ it('R2-D01-c printing a pending voucher is refused and produces no PDF',async()=>{
+  arrange();mountTransactions(); // queued/rejected stay excluded; only the confirmed voucher is printable
+  fireEvent.click(screen.getByRole('button',{name:'معاينة وطباعة السند المخزني'}));
+  const print=screen.getByRole('button',{name:/طباعة وإصدار المستند الآن/});
+  (fake as any).pendingTx=['qa-queued','qa-rejected','qa-confirmed']; // no pendingEdits: treated as unconfirmed
+  fireEvent.click(print);
+  expect((await screen.findByRole('alert')).textContent).toMatch(/لم يؤكدها الخادم|معلّقة|مرفوضة/);
+  expect(fake.pdf).not.toHaveBeenCalled();
+ });
+ it('R3-E02 a confirmed movement with a queued or rejected edit stays in the register and in bulk Excel/PDF as the confirmed snapshot, with a pending marker, and is not treated as a pending voucher',async()=>{
+  arrange();(fake as any).pendingEdits=['qa-confirmed'];mountTransactions();
+  expect(screen.getByText('QA-O0')).toBeTruthy();
+  expect(screen.getByTestId('pending-edit-marker').textContent).toMatch(/تعديل معلّق/);
+  expect(screen.queryByText('QA-Q1')).toBeNull();
+  expect(screen.queryByText('QA-R1')).toBeNull();
+  const lines=texts(await bulkExcel());
+  expect(lines.some(l=>l.includes('QA-O0'))).toBe(true);
+  expect(lines.some(l=>l.includes('QA-Q1')||l.includes('QA-R1')||l.includes('معلّقة')||l.includes('بانتظار تأكيد'))).toBe(false);
+  cleanup();arrange();(fake as any).pendingEdits=['qa-confirmed'];fake.pdf.mockReset();fake.save.mockReset();mountTransactions();
+  const pdf=await bulkPdf();
+  expect(pdf).toContain('QA-O0');expect(pdf).not.toContain('QA-Q1');expect(pdf).not.toContain('QA-R1');expect(pdf).not.toMatch(/معلّقة|بانتظار تأكيد الخادم/);
+  cleanup();arrange();(fake as any).pendingEdits=['qa-confirmed'];fake.pdf.mockReset();mountTransactions();
+  fireEvent.click(screen.getByRole('button',{name:'معاينة وطباعة السند المخزني'}));
+  fireEvent.click(screen.getByRole('button',{name:/طباعة وإصدار المستند الآن/}));
+  await waitFor(()=>expect(fake.pdf).toHaveBeenCalledOnce());
+ });
 });

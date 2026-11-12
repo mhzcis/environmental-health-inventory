@@ -5,7 +5,7 @@ import {render,screen,fireEvent,cleanup,within} from '@testing-library/react';
 import {MemoryRouter} from 'react-router-dom';
 const mats=Array.from({length:23},(_,i)=>({id:`qa-${i}`,code:`QA-${1000+i}`,name:`QA item ${i}`,category:'QA',unit:'قطعة',initialStock:0,currentStock:5,minimumStock:0,warehouseStocks:{'QA-A':5},storageLocation:'QA-A'}));
 vi.mock('../src/context/StorehouseContext',()=>({useStorehouse:()=>({selectedStorehouse:'QA-A'})}));
-vi.mock('../src/services/dataService',()=>({dataService:{getSettings:()=>({organizationName:'QA',departmentName:'QA',categories:[{name:'QA',prefix:'QA'}],units:['قطعة'],storehouses:['QA-A'],expiryWarningThresholdDays:30}),getMaterials:()=>mats,getTransactions:()=>[],getCurrentUser:()=>({fullName:'QA'}),subscribe:()=>()=>{},generateItemCode:()=>'QA-9999',hasPermission:()=>true,saveTransactionBatch:vi.fn(),deleteMaterial:vi.fn()}}));
+vi.mock('../src/services/dataService',()=>({dataService:{getSettings:()=>({organizationName:'QA',departmentName:'QA',categories:[{name:'QA',prefix:'QA'}],units:['قطعة'],storehouses:['QA-A'],expiryWarningThresholdDays:30}),getMaterials:()=>mats,getTransactions:()=>[],getConfirmedTransactions:()=>[],getPendingTransactionIds:()=>new Set(),getPendingMaterialChanges:()=>[],getWorkingMaterials:()=>mats,getCurrentUser:()=>({fullName:'QA'}),subscribe:()=>()=>{},generateItemCode:()=>'QA-9999',hasPermission:()=>true,saveTransactionBatch:vi.fn(),deleteMaterial:vi.fn()}}));
 import Materials from '../src/pages/Materials';
 afterEach(()=>cleanup());
 const search=()=>screen.getByPlaceholderText('ابحث بالاسم، الكود (بما فيه أرقام فقط)...');
