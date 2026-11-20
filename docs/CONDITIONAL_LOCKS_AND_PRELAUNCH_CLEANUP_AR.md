@@ -32,3 +32,11 @@
 - أداة التوليد والفحص: `qa/build-conditional-locks-migration.mjs` (يدعم `--check`) مثبّتة على بصمات الإنتاج الحالية لمرجع `main` (`81e3dab`).
 - ملف الترحيل: `database/migrations/CONDITIONAL_LOCKS_MIGRATION.sql`.
 - ملف الرجوع للخلف: `database/migrations/CONDITIONAL_LOCKS_ROLLBACK.sql`.
+
+## 5. ترتيب التنفيذ والتحقق المعزول (مراجعة 2026-11-20)
+- **الترتيب الإلزامي:** `CONDITIONAL_LOCKS_MIGRATION.sql` أولًا، ثم `one_time_prelaunch_cleanup.sql`. يرفض سكريبت التنظيف التنفيذ (`PRELAUNCH_CLEANUP_ABORTED_MIGRATION_NOT_APPLIED`) إذا لم يُطبَّق الترحيل، ويرفض كذلك إذا وُجدت أي مادة غير `mat-1793795662160` (PES-1001) أو عدد حركات غير 9 أو أي حجز آخر في سجل الأكواد؛ وفي كل حالات الرفض لا يتغير شيء. التنظيف لمرة واحدة فقط: تشغيله ثانيةً يُرفض.
+- **بصمات الأساس:** يتحقق الترحيل قبل أي تعديل من `md5(prosrc)` لست دوال تستبدلها النسخة الجديدة (`commit_inventory`، `validate_inventory`، `validate_category_config`، `reserve_material_code`، `evaluate_backup_registry`، `restore_preview`)، وكلها مطابقة لقراءة الإنتاج (قراءة فقط) ولنسخة `main 81e3dab` في PGlite.
+- **ملفات R8 التاريخية** (`R8_PRODUCTION_MIGRATION.sql` و`R8_ROLLBACK.sql`) بقيت مطابقة حرفيًا لـ `81e3dab`؛ وأصبح `qa/build-r8-migration.mjs` يقرأ مرشّحه من النسخة المثبتة `qa/fixtures/inventory_atomic.main-81e3dab.sql` حتى لا تعيد أي تعديلات لاحقة كتابة ملفات R8.
+- **التحقق المعزول:** `qa/conditional-locks-rehearsal.mjs` يبني نسخة PGlite مطابقة لشكل الإنتاج، ويثبت: تطابق الدوال بعد الترحيل مع `database/inventory_atomic.sql`، وعدم تغيّر البيانات العامة، وتوقف الترحيل عند أي انحراف، واستعادة الرجوع للخلف لكل البصمات الأصلية، ونتيجة التنظيف (أول كود جديد PES-1001 ثم عودة كل قيود الحجز).
+- **حدود الرجوع للخلف:** بعد استخدام الحرية الجديدة (مثل إضافة تصنيف سادس أو تغيير بادئة/مدى غير مستخدم) يرفض ملف الرجوع التنفيذ دون تغيير شيء، لأن نسخة `81e3dab` تشترط التصنيفات الخمسة بمداها حرفيًا؛ يلزم إرجاع الإعدادات أولًا.
+- **الاستعادة والمستودعات المستخدمة:** قفل المستودع دائم، لذلك تُرفض استعادة نسخة احتياطية لا تحتوي مستودعًا سبق استخدامه في البيئة نفسها (`INVENTORY_WAREHOUSE_IN_USE`) دون تغيير أي شيء.

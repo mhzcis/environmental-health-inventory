@@ -4,6 +4,9 @@
 --   commit_inventory         = 88df3f4de1eb23fb440ad091a9402625
 --   validate_inventory       = b4111cae7005ce3380c70ca121b00307
 --   validate_category_config = b9190e8cbaff6216b4c519a28a882287
+--   reserve_material_code    = 845a453581a58afeb4382b323a427dee
+--   evaluate_backup_registry = 2b608065aa5ecdfb1d38d7b98ba319ce
+--   restore_preview          = 5706fc8322d1bd2df2f8292eb0296c40
 --
 -- Changes:
 --   1. Unpins unused categories in validate_category_config while keeping used prefixes locked in category_policy.
@@ -18,15 +21,17 @@ BEGIN;
 SET LOCAL lock_timeout = '5s';
 SELECT pg_advisory_xact_lock(824671520);
 DO $cl_pre$
-DECLARE
-  c text := (SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='commit_inventory');
-  v text := (SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='validate_inventory');
-  vc text := (SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='validate_category_config');
 BEGIN
-  IF c IS DISTINCT FROM '88df3f4de1eb23fb440ad091a9402625'
-     OR v IS DISTINCT FROM 'b4111cae7005ce3380c70ca121b00307'
-     OR vc IS DISTINCT FROM 'b9190e8cbaff6216b4c519a28a882287' THEN
-    RAISE EXCEPTION 'CONDITIONAL_LOCKS_BASELINE_DRIFT commit=% validate=% validate_category=% (expected main 81e3dab). Stop and re-review.', c, v, vc;
+  IF (SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='commit_inventory') IS DISTINCT FROM '88df3f4de1eb23fb440ad091a9402625'
+     OR (SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='validate_inventory') IS DISTINCT FROM 'b4111cae7005ce3380c70ca121b00307'
+     OR (SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='validate_category_config') IS DISTINCT FROM 'b9190e8cbaff6216b4c519a28a882287'
+     OR (SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='reserve_material_code') IS DISTINCT FROM '845a453581a58afeb4382b323a427dee'
+     OR (SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='evaluate_backup_registry') IS DISTINCT FROM '2b608065aa5ecdfb1d38d7b98ba319ce'
+     OR (SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='restore_preview') IS DISTINCT FROM '5706fc8322d1bd2df2f8292eb0296c40' THEN
+    RAISE EXCEPTION 'CONDITIONAL_LOCKS_BASELINE_DRIFT % (expected main 81e3dab). Stop and re-review.', 'commit_inventory='||coalesce((SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='commit_inventory'),'<missing>')||' '||'validate_inventory='||coalesce((SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='validate_inventory'),'<missing>')||' '||'validate_category_config='||coalesce((SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='validate_category_config'),'<missing>')||' '||'reserve_material_code='||coalesce((SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='reserve_material_code'),'<missing>')||' '||'evaluate_backup_registry='||coalesce((SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='evaluate_backup_registry'),'<missing>')||' '||'restore_preview='||coalesce((SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='restore_preview'),'<missing>');
+  END IF;
+  IF to_regclass('inventory_private.material_code_registry') IS NULL OR to_regclass('inventory_private.category_policy') IS NULL THEN
+    RAISE EXCEPTION 'CONDITIONAL_LOCKS_R8_NOT_APPLIED';
   END IF;
 END $cl_pre$;
 
@@ -218,12 +223,15 @@ BEGIN
  VALUES(k,btrim(p_data->>'code'),parts->>'prefix',(parts->>'number')::numeric,p_id,p_source)
  ON CONFLICT(code_key) DO UPDATE SET deleted_at=NULL
    WHERE inventory_private.material_code_registry.material_id=excluded.material_id AND p_source='restore';
+ -- First use pins the prefix and its exact range for ever. A restore pins after its conservative registry fill
+ -- (commit_inventory), so the fill keeps the R8 rule (startRange..max only for prefixes pinned BEFORE the restore).
  INSERT INTO inventory_private.category_policy(prefix,start_range,end_range)
- SELECT DISTINCT c->>'prefix',(c->>'startRange')::numeric,(c->>'endRange')::numeric
- FROM jsonb_array_elements(coalesce(p_cfg->'categories','[]'::jsonb)) c
- WHERE coalesce(c->>'prefix','') ~ '^[A-Z]{2,6}$'
-   AND ((parts->>'prefix' IS NOT NULL AND c->>'prefix'=parts->>'prefix')
-     OR (parts->>'prefix' IS NULL AND c->>'name'=p_data->>'category'))
+ SELECT DISTINCT pc->>'prefix',(pc->>'startRange')::numeric,(pc->>'endRange')::numeric
+ FROM jsonb_array_elements(coalesce(p_cfg->'categories','[]'::jsonb)) pc
+ WHERE coalesce(pc->>'prefix','') ~ '^[A-Z]{2,6}$'
+   AND ((parts->>'prefix' IS NOT NULL AND pc->>'prefix'=parts->>'prefix')
+     OR (parts->>'prefix' IS NULL AND pc->>'name'=p_data->>'category'))
+   AND p_source<>'restore'
  ON CONFLICT(prefix) DO NOTHING;
 END;
 $$;
@@ -254,13 +262,7 @@ BEGIN
         LATERAL jsonb_each_text(CASE WHEN jsonb_typeof(s.data->'openingStockAttachments')='object' THEN s.data->'openingStockAttachments' ELSE '{}'::jsonb END) k
    WHERE s.id='app_config'
      AND nullif(btrim(k.value),'') IS NOT NULL
-     AND (
-       k.key = w->>'id'
-       OR split_part(k.key,'--',1) = w->>'id'
-       OR k.key LIKE (w->>'id') || '--%'
-       OR k.key LIKE (w->>'id') || ':%'
-       OR k.key LIKE (w->>'id') || '\_%' ESCAPE '\'
-     )
+     AND (k.key = w->>'id' OR split_part(k.key,'--',1) = w->>'id')
  ) u
  WHERE wid IS NOT NULL
  ON CONFLICT(warehouse_id) DO NOTHING;
@@ -761,15 +763,7 @@ BEGIN
      IF val IS NOT NULL THEN PERFORM inventory_private.reserve_material_code(mid,val,cfg,false,'restore'); END IF;
    END LOOP;
    IF mode='restore' AND reg_plan IS NOT NULL THEN
-   -- Conservative fill (always, union-only): startRange..max evidenced for known category prefixes (pinned or configured), min..max for others.
-   WITH known_ranges AS (
-     SELECT prefix, start_range FROM inventory_private.category_policy
-     UNION
-     SELECT c->>'prefix' AS prefix, (c->>'startRange')::numeric AS start_range
-     FROM jsonb_array_elements(coalesce(cfg->'categories','[]'::jsonb)) c
-     WHERE coalesce(c->>'prefix','') ~ '^[A-Z]{2,6}$'
-       AND NOT EXISTS (SELECT 1 FROM inventory_private.category_policy p WHERE p.prefix=c->>'prefix')
-   )
+   -- Conservative fill (always, union-only): startRange..max evidenced for pinned prefixes, min..max for others.
    INSERT INTO inventory_private.material_code_registry(code_key,code,prefix,number,material_id,source,deleted_at)
    SELECT lower(pol.prefix||'-'||g.n),pol.prefix||'-'||g.n,pol.prefix,g.n,
      coalesce((SELECT bm->>'id' FROM jsonb_array_elements(backup->'materials') bm
@@ -777,7 +771,7 @@ BEGIN
      'restore-conservative',
      CASE WHEN EXISTS(SELECT 1 FROM jsonb_array_elements(backup->'materials') bm
        WHERE lower(btrim(bm->>'code'))=lower(pol.prefix||'-'||g.n)) THEN NULL ELSE now() END
-   FROM known_ranges pol
+   FROM inventory_private.category_policy pol
    JOIN LATERAL generate_series(pol.start_range,(reg_plan->'conservativeMax'->>pol.prefix)::numeric) g(n) ON TRUE
    WHERE (reg_plan->'conservativeMax' ? pol.prefix) AND (reg_plan->'conservativeMax'->>pol.prefix)::numeric>=pol.start_range
    ON CONFLICT DO NOTHING;
@@ -797,9 +791,7 @@ BEGIN
        UNION ALL
        SELECT inventory_private.code_parts(t->>'itemCode') FROM jsonb_array_elements(CASE WHEN jsonb_typeof(backup->'transactions')='array' THEN backup->'transactions' ELSE '[]'::jsonb END) t
      ) u
-     WHERE p->>'prefix' IS NOT NULL
-       AND NOT EXISTS (SELECT 1 FROM inventory_private.category_policy pol WHERE pol.prefix=p->>'prefix')
-       AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(coalesce(cfg->'categories','[]'::jsonb)) c WHERE c->>'prefix'=p->>'prefix')
+     WHERE p->>'prefix' IS NOT NULL AND NOT EXISTS (SELECT 1 FROM inventory_private.category_policy pol WHERE pol.prefix=p->>'prefix')
      GROUP BY 1
    ) s JOIN LATERAL generate_series(s.lo,s.hi) g(n) ON TRUE
    ON CONFLICT DO NOTHING;
@@ -1181,13 +1173,7 @@ BEGIN
    FROM jsonb_array_elements(coalesce(cfg->'storehouseEntities','[]'::jsonb)) w,
         LATERAL jsonb_each_text(CASE WHEN jsonb_typeof(cfg->'openingStockAttachments')='object' THEN cfg->'openingStockAttachments' ELSE '{}'::jsonb END) k
    WHERE nullif(btrim(k.value),'') IS NOT NULL
-     AND (
-       k.key = w->>'id'
-       OR split_part(k.key,'--',1) = w->>'id'
-       OR k.key LIKE (w->>'id') || '--%'
-       OR k.key LIKE (w->>'id') || ':%'
-       OR k.key LIKE (w->>'id') || '\_%' ESCAPE '\'
-     )
+     AND (k.key = w->>'id' OR split_part(k.key,'--',1) = w->>'id')
  )
  SELECT coalesce(jsonb_agg(DISTINCT wid ORDER BY wid),'[]'::jsonb) INTO wh_ids FROM used_w WHERE wid IS NOT NULL;
 

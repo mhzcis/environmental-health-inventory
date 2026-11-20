@@ -10,6 +10,21 @@ const read = (p) => fs.readFileSync(new URL(p, import.meta.url), 'utf8');
 export const PROD_COMMIT_MD5 = '88df3f4de1eb23fb440ad091a9402625';
 export const PROD_VALIDATE_MD5 = 'b4111cae7005ce3380c70ca121b00307';
 export const PROD_VALIDATE_CATEGORY_MD5 = 'b9190e8cbaff6216b4c519a28a882287';
+// The candidate also replaces these three functions; they are pinned too so the migration never overwrites an
+// unreviewed production body (values re-read read-only from production on 2026-11-20 and equal to PGlite main 81e3dab).
+export const PROD_RESERVE_CODE_MD5 = '845a453581a58afeb4382b323a427dee';
+export const PROD_EVALUATE_REGISTRY_MD5 = '2b608065aa5ecdfb1d38d7b98ba319ce';
+export const PROD_RESTORE_PREVIEW_MD5 = '5706fc8322d1bd2df2f8292eb0296c40';
+export const PINS = {
+  commit_inventory: PROD_COMMIT_MD5,
+  validate_inventory: PROD_VALIDATE_MD5,
+  validate_category_config: PROD_VALIDATE_CATEGORY_MD5,
+  reserve_material_code: PROD_RESERVE_CODE_MD5,
+  evaluate_backup_registry: PROD_EVALUATE_REGISTRY_MD5,
+  restore_preview: PROD_RESTORE_PREVIEW_MD5,
+};
+const pinMismatch = () => Object.entries(PINS).map(([name, md5]) => `${fnMd5(name)} IS DISTINCT FROM '${md5}'`).join('\n     OR ');
+const pinReport = () => Object.keys(PINS).map((name) => `'${name}='||coalesce(${fnMd5(name)},'<missing>')`).join("||' '||");
 
 const fnMd5 = (name) =>
   `(SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='${name}')`;
@@ -21,6 +36,9 @@ export function buildMigration(candidate = read('../database/inventory_atomic.sq
 --   commit_inventory         = ${PROD_COMMIT_MD5}
 --   validate_inventory       = ${PROD_VALIDATE_MD5}
 --   validate_category_config = ${PROD_VALIDATE_CATEGORY_MD5}
+--   reserve_material_code    = ${PROD_RESERVE_CODE_MD5}
+--   evaluate_backup_registry = ${PROD_EVALUATE_REGISTRY_MD5}
+--   restore_preview          = ${PROD_RESTORE_PREVIEW_MD5}
 --
 -- Changes:
 --   1. Unpins unused categories in validate_category_config while keeping used prefixes locked in category_policy.
@@ -35,15 +53,12 @@ BEGIN;
 SET LOCAL lock_timeout = '5s';
 SELECT pg_advisory_xact_lock(824671520);
 DO $cl_pre$
-DECLARE
-  c text := ${fnMd5('commit_inventory')};
-  v text := ${fnMd5('validate_inventory')};
-  vc text := ${fnMd5('validate_category_config')};
 BEGIN
-  IF c IS DISTINCT FROM '${PROD_COMMIT_MD5}'
-     OR v IS DISTINCT FROM '${PROD_VALIDATE_MD5}'
-     OR vc IS DISTINCT FROM '${PROD_VALIDATE_CATEGORY_MD5}' THEN
-    RAISE EXCEPTION 'CONDITIONAL_LOCKS_BASELINE_DRIFT commit=% validate=% validate_category=% (expected main 81e3dab). Stop and re-review.', c, v, vc;
+  IF ${pinMismatch()} THEN
+    RAISE EXCEPTION 'CONDITIONAL_LOCKS_BASELINE_DRIFT % (expected main 81e3dab). Stop and re-review.', ${pinReport()};
+  END IF;
+  IF to_regclass('inventory_private.material_code_registry') IS NULL OR to_regclass('inventory_private.category_policy') IS NULL THEN
+    RAISE EXCEPTION 'CONDITIONAL_LOCKS_R8_NOT_APPLIED';
   END IF;
 END $cl_pre$;
 
@@ -72,10 +87,12 @@ ${main81e3dab}
 
 DO $cl_rb_post$
 BEGIN
-  IF ${fnMd5('commit_inventory')} IS DISTINCT FROM '${PROD_COMMIT_MD5}'
-     OR ${fnMd5('validate_inventory')} IS DISTINCT FROM '${PROD_VALIDATE_MD5}'
-     OR ${fnMd5('validate_category_config')} IS DISTINCT FROM '${PROD_VALIDATE_CATEGORY_MD5}' THEN
-    RAISE EXCEPTION 'CONDITIONAL_LOCKS_ROLLBACK_VERIFY_FAILED';
+  IF ${pinMismatch()} THEN
+    RAISE EXCEPTION 'CONDITIONAL_LOCKS_ROLLBACK_VERIFY_FAILED %', ${pinReport()};
+  END IF;
+  IF to_regprocedure('inventory_private.reference_usage()') IS NOT NULL OR to_regprocedure('public.inventory_reference_usage()') IS NOT NULL
+     OR to_regprocedure('inventory_private.record_warehouse_usage(text)') IS NOT NULL THEN
+    RAISE EXCEPTION 'CONDITIONAL_LOCKS_ROLLBACK_VERIFY_FAILED new functions still present';
   END IF;
   PERFORM inventory_private.validate_inventory();
 END $cl_rb_post$;

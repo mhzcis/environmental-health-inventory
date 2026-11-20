@@ -1018,8 +1018,15 @@ DO $cl_rb_post$
 BEGIN
   IF (SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='commit_inventory') IS DISTINCT FROM '88df3f4de1eb23fb440ad091a9402625'
      OR (SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='validate_inventory') IS DISTINCT FROM 'b4111cae7005ce3380c70ca121b00307'
-     OR (SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='validate_category_config') IS DISTINCT FROM 'b9190e8cbaff6216b4c519a28a882287' THEN
-    RAISE EXCEPTION 'CONDITIONAL_LOCKS_ROLLBACK_VERIFY_FAILED';
+     OR (SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='validate_category_config') IS DISTINCT FROM 'b9190e8cbaff6216b4c519a28a882287'
+     OR (SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='reserve_material_code') IS DISTINCT FROM '845a453581a58afeb4382b323a427dee'
+     OR (SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='evaluate_backup_registry') IS DISTINCT FROM '2b608065aa5ecdfb1d38d7b98ba319ce'
+     OR (SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='restore_preview') IS DISTINCT FROM '5706fc8322d1bd2df2f8292eb0296c40' THEN
+    RAISE EXCEPTION 'CONDITIONAL_LOCKS_ROLLBACK_VERIFY_FAILED %', 'commit_inventory='||coalesce((SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='commit_inventory'),'<missing>')||' '||'validate_inventory='||coalesce((SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='validate_inventory'),'<missing>')||' '||'validate_category_config='||coalesce((SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='validate_category_config'),'<missing>')||' '||'reserve_material_code='||coalesce((SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='reserve_material_code'),'<missing>')||' '||'evaluate_backup_registry='||coalesce((SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='evaluate_backup_registry'),'<missing>')||' '||'restore_preview='||coalesce((SELECT md5(p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='inventory_private' AND p.proname='restore_preview'),'<missing>');
+  END IF;
+  IF to_regprocedure('inventory_private.reference_usage()') IS NOT NULL OR to_regprocedure('public.inventory_reference_usage()') IS NOT NULL
+     OR to_regprocedure('inventory_private.record_warehouse_usage(text)') IS NOT NULL THEN
+    RAISE EXCEPTION 'CONDITIONAL_LOCKS_ROLLBACK_VERIFY_FAILED new functions still present';
   END IF;
   PERFORM inventory_private.validate_inventory();
 END $cl_rb_post$;

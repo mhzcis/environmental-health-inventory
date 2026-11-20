@@ -957,7 +957,7 @@ export const dataService = {
     for (const [key, value] of Object.entries(attachments)) {
       if (!value) continue;
       for (const entity of entities) {
-        if (key === entity.id || key.split('--')[0] === entity.id || key.startsWith(`${entity.id}--`) || key.startsWith(`${entity.id}:`) || key.startsWith(`${entity.id}_`)) {
+        if (key === entity.id || key.split('--')[0] === entity.id) {
           warehouseIds.add(entity.id);
         }
       }
@@ -1332,7 +1332,7 @@ export const dataService = {
         dataService.getWorkingMaterials().some(m => m.primaryStorehouseId === target.id)
         || dataService.getTransactions().some(t => t.storehouseId === target.id)
         || Object.entries(currentSettings.openingStockAttachments || {}).some(([k, v]) =>
-          !!v && (k === target.id || k.split('--')[0] === target.id || k.startsWith(`${target.id}--`) || k.startsWith(`${target.id}:`) || k.startsWith(`${target.id}_`))
+          !!v && (k === target.id || k.split('--')[0] === target.id)
         );
       if (usedLocally) {
         return { success: false, message: 'لا يمكن حذف هذا المستودع لأنه استُخدم مسبقاً؛ يمكنك تعطيله أو إعادة تسميته فقط مع الاحتفاظ ببياناته التاريخية.' };

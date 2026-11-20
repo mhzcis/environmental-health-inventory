@@ -174,9 +174,13 @@ export default function Settings() {
   useEffect(() => {
     let active = true;
     const refreshUsage = () => {
-      void dataService.getReferenceUsage().then(usage => {
-        if (active) setReferenceUsage(usage);
-      });
+      // Fail-closed: if usage cannot be read (older server, offline, test double), keep structural edits locked.
+      const read = (dataService as { getReferenceUsage?: () => Promise<ReferenceUsageSummary> }).getReferenceUsage;
+      if (typeof read !== 'function') return;
+      void Promise.resolve()
+        .then(() => read())
+        .then(usage => { if (active && usage) setReferenceUsage(usage); })
+        .catch(() => { if (active) setReferenceUsage(current => ({ ...current, supported: false })); });
     };
     const load = () => {
       setSettings(dataService.getSettings());

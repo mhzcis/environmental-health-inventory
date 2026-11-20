@@ -13,8 +13,8 @@ vi.mock('@supabase/supabase-js',()=>({createClient:()=>{
  return {auth:{onAuthStateChange:(f:any)=>{fake.authCallback=f;return {data:{subscription:{unsubscribe(){}}}};},signOut:async()=>({error:null})},from:builder,rpc:async(name:string,args:any={})=>{
   const uid=fake.uid;fake.calls.push({name,args:structuredClone(args),uid});if(fake.offline)throw new Error('synthetic offline');
   try{let payload=structuredClone(args.p_payload);if(fake.invalid&&payload?.mode==='mutation'){const t=payload.operations.find((x:any)=>x.collection==='transactions'&&x.kind==='set');if(t)t.value.quantity=-3;}
-   const sql=name==='inventory_commit'?'select public.inventory_commit($1,$2) result':name==='inventory_next_material_code'?'select public.inventory_next_material_code($1) result':name==='inventory_projection_drift'?'select public.inventory_projection_drift() result':name==='inventory_code_registry'?'select public.inventory_code_registry() result':'select public.inventory_restore_preview($1) result';
-   const values=name==='inventory_commit'?[args.p_mutation_id,JSON.stringify(payload)]:name==='inventory_next_material_code'?[args.p_category]:name==='inventory_projection_drift'||name==='inventory_code_registry'?[]:[JSON.stringify(args.p_backup)];
+   const sql=name==='inventory_commit'?'select public.inventory_commit($1,$2) result':name==='inventory_next_material_code'?'select public.inventory_next_material_code($1) result':name==='inventory_projection_drift'?'select public.inventory_projection_drift() result':name==='inventory_code_registry'?'select public.inventory_code_registry() result':name==='inventory_reference_usage'?'select public.inventory_reference_usage() result':'select public.inventory_restore_preview($1) result';
+   const values=name==='inventory_commit'?[args.p_mutation_id,JSON.stringify(payload)]:name==='inventory_next_material_code'?[args.p_category]:name==='inventory_projection_drift'||name==='inventory_code_registry'||name==='inventory_reference_usage'?[]:[JSON.stringify(args.p_backup)];
    const rows=await asUser(fake.db,uid,tx=>tx.query(sql,values));if(fake.switchAfterCommit){fake.switchAfterCommit=false;login(ids.employee);}if(fake.loseAck){fake.loseAck=false;throw new Error('synthetic ack lost');}return {data:rows.rows[0].result,error:null};
   }catch(error){if((error as any).code)return {data:null,error};throw error;}
  },channel:()=>{const c:any={on:()=>c,subscribe:()=>c};return c;},removeChannel:async()=>{}};
@@ -32,7 +32,7 @@ const tx=(id='qa-t1',quantity=5)=>({id,date:'2026-11-04',itemId:'qa-m1',itemCode
 const login=(uid:string)=>{fake.uid=uid;fake.authCallback('SIGNED_IN',{access_token:'synthetic-'+uid,user:{id:uid,email:'qa@invalid',created_at:'2026-11-01T00:00:00Z'}});};
 const rows=async(table:string)=>(await fake.db.query(`select * from ${table} order by id`)).rows;
 beforeAll(async()=>{vi.stubGlobal('crypto',webcrypto);vi.stubGlobal('TextEncoder',TextEncoder);vi.stubGlobal('TextDecoder',TextDecoder);fake.db=await createIsolatedDatabase();await fake.db.exec('create table auth.users(id uuid primary key,email text);');for(const[name,id]of Object.entries(ids))await fake.db.query('insert into auth.users values($1,$2)',[id,name+'@qa.invalid']);await fake.db.exec(fs.readFileSync(process.cwd()+'/database/inventory_atomic.sql','utf8'));/* R8-R1: this isolated suite uses a synthetic 'QA' category; lift the production five-category pin here only (covered by qa/r8-readiness R1-R2-03). */await fake.db.exec('delete from inventory_private.category_policy');},60000);
-beforeEach(async()=>{Object.defineProperty(navigator,'locks',{configurable:true,value:{request:async(_name:string,options:any,callback?:any)=>(callback||options)()}});stopCloudSync();__p10EnqueueFenceTestApi.clear();localStorage.clear();sessionStorage.clear();fake.offline=false;fake.loseAck=false;fake.invalid=false;fake.switchAfterCommit=false;fake.calls=[];const q=new IndexedDbSyncQueueStore();for(const id of Object.values(ids))await q.clearForUser(id as string);await fake.db.exec('delete from inventory_private.material_code_registry;delete from audit_logs;delete from transactions;delete from materials;delete from settings;delete from generator_logs;delete from users;');await seedAccounts(fake.db);
+beforeEach(async()=>{Object.defineProperty(navigator,'locks',{configurable:true,value:{request:async(_name:string,options:any,callback?:any)=>(callback||options)()}});stopCloudSync();__p10EnqueueFenceTestApi.clear();localStorage.clear();sessionStorage.clear();fake.offline=false;fake.loseAck=false;fake.invalid=false;fake.switchAfterCommit=false;fake.calls=[];const q=new IndexedDbSyncQueueStore();for(const id of Object.values(ids))await q.clearForUser(id as string);await fake.db.exec('delete from inventory_private.material_code_registry;delete from inventory_private.category_policy;delete from inventory_private.warehouse_usage;delete from audit_logs;delete from transactions;delete from materials;delete from settings;delete from generator_logs;delete from users;');await seedAccounts(fake.db);
  cfg=canonicalizeWarehouseSettings({...JSON.parse(JSON.stringify(dataService.getSettings())),organizationName:'QA',departmentName:'QA',categories:[{name:'QA',prefix:'QA',startRange:1000,endRange:2000}],units:['قطعة'],storehouses:['QA-A','QA-B'],storehouseIds:['qa-a','qa-b'],storehouseEntities:[{id:'qa-a',name:'QA-A',active:true},{id:'qa-b',name:'QA-B',active:true}],warehouseSchemaVersion:2,transactionCounters:{inbound:0,outbound:0,consumed:0,opening:0,transfer:0,adjustment:0}});await fake.db.query("insert into settings(id,data)values('app_config',$1)",[JSON.stringify({...cfg,id:'app_config'})]);await fake.db.query("insert into materials(id,data)values('qa-m1',$1)",[JSON.stringify(material())]);/* R8-R1: migration backfill of the code registry */await fake.db.exec("insert into inventory_private.material_code_registry(code_key,code,prefix,number,material_id,source) select lower(btrim(m.data->>'code')),btrim(m.data->>'code'),p->>'prefix',(p->>'number')::numeric,m.id,'r8-backfill' from materials m cross join lateral inventory_private.code_parts(m.data->>'code') p where p->>'prefix' is not null on conflict do nothing");login(ids.admin);user=(await fake.db.query('select data from users where id=$1',[ids.admin])).rows[0].data;expect((await dataService.bootstrapFreshDeviceData(user)).success).toBe(true);dataService.setCurrentUser(ids.admin);
 });
 afterAll(async()=>{stopCloudSync();await fake.db.close();vi.unstubAllGlobals();});
@@ -392,5 +392,41 @@ describe('R8-R2 registry integrity on backup/restore (R2-R8-D02 / RT-R8-D01 / RT
   }catch(e){err=e;}
   expect(String(err?.message||'')).toMatch(/INVENTORY_RESTORE_REGISTRY_REQUIRED/);
   expect(Number((await fake.db.query('select count(*) n from inventory_private.material_code_registry')).rows[0].n)).toBe(0);
+ });
+});
+describe('Conditional category / warehouse locks (client + outbox + server)',()=>{
+ it('CL-C1 getReferenceUsage merges the server answer and fails closed (supported=false) when the RPC is unavailable',async()=>{
+  expect((await dataService.saveTransaction(tx('qa-t1',5))).success).toBe(true);
+  const u=await dataService.getReferenceUsage();
+  expect(u.supported).toBe(true); expect(u.usedCategoryPrefixes).toContain('QA'); expect(u.usedWarehouseIds).toContain('qa-a'); expect(u.usedWarehouseIds).not.toContain('qa-b');
+  fake.offline=true;
+  const off=await dataService.getReferenceUsage(); expect(off.supported).toBe(false);
+  fake.offline=false;
+ });
+ it('CL-C2 an unused warehouse is hard-deleted; a used one is refused locally; an offline delete that the server finds in use stays blocked with the Arabic reason and is not applied',async()=>{
+  expect((await dataService.saveTransaction(tx('qa-t1',5))).success).toBe(true);
+  const local=await dataService.deleteStorehouse('qa-a'); expect(local.success).toBe(false); expect(local.message).toMatch(/استُخدم/);
+  await fake.db.exec("insert into inventory_private.warehouse_usage(warehouse_id,source) values('qa-b','other-device') on conflict do nothing");
+  fake.offline=true;
+  const queued=await dataService.deleteStorehouse('qa-b'); expect(queued.success).toBe(false);
+  expect(await dataService.listPendingInventoryMutations()).toHaveLength(1);
+  fake.offline=false; await expect(dataService.retryPendingInventoryMutations()).rejects.toThrow();
+  const [row]=await dataService.listPendingInventoryMutations(); expect(row.status).toBe('blocked'); expect(String(row.lastError)).toMatch(/لا يمكن حذف هذا المستودع/);
+  expect((await rows('settings'))[0].data.storehouseEntities.some((w:any)=>w.id==='qa-b')).toBe(true); // never applied at the server
+  expect(await dataService.cancelRejectedInventoryMutations()).toBe(1);
+  expect(dataService.getSettings().storehouseEntities!.some(w=>w.id==='qa-b')).toBe(true); // local view back to the confirmed state
+  await fake.db.exec("delete from inventory_private.warehouse_usage where warehouse_id='qa-b'");
+  const ok=await dataService.deleteStorehouse('qa-b'); expect(ok.success,ok.message).toBe(true);
+  expect((await rows('settings'))[0].data.storehouseEntities.map((w:any)=>w.id)).toEqual(['qa-a']);
+ });
+ it('CL-C3 a used warehouse can be disabled and re-enabled (same id) and renamed',async()=>{
+  expect((await dataService.saveTransaction(tx('qa-t1',5))).success).toBe(true);
+  expect((await dataService.setStorehouseActive('qa-a',false)).success).toBe(true); // used (qa-t1) but may be disabled
+  expect((await rows('settings'))[0].data.storehouseEntities.find((w:any)=>w.id==='qa-a').active).toBe(false);
+  expect((await dataService.setStorehouseActive('qa-b',false)).success).toBe(false); // the last active warehouse must stay
+  expect((await dataService.setStorehouseActive('qa-a',true)).success).toBe(true);
+  expect((await rows('settings'))[0].data.storehouseEntities.find((w:any)=>w.id==='qa-a').active).toBe(true);
+  expect((await dataService.renameStorehouse('qa-a','QA-A الجديد')).success).toBe(true);
+  expect((await rows('settings'))[0].data.storehouseEntities.find((w:any)=>w.id==='qa-a').name).toBe('QA-A الجديد');
  });
 });
