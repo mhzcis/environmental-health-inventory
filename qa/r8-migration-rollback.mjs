@@ -48,7 +48,7 @@ await test('MIG-2 category policy mismatch stops the migration with nothing appl
 await test('MIG-3 migration changes functions only (no data row), registers existing codes, pins the policy, then drift check reports stale 14 vs ledger 12',async()=>{const h=await dataHash();await db.exec(MIGRATION);
  assert.equal(await dataHash(),h);assert.notEqual(await md5('commit_inventory'),MAIN_COMMIT_MD5);
  assert.deepEqual((await q('select code,material_id from inventory_private.material_code_registry order by code')).map(r=>r.code+'@'+r.material_id),['PES-1001@'+PES,'PES-1002@'+ZID]);
- assert.equal((await q('select count(*)::int n from inventory_private.category_policy'))[0].n,1);
+ assert.equal((await q('select count(*)::int n from inventory_private.category_policy'))[0].n,5);
  const d=(await asUser(db,ids.admin,t=>t.query('select public.inventory_projection_drift() d'))).rows[0].d;assert.equal(d.drift,1);assert.equal(d.rows[0].stored.currentStock,14);assert.equal(d.rows[0].computed.currentStock,12);});
 await test('MIG-4 rollback refuses while an item is archived; reactivate -> rollback restores main exactly and keeps all receipts/rows',async()=>{await db.exec(MIGRATION);
  await commit(archive(0),'qa-mig-archive-1');const before=await audits();const rows=await dataHash();

@@ -329,9 +329,6 @@ REVOKE TRUNCATE ON public.users FROM authenticated;
 REVOKE ALL ON public.materials,public.transactions,public.generator_logs,public.settings,public.audit_logs,public.users FROM anon,PUBLIC;
 -- Existing read RLS remains in force. Service role and Auth provisioning are unchanged.
 
-DROP FUNCTION IF EXISTS public.inventory_reference_usage();
-DROP FUNCTION IF EXISTS inventory_private.reference_usage();
-DROP FUNCTION IF EXISTS inventory_private.record_warehouse_usage(text);
 DROP FUNCTION IF EXISTS public.inventory_code_registry();
 DROP FUNCTION IF EXISTS inventory_private.evaluate_backup_registry(jsonb);
 DROP FUNCTION IF EXISTS inventory_private.code_registry_export();
