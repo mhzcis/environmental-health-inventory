@@ -1,7 +1,7 @@
 import { registerInventoryAckPublisher, startInventoryOutboxAutoResume, type InventorySyncOperation, type InventoryProjectionMeta, enqueueInventoryLifecycle, runInventoryDeviceReset, getInventoryOutboxCounts, subscribeInventoryOutbox, cancelRejectedInventoryOutbox, enqueueInventoryMutation, enqueueInventoryRestore, InventoryPendingError, listInventoryOutbox, resumeInventoryProjection, retryInventoryOutbox } from './supabaseOutbox';
 import { IndexedDbSyncQueueStore } from './syncQueueStore';
 import { composeSupabaseAppSettings } from './supabaseSettings';
-import { Material, InventoryTransaction, AuditLog, AppSettings, SystemUser, GeneratorLogEntry, GeneratorLogSimulationResult, type AuditEventContext } from '../types';
+import { Material, InventoryTransaction, AuditLog, AppSettings, SystemUser, GeneratorLogEntry, GeneratorLogSimulationResult, type AuditEventContext, type ReferenceUsageSummary } from '../types';
 import { auth } from './firebase';
 import {
   getCurrentAuthUser,
@@ -43,7 +43,7 @@ import {
 } from './managedSessionOwner';
 import { getStorehouseByReference, getStorehouseEntities, resolveWarehouseScope } from '../utils/warehouseDomain';
 import { migrateWarehouseModel } from '../utils/warehouseMigration';
-import { addOrReactivateWarehouse, canonicalizeWarehouseSettings, renameWarehouseEntity, reorderWarehouseEntity, setWarehouseEntityActive } from '../utils/warehouseSettings';
+import { addOrReactivateWarehouse, canonicalizeWarehouseSettings, removeWarehouseEntity, renameWarehouseEntity, reorderWarehouseEntity, setWarehouseEntityActive } from '../utils/warehouseSettings';
 import {
   openingAttachmentDocId,
   toSlimSettingsRoot,
@@ -706,11 +706,11 @@ const DEFAULT_SETTINGS: AppSettings = {
   departmentName: 'دائرة البنى التحتية والتخطيط والتطوير',
   expiryWarningThresholdDays: 90,
   categories: [
-    { name: 'مبيدات حشرية', prefix: 'PES', startRange: 1000, endRange: 1999 },
-    { name: 'معقمات ومطهرات', prefix: 'SAN', startRange: 2000, endRange: 2999 },
-    { name: 'أدوات ومعدات رش', prefix: 'EQP', startRange: 3000, endRange: 3999 },
-    { name: 'مصائد قوارض', prefix: 'TRP', startRange: 4000, endRange: 4999 },
-    { name: 'كلور ومواد كيميائية', prefix: 'CHM', startRange: 5000, endRange: 5999 }
+    { name: 'مبيدات حشرية', prefix: 'PES', startRange: 1001, endRange: 1999 },
+    { name: 'معقمات ومطهرات', prefix: 'SAN', startRange: 2001, endRange: 2999 },
+    { name: 'معدات رش ومكافحة', prefix: 'EQP', startRange: 3001, endRange: 3999 },
+    { name: 'طعوم قوارض', prefix: 'ROD', startRange: 4001, endRange: 4999 },
+    { name: 'كلور ومواد كيميائية', prefix: 'CHM', startRange: 5001, endRange: 5999 }
   ],
   units: ['لتر', 'كجم', 'قطعة', 'علبة', 'جالون'],
   storehouses: ['المخزن الرئيسي', 'مستودع السموم والمبيدات', 'مستودع الأجهزة والمعدات', 'مستودع طعوم القوارض', 'مخزن أدوات السلامة', 'مخزن ب'],
@@ -931,6 +931,58 @@ export const dataService = {
     if (!getCurrentAuthUser()) throw new Error('تعذر قراءة سجل الأكواد المركزي من الخادم؛ لا تُصدَّر نسخة كاملة بدونه (يلزم اتصال وصلاحيات المدير).');
     try { return await supabaseDb.codeRegistry(); }
     catch { throw new Error('تعذر قراءة سجل الأكواد المركزي من الخادم؛ لا تُصدَّر نسخة كاملة بدونه (يلزم اتصال وصلاحيات المدير).'); }
+  },
+  getReferenceUsage: async (): Promise<ReferenceUsageSummary> => {
+    const settings = dataService.getSettings();
+    const materials = dataService.getWorkingMaterials();
+    const transactions = dataService.getTransactions();
+    const prefixes = new Set<string>();
+    const names = new Set<string>();
+    const warehouseIds = new Set<string>();
+    for (const m of materials) {
+      if (m.category) names.add(m.category);
+      const match = /^([A-Za-z]{2,6})-[1-9][0-9]{0,8}$/.exec(String(m.code || '').trim());
+      if (match) prefixes.add(match[1].toUpperCase());
+      if (m.primaryStorehouseId) warehouseIds.add(m.primaryStorehouseId);
+    }
+    for (const c of settings.categories || []) {
+      if (names.has(c.name) && c.prefix) prefixes.add(c.prefix.toUpperCase());
+      if (c.prefix && prefixes.has(c.prefix.toUpperCase()) && c.name) names.add(c.name);
+    }
+    for (const t of transactions) {
+      if (t.storehouseId) warehouseIds.add(t.storehouseId);
+    }
+    const attachments = settings.openingStockAttachments || {};
+    const entities = getStorehouseEntities(settings);
+    for (const [key, value] of Object.entries(attachments)) {
+      if (!value) continue;
+      for (const entity of entities) {
+        if (key === entity.id || key.split('--')[0] === entity.id || key.startsWith(`${entity.id}--`) || key.startsWith(`${entity.id}:`) || key.startsWith(`${entity.id}_`)) {
+          warehouseIds.add(entity.id);
+        }
+      }
+    }
+    const localResult = (supported: boolean): ReferenceUsageSummary => ({
+      usedCategoryPrefixes: Array.from(prefixes).sort(),
+      usedCategoryNames: Array.from(names).sort(),
+      usedWarehouseIds: Array.from(warehouseIds).sort(),
+      supported,
+    });
+    if (!isSupabaseConfigured()) return localResult(true);
+    if (!getCurrentAuthUser()) return localResult(false);
+    try {
+      const remote = await supabaseDb.referenceUsage();
+      for (const p of remote.usedCategoryPrefixes) prefixes.add(p.toUpperCase());
+      for (const n of remote.usedCategoryNames) names.add(n);
+      for (const w of remote.usedWarehouseIds) warehouseIds.add(w);
+      for (const c of settings.categories || []) {
+        if (c.prefix && prefixes.has(c.prefix.toUpperCase()) && c.name) names.add(c.name);
+      }
+      return localResult(true);
+    } catch {
+      // Fail-closed during pre-migration gap or offline read error: keep destructive/structural buttons locked.
+      return localResult(false);
+    }
   },
   listPendingInventoryMutations: () => listInventoryOutbox(),
   cancelRejectedInventoryMutations: async (): Promise<number> => {
@@ -1264,6 +1316,31 @@ export const dataService = {
       await dataService.saveSettings(updated);
       dataService.notify();
       return { success: true, message: active ? 'تم تفعيل المستودع بنجاح.' : 'تم تعطيل المستودع مع الاحتفاظ ببياناته التاريخية.' };
+    } catch (error) {
+      return { success: false, message: safeResultMessage(error, 'generic') };
+    }
+  },
+
+  deleteStorehouse: async (reference: string): Promise<{ success: boolean; message: string }> => {
+    if (!dataService.hasPermission('settings_edit')) return { success: false, message: 'PERMISSION_DENIED: settings_edit' };
+    try {
+      const currentSettings = dataService.getSettings();
+      const entities = getStorehouseEntities(currentSettings);
+      const target = entities.find(item => item.id === reference || item.name === reference.trim());
+      if (!target) return { success: false, message: 'المستودع غير موجود.' };
+      const usedLocally =
+        dataService.getWorkingMaterials().some(m => m.primaryStorehouseId === target.id)
+        || dataService.getTransactions().some(t => t.storehouseId === target.id)
+        || Object.entries(currentSettings.openingStockAttachments || {}).some(([k, v]) =>
+          !!v && (k === target.id || k.split('--')[0] === target.id || k.startsWith(`${target.id}--`) || k.startsWith(`${target.id}:`) || k.startsWith(`${target.id}_`))
+        );
+      if (usedLocally) {
+        return { success: false, message: 'لا يمكن حذف هذا المستودع لأنه استُخدم مسبقاً؛ يمكنك تعطيله أو إعادة تسميته فقط مع الاحتفاظ ببياناته التاريخية.' };
+      }
+      const updated = removeWarehouseEntity(currentSettings, target.id);
+      await dataService.saveSettings(updated);
+      dataService.notify();
+      return { success: true, message: 'تم حذف المستودع غير المستخدم نهائياً.' };
     } catch (error) {
       return { success: false, message: safeResultMessage(error, 'generic') };
     }

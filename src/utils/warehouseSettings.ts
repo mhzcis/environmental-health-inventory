@@ -64,6 +64,19 @@ export const setWarehouseEntityActive = (settings: AppSettings, reference: strin
   return project(canonical, entities);
 };
 
+export const removeWarehouseEntity = (settings: AppSettings, reference: string): AppSettings => {
+  const canonical = canonicalizeWarehouseSettings(settings);
+  const entities = [...(canonical.storehouseEntities || [])];
+  const index = entities.findIndex((item) => item.id === reference || item.name === normalizeWarehouseName(reference));
+  if (index < 0) throw new Error('المستودع غير موجود.');
+  const target = entities[index];
+  if (target.active && entities.filter((item) => item.active).length <= 1) {
+    throw new Error('لا يمكن حذف آخر مستودع فعال في النظام.');
+  }
+  const remaining = entities.filter((_, i) => i !== index);
+  return project(canonical, remaining);
+};
+
 export const reorderWarehouseEntity = (
   settings: AppSettings,
   reference: string,

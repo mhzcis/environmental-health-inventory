@@ -253,20 +253,42 @@ await test('CODE-01 CFG-02 category configuration validated at the server (names
  await cfgCase('string-range',c=>{c.categories[0].endRange='1999';},/CONFIG_INVALID/);
  await cfgCase('reversed',c=>{c.categories[0].startRange=1999;c.categories[0].endRange=1001;},/CONFIG_INVALID/);
  await cfgCase('empty-name',c=>{c.categories[0].name='  ';},/CONFIG_INVALID/);});
-await test('R1-R2-03 the five-category policy is pinned after migration: no removal, re-prefix, shrink, widen, overlap, addition or name swap; a display rename with its materials is allowed',async()=>{await seedPesOk();await commit(ids.admin,payload([set('materials','m-1',mat('m-1','PES-1002'))]));
- assert.deepEqual((await q('select prefix,start_range::int s,end_range::int e from inventory_private.category_policy order by prefix')).map(r=>[r.prefix,r.s,r.e]),[['CHM',5001,5999],['EQP',3001,3999],['PES',1001,1999],['ROD',4001,4999],['SAN',2001,2999]]);
- await cfgCase('rename-prefix',c=>{c.categories[0].prefix='PST';},/PREFIX_FROZEN|POLICY_PINNED/);
- await cfgCase('shrink-used',c=>{c.categories[0].endRange=1002;},/POLICY_PINNED/);
- await cfgCase('shrink-used-start',c=>{c.categories[0].startRange=1002;},/PREFIX_FROZEN|POLICY_PINNED/);
- await cfgCase('shrink-unused',c=>{c.categories[4].endRange=5001;},/POLICY_PINNED/);
- await cfgCase('widen',c=>{c.categories[4].endRange=6999;},/POLICY_PINNED/);
- await cfgCase('reprefix-unused',c=>{c.categories[1].prefix='SNT';},/POLICY_PINNED/);
- await cfgCase('remove-unused',c=>{c.categories=c.categories.filter(x=>x.prefix!=='SAN');},/POLICY_PINNED/);
- await cfgCase('remove-used',c=>{c.categories=c.categories.slice(1);},/CATEGORY_IN_USE|PREFIX_FROZEN|POLICY_PINNED/);
- await cfgCase('add-sixth',c=>{c.categories.push({name:'أخرى',prefix:'ZZZ',startRange:9001,endRange:9002});},/POLICY_PINNED/);
- await cfgCase('overlap',c=>{c.categories[1].startRange=1500;},/RANGE_OVERLAP|POLICY_PINNED/);
+await test('R1-R2-03 conditional category lock: used prefix is frozen permanently (even after delete), while unused categories may be edited, deleted, or added',async()=>{await seedPesOk();await commit(ids.admin,payload([set('materials','m-1',mat('m-1','PES-1002'))]));
+ assert.deepEqual((await q('select prefix,start_range::int s,end_range::int e from inventory_private.category_policy order by prefix')).map(r=>[r.prefix,r.s,r.e]),[['PES',1001,1999]]);
+ await cfgCase('rename-prefix',c=>{c.categories[0].prefix='PST';},/PREFIX_FROZEN/);
+ await cfgCase('shrink-used',c=>{c.categories[0].endRange=1002;},/PREFIX_FROZEN/);
+ await cfgCase('shrink-used-start',c=>{c.categories[0].startRange=1002;},/PREFIX_FROZEN/);
+ await cfgCase('remove-used',c=>{c.categories=c.categories.slice(1);},/CATEGORY_IN_USE|PREFIX_FROZEN/);
+ await cfgCase('overlap',c=>{c.categories[1].startRange=1500;},/RANGE_OVERLAP/);
  await cfgCase('swap-names',c=>{const a=c.categories[0].name;c.categories[0].name=c.categories[1].name;c.categories[1].name=a;},/CODE_CATEGORY_MISMATCH/);
- const c=await cfgNow();const same=structuredClone(c);same.categories[2].name='معدات رش';await commit(ids.admin,payload([set('settings','app_config',same,c)]));});
+ // Unused categories can be resized, re-prefixed, supplemented, or removed:
+ let c=await cfgNow();let nextC=structuredClone(c);nextC.categories[4].endRange=5500;nextC.categories[1].prefix='SNT';nextC.categories.push({name:'أخرى',prefix:'ZZZ',startRange:9001,endRange:9002});
+ await commit(ids.admin,payload([set('settings','app_config',nextC,c)]));
+ // First use of SNT locks it permanently even after the material is deleted:
+ await commit(ids.admin,payload([set('materials','m-snt',mat('m-snt','SNT-2001',{category:'معقمات ومطهرات'}))]));
+ const sntRow=await row('materials','m-snt');
+ await commit(ids.admin,payload([del('materials','m-snt',sntRow)]));
+ await cfgCase('remove-used-after-delete',x=>{x.categories=x.categories.filter(k=>k.prefix!=='SNT');},/PREFIX_FROZEN/);
+ // Unused ZZZ can still be deleted and display rename on used/unused remains allowed:
+ c=await cfgNow();nextC=structuredClone(c);nextC.categories=nextC.categories.filter(k=>k.prefix!=='ZZZ');nextC.categories[2].name='معدات رش';
+ await commit(ids.admin,payload([set('settings','app_config',nextC,c)]));});
+await test('CL-WH-01 conditional warehouse lock & inventory_reference_usage(): unused warehouse can be deleted; used warehouse is permanently locked from deletion (rename/deactivate/reactivate allowed)',async()=>{await seedPesOk();
+ const usage=(await asUser(db,ids.admin,tx=>tx.query('select public.inventory_reference_usage() u'))).rows[0].u;
+ assert.ok(usage.usedCategoryPrefixes.includes('PES'));
+ assert.ok(usage.usedWarehouseIds.includes('wh-main'));
+ assert.ok(!usage.usedWarehouseIds.includes('wh-off'));
+ // Deleting used warehouse wh-main fails with INVENTORY_WAREHOUSE_IN_USE:
+ await cfgCase('delete-used-wh',c=>{c.storehouseEntities=c.storehouseEntities.filter(w=>w.id!=='wh-main');c.storehouses=c.storehouseEntities.filter(w=>w.active).map(w=>w.name);c.storehouseIds=c.storehouseEntities.map(w=>w.id);},/INVENTORY_WAREHOUSE_IN_USE|INVENTORY_WAREHOUSE_INVALID/);
+ // Deleting unused warehouse wh-off succeeds:
+ const c0=await cfgNow();const c1=structuredClone(c0);c1.storehouseEntities=c1.storehouseEntities.filter(w=>w.id!=='wh-off');c1.storehouses=c1.storehouseEntities.filter(w=>w.active).map(w=>w.name);c1.storehouseIds=c1.storehouseEntities.map(w=>w.id);
+ await commit(ids.admin,payload([set('settings','app_config',c1,c0)]));
+ // Empty BackupV2 restore onto empty registry succeeds (no INVENTORY_RESTORE_REGISTRY_REQUIRED):
+ await q('delete from public.transactions; delete from public.materials; delete from inventory_private.material_code_registry; delete from inventory_private.category_policy; delete from inventory_private.warehouse_usage;');
+ const users=(await q('select data from users order by id')).map(r=>r.data);
+ const emptyBackup={settings:await cfgNow(),materials:[],transactions:[],generatorLogs:[],users,codeRegistry:[]};
+ const preE=(await asUser(db,ids.admin,tx=>tx.query('select public.inventory_restore_preview($1) p',[JSON.stringify(emptyBackup)]))).rows[0].p;
+ assert.equal(preE.registry.willRefuse,false);
+ await commit(ids.admin,{mode:'restore',label:'QA empty restore',backup:emptyBackup,expectedState:preE.expectedState},'qa-empty-restore');});
 await test('CODE-01 referenced category rename (same prefix) is atomic with its materials; history is never recoded',async()=>{await seedPesOk();const c=await cfgNow();const m=await row('materials',PES);
  const next=structuredClone(c);next.categories[0].name='مبيدات حشرية ومكافحة';
  await commit(ids.admin,payload([set('settings','app_config',next,c),set('materials',PES,{...m,category:'مبيدات حشرية ومكافحة'},m)]));assert.equal((await row('materials',PES)).code,'PES-1001');

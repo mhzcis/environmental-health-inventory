@@ -53,8 +53,9 @@ BEGIN
    IF reused IS NOT NULL THEN RAISE EXCEPTION 'R8_MIGRATION_CODE_REUSED_DURING_ROLLBACK %',reused; END IF;
  END IF;
  IF to_regclass('inventory_private.category_policy') IS NOT NULL THEN
-   EXECUTE $q$SELECT jsonb_agg(jsonb_build_array(prefix,start_range,end_range) ORDER BY prefix) FROM inventory_private.category_policy$q$ INTO cats;
-   IF cats IS DISTINCT FROM '[["CHM",5001,5999],["EQP",3001,3999],["PES",1001,1999],["ROD",4001,4999],["SAN",2001,2999]]'::jsonb THEN
+   EXECUTE $q$SELECT jsonb_agg(jsonb_build_array(prefix,start_range,end_range) ORDER BY prefix) FROM inventory_private.category_policy p
+     WHERE NOT ('[["CHM",5001,5999],["EQP",3001,3999],["PES",1001,1999],["ROD",4001,4999],["SAN",2001,2999]]'::jsonb @> jsonb_build_array(jsonb_build_array(p.prefix,p.start_range,p.end_range)))$q$ INTO cats;
+   IF cats IS NOT NULL THEN
      RAISE EXCEPTION 'R8_MIGRATION_POLICY_TABLE_UNEXPECTED %',cats;
    END IF;
  END IF;
@@ -75,7 +76,7 @@ ${candidate}
 DO $r8_post$ BEGIN PERFORM inventory_private.validate_inventory(); END $r8_post$;
 COMMIT;
 `;}
-const dropList=['public.inventory_code_registry()','inventory_private.evaluate_backup_registry(jsonb)','inventory_private.code_registry_export()','inventory_private.projection_status(jsonb,jsonb)','public.inventory_projection_drift()','public.inventory_next_material_code(text)','inventory_private.projection_drift()','inventory_private.next_material_code(text)',
+const dropList=['public.inventory_reference_usage()','inventory_private.reference_usage()','inventory_private.record_warehouse_usage(text)','public.inventory_code_registry()','inventory_private.evaluate_backup_registry(jsonb)','inventory_private.code_registry_export()','inventory_private.projection_status(jsonb,jsonb)','public.inventory_projection_drift()','public.inventory_next_material_code(text)','inventory_private.projection_drift()','inventory_private.next_material_code(text)',
  'inventory_private.reserve_material_code(text,jsonb,jsonb,boolean,text)','inventory_private.code_matches_category(text,text,jsonb)','inventory_private.validate_category_config(jsonb)',
  'inventory_private.material_rows(jsonb)','inventory_private.stored_projection(jsonb)','inventory_private.material_ledger_hash(text)','inventory_private.material_projection(text)',
  'inventory_private.code_parts(text)','inventory_private.server_owned_material_keys()','inventory_private.lifecycle_material_keys()','inventory_private.derived_material_keys()'];

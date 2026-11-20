@@ -32,7 +32,7 @@ import { createBackup, validateBackup, formatRestoreConfirmDialog, migrateValida
 import NotificationToast from '../components/NotificationToast';
 import { downloadPreparedMessage } from '../utils/downloadFeedback';
 
-import { AppSettings, CategoryConfig, SystemUser, MigrationLog, RbacTestReport, DataComparisonReport } from '../types';
+import { AppSettings, CategoryConfig, SystemUser, MigrationLog, RbacTestReport, DataComparisonReport, ReferenceUsageSummary } from '../types';
 import { auth, isFirebaseAvailable } from '../services/firebase';
 import { supabaseAuthVerifyPassword } from '../services/supabase';
 import { renderOption } from '../utils/emoji';
@@ -112,7 +112,13 @@ export default function Settings() {
   const [newStorehouse, setNewStorehouse] = useState('');
   
   type EditType = 'category' | 'storehouse' | 'unit' | null;
-  const [editDialog, setEditDialog] = useState<{type: EditType, index: number, value: string, prefix?: string, startRange?: number, endRange?: number, open: boolean}>({type: null, index: -1, value: '', prefix: '', startRange: 0, endRange: 0, open: false});
+  const [editDialog, setEditDialog] = useState<{type: EditType, index: number, refId?: string, value: string, prefix?: string, startRange?: number, endRange?: number, locked?: boolean, open: boolean}>({type: null, index: -1, refId: '', value: '', prefix: '', startRange: 0, endRange: 0, locked: false, open: false});
+  const [referenceUsage, setReferenceUsage] = useState<ReferenceUsageSummary>({
+    usedCategoryPrefixes: [],
+    usedCategoryNames: [],
+    usedWarehouseIds: [],
+    supported: false,
+  });
 
   // Backup-Restore & Reset States
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
@@ -166,13 +172,34 @@ export default function Settings() {
   const [partnerSearchQuery, setPartnerSearchQuery] = useState('');
 
   useEffect(() => {
+    let active = true;
+    const refreshUsage = () => {
+      void dataService.getReferenceUsage().then(usage => {
+        if (active) setReferenceUsage(usage);
+      });
+    };
     const load = () => {
       setSettings(dataService.getSettings());
       setUsers(dataService.getUsers());
+      refreshUsage();
     };
     load();
-    return dataService.subscribe(load);
+    const unsub = dataService.subscribe(load);
+    return () => { active = false; unsub(); };
   }, []);
+
+  const isCategoryUsed = (cat: CategoryConfig): boolean =>
+    referenceUsage.usedCategoryPrefixes.includes(cat.prefix.toUpperCase())
+    || referenceUsage.usedCategoryNames.includes(cat.name);
+
+  const isCategoryStructureLocked = (cat: CategoryConfig): boolean =>
+    !referenceUsage.supported || isCategoryUsed(cat);
+
+  const isWarehouseUsed = (warehouseId: string): boolean =>
+    referenceUsage.usedWarehouseIds.includes(warehouseId);
+
+  const isWarehouseDeleteLocked = (warehouseId: string): boolean =>
+    !referenceUsage.supported || isWarehouseUsed(warehouseId);
 
   useEffect(() => {
     if (activeTab !== 3 || !dataService.hasPermission('users_manage')) return;
@@ -436,8 +463,8 @@ export default function Settings() {
     let oldValue = '';
     
     if (editDialog.type === 'storehouse') {
-       oldValue = settings.storehouses[editDialog.index];
-       const res = await dataService.renameStorehouse(oldValue, trimmed);
+       const ref = editDialog.refId || settings.storehouses[editDialog.index];
+       const res = await dataService.renameStorehouse(ref, trimmed);
        if (!res.success) { setErrorMsg(presentResultMessage(res.message, 'user-management')); return; }
        setSettings(dataService.getSettings());
        setEditDialog({ ...editDialog, open: false });
@@ -448,24 +475,45 @@ export default function Settings() {
        if (settings.units.includes(trimmed)) { setErrorMsg('موجود مسبقاً'); return; }
        updated.units[editDialog.index] = trimmed;
     } else if (editDialog.type === 'category') {
-       oldValue = settings.categories[editDialog.index].name;
+       const currentCat = settings.categories[editDialog.index];
+       const structureLocked = editDialog.locked || isCategoryStructureLocked(currentCat);
+       oldValue = currentCat.name;
        if (settings.categories.some((c, i) => i !== editDialog.index && c.name === trimmed)) { setErrorMsg('موجود مسبقاً'); return; }
 
-       const newStart = editDialog.startRange || updated.categories[editDialog.index].startRange;
-       const newEnd = editDialog.endRange || updated.categories[editDialog.index].endRange;
-       const rangeOverlap = settings.categories.find((c, i) => i !== editDialog.index && newStart <= c.endRange && newEnd >= c.startRange);
-       if (rangeOverlap) {
-         setErrorMsg(`المدى الرقمي يتعارض مع تصنيف "${rangeOverlap.name}" (${rangeOverlap.startRange} - ${rangeOverlap.endRange})`);
-         return;
+       if (structureLocked) {
+         updated.categories[editDialog.index] = {
+           ...currentCat,
+           name: trimmed,
+         };
+       } else {
+         const newPrefix = (editDialog.prefix || currentCat.prefix).trim().toUpperCase();
+         if (!/^[A-Z]{2,6}$/.test(newPrefix)) {
+           setErrorMsg('البادئة يجب أن تكون من 2 إلى 6 أحرف إنجليزية كبيرة.');
+           return;
+         }
+         if (settings.categories.some((c, i) => i !== editDialog.index && c.prefix.toUpperCase() === newPrefix)) {
+           setErrorMsg('البادئة مستخدمة بالفعل في تصنيف آخر.');
+           return;
+         }
+         const newStart = Number(editDialog.startRange ?? currentCat.startRange);
+         const newEnd = Number(editDialog.endRange ?? currentCat.endRange);
+         if (!Number.isInteger(newStart) || !Number.isInteger(newEnd) || newStart < 1 || newStart >= newEnd) {
+           setErrorMsg('المدى الرقمي غير صالح: يجب أن تكون البداية عددًا صحيحًا موجبًا وأصغر من النهاية.');
+           return;
+         }
+         const rangeOverlap = settings.categories.find((c, i) => i !== editDialog.index && newStart <= c.endRange && newEnd >= c.startRange);
+         if (rangeOverlap) {
+           setErrorMsg(`المدى الرقمي يتعارض مع تصنيف "${rangeOverlap.name}" (${rangeOverlap.startRange} - ${rangeOverlap.endRange})`);
+           return;
+         }
+         updated.categories[editDialog.index] = {
+           ...currentCat,
+           name: trimmed,
+           prefix: newPrefix,
+           startRange: newStart,
+           endRange: newEnd,
+         };
        }
-
-       updated.categories[editDialog.index] = { 
-         ...updated.categories[editDialog.index], 
-         name: trimmed,
-         prefix: editDialog.prefix || updated.categories[editDialog.index].prefix,
-         startRange: editDialog.startRange || updated.categories[editDialog.index].startRange,
-         endRange: editDialog.endRange || updated.categories[editDialog.index].endRange
-       };
     }
     
     try {
@@ -567,8 +615,15 @@ export default function Settings() {
     setSuccessMsg(res.message);
   };
 
-  const handleDeleteStorehouse = async (store: string) => {
-    const res = await dataService.setStorehouseActive(store, false);
+  const handleToggleStorehouseActive = async (storeRef: string, active: boolean) => {
+    const res = await dataService.setStorehouseActive(storeRef, active);
+    if (!res.success) { setErrorMsg(presentResultMessage(res.message, 'user-management')); return; }
+    setSettings(dataService.getSettings());
+    setSuccessMsg(res.message);
+  };
+
+  const handleDeleteStorehouse = async (storeRef: string) => {
+    const res = await dataService.deleteStorehouse(storeRef);
     if (!res.success) { setErrorMsg(presentResultMessage(res.message, 'user-management')); return; }
     setSettings(dataService.getSettings());
     setSuccessMsg(res.message);
@@ -721,15 +776,15 @@ export default function Settings() {
   const handleDownloadItemsTemplate = () => {
     const ws_data = [
       ["الكود", "الاسم", "التصنيف", "الوحدة", "حد الأمان", "الرصيد الافتتاحي", "موقع التخزين", "ملاحظات", "الشركة المصنعة", "تاريخ الإنتاج", "تاريخ الانتهاء", "درجة الخطورة"],
-      ["MAT-001", "كلور بودرة 65%", "كلور ومواد كيميائية", "كجم", "150", "200", "المخزن الرئيسي", "مادة معقمة مخصصة لآبار ومياه الشرب والتعقيم البيئي", "", "", "", ""],
-      ["MAT-002", "صابون سائل طبي للتعقيم", "معقمات ومطهرات", "لتر", "50", "100", "المخزن الرئيسي", "معقم أيدي طبي للمرافق الصحية والفرق الميدانية", "", "", "", ""],
-      ["MAT-003", "أقراص تعقيم مياه NaDCC", "كلور ومواد كيميائية", "علبة", "100", "500", "المخزن الرئيسي", "تستخدم في حالات الطوارئ لتعقيم المياه السريع من مسببات الأمراض", "", "", "", ""],
-      ["MAT-004", "خرطوم رش ضغط عالي 15 متر", "أدوات ومعدات رش", "قطعة", "5", "10", "المخزن الرئيسي", "متوافق مع مضخات الديزل وبخاخات الرش الكبيرة", "", "", "", ""],
-      ["MAT-005", "بدلات واقية كيميائية كاملة", "أدوات ومعدات رش", "قطعة", "20", "50", "المخزن الرئيسي", "معدات وقاية شخصية لفرق رش المبيدات والكلور", "", "", "", ""],
-      ["PES-001", "دلتامثرين 2.5% مستحلب مركز", "مبيدات حشرية", "لتر", "80", "150", "المخزن الرئيسي", "مبيد حشري فعال لمكافحة البعوض والحشرات الطائرة", "شركة غزة الكيماوية", "2025-06-01", "2026-08-15", "متوسط"],
-      ["PES-002", "سايبرمثرين 10% EC", "مبيدات حشرية", "لتر", "40", "60", "المخزن الرئيسي", "مبيد فعال لمكافحة الزواحف والصراصير في خطوط الصرف الصحي", "الشركة العربية للمبيدات", "2024-01-10", "2026-03-10", "مرتفع"],
-      ["PES-003", "بروماديولون طعوم قوارض مقاوم للرطوبة", "مصائد قوارض", "كجم", "120", "300", "المخزن الرئيسي", "مكعبات شمعية لمكافحة الفئران والجرذان", "مبيدات الشرق الأوسط", "2025-05-15", "2027-05-15", "مرتفع"],
-      ["PES-004", "تيميفوس 1% حبيبات رملية", "مبيدات حشرية", "كجم", "200", "120", "المخزن الرئيسي", "يستخدم لمكافحة يرقات البعوض في المياه الراكدة", "سنجنتا الأردن", "2025-09-01", "2026-09-18", "منخفض"]
+      ["CHM-5001", "كلور بودرة 65%", "كلور ومواد كيميائية", "كجم", "150", "200", "المخزن الرئيسي", "مادة معقمة مخصصة لآبار ومياه الشرب والتعقيم البيئي", "", "", "", ""],
+      ["SAN-2001", "صابون سائل طبي للتعقيم", "معقمات ومطهرات", "لتر", "50", "100", "المخزن الرئيسي", "معقم أيدي طبي للمرافق الصحية والفرق الميدانية", "", "", "", ""],
+      ["CHM-5002", "أقراص تعقيم مياه NaDCC", "كلور ومواد كيميائية", "علبة", "100", "500", "المخزن الرئيسي", "تستخدم في حالات الطوارئ لتعقيم المياه السريع من مسببات الأمراض", "", "", "", ""],
+      ["EQP-3001", "خرطوم رش ضغط عالي 15 متر", "معدات رش ومكافحة", "قطعة", "5", "10", "المخزن الرئيسي", "متوافق مع مضخات الديزل وبخاخات الرش الكبيرة", "", "", "", ""],
+      ["EQP-3002", "بدلات واقية كيميائية كاملة", "معدات رش ومكافحة", "قطعة", "20", "50", "المخزن الرئيسي", "معدات وقاية شخصية لفرق رش المبيدات والكلور", "", "", "", ""],
+      ["PES-1001", "دلتامثرين 2.5% مستحلب مركز", "مبيدات حشرية", "لتر", "80", "150", "المخزن الرئيسي", "مبيد حشري فعال لمكافحة البعوض والحشرات الطائرة", "شركة غزة الكيماوية", "2025-06-01", "2026-08-15", "متوسط"],
+      ["PES-1002", "سايبرمثرين 10% EC", "مبيدات حشرية", "لتر", "40", "60", "المخزن الرئيسي", "مبيد فعال لمكافحة الزواحف والصراصير في خطوط الصرف الصحي", "الشركة العربية للمبيدات", "2024-01-10", "2026-03-10", "مرتفع"],
+      ["ROD-4001", "بروماديولون طعوم قوارض مقاوم للرطوبة", "طعوم قوارض", "كجم", "120", "300", "المخزن الرئيسي", "مكعبات شمعية لمكافحة الفئران والجرذان", "مبيدات الشرق الأوسط", "2025-05-15", "2027-05-15", "مرتفع"],
+      ["PES-1003", "تيميفوس 1% حبيبات رملية", "مبيدات حشرية", "كجم", "200", "120", "المخزن الرئيسي", "يستخدم لمكافحة يرقات البعوض في المياه الراكدة", "سنجنتا الأردن", "2025-09-01", "2026-09-18", "منخفض"]
     ];
     const ws = XLSX.utils.aoa_to_sheet(ws_data);
     const wb = XLSX.utils.book_new();
@@ -741,12 +796,12 @@ export default function Settings() {
   const handleDownloadTransactionsTemplate = () => {
     const ws_data = [
       ["كود الصنف", "نوع الحركة", "الكمية", "المستودع", "المورد أو المستلم", "التاريخ", "ملاحظات"],
-      ["MAT-001", "وارد", "500", "المخزن الرئيسي", "شركة توريد الكيماويات الفلسطينية", "2026-01-12", "شحنة توريد جديدة لتطهير الآبار والمرافق"],
-      ["MAT-002", "وارد", "120", "المخزن الرئيسي", "الهلال الأحمر الفلسطيني", "2026-02-18", "تسهيل ومساعدة مجتمعية لمكاتب وفرق الرش"],
-      ["MAT-003", "وارد", "300", "المخزن الرئيسي", "منظمة اليونيسيف العالمية", "2026-03-05", "شحنة إمدادات المياه والوقاية البيئية"],
-      ["MAT-004", "وارد", "10", "المخزن الرئيسي", "مؤسسة التعاون الدولية", "2026-04-10", "توريد خراطيم ومعدات ضغط عالي"],
-      ["MAT-005", "صادر", "30", "المخزن الرئيسي", "قسم مكافحة المكاره والفرق الميدانية", "2026-05-01", "صرف وتسليم للميدان مع التأكيد على الاستلام"],
-      ["PES-001", "مستهلك", "15", "المخزن الرئيسي", "حملة رش برك الصرف الصحي", "2026-05-10", "استهلاك مباشر خلال حملة المكافحة الاستثنائية"]
+      ["CHM-5001", "وارد", "500", "المخزن الرئيسي", "شركة توريد الكيماويات الفلسطينية", "2026-01-12", "شحنة توريد جديدة لتطهير الآبار والمرافق"],
+      ["SAN-2001", "وارد", "120", "المخزن الرئيسي", "الهلال الأحمر الفلسطيني", "2026-02-18", "تسهيل ومساعدة مجتمعية لمكاتب وفرق الرش"],
+      ["CHM-5002", "وارد", "300", "المخزن الرئيسي", "منظمة اليونيسيف العالمية", "2026-03-05", "شحنة إمدادات المياه والوقاية البيئية"],
+      ["EQP-3001", "وارد", "10", "المخزن الرئيسي", "مؤسسة التعاون الدولية", "2026-04-10", "توريد خراطيم ومعدات ضغط عالي"],
+      ["EQP-3002", "صادر", "30", "المخزن الرئيسي", "قسم مكافحة المكاره والفرق الميدانية", "2026-05-01", "صرف وتسليم للميدان مع التأكيد على الاستلام"],
+      ["PES-1001", "مستهلك", "15", "المخزن الرئيسي", "حملة رش برك الصرف الصحي", "2026-05-10", "استهلاك مباشر خلال حملة المكافحة الاستثنائية"]
     ];
     const ws = XLSX.utils.aoa_to_sheet(ws_data);
     const wb = XLSX.utils.book_new();
@@ -1451,10 +1506,13 @@ export default function Settings() {
                 التصنيفات المفعلة حالياً ونطاق أكوادها الرقمية:
               </Typography>
               <List sx={{ maxHeight: 220, overflowY: 'auto', bgcolor: '#fdfdfd', borderRadius: '12px' }}>
-                {settings.categories.map((cat, index) => (
-                  <ListItem 
-                    key={cat.name} 
-                    divider 
+                {settings.categories.map((cat, index) => {
+                  const used = isCategoryUsed(cat);
+                  const locked = isCategoryStructureLocked(cat);
+                  return (
+                  <ListItem
+                    key={cat.name}
+                    divider
                     sx={{ py: 1.5, px: 2 }}
                     secondaryAction={
                       <Box sx={{ display: 'flex', gap: 0.5, ml: 2 }}>
@@ -1464,10 +1522,21 @@ export default function Settings() {
                         <IconButton size="small" onClick={() => handleMoveArrayItem('category', index, 'down')} disabled={index === settings.categories.length - 1}>
                           <ArrowDownwardIcon sx={{ fontSize: '16px' }} />
                         </IconButton>
-                        <IconButton size="small" color="primary" onClick={() => setEditDialog({type: 'category', index, value: cat.name, prefix: cat.prefix, startRange: cat.startRange, endRange: cat.endRange, open: true})}>
+                        <IconButton
+                          size="small"
+                          color="primary"
+                          title={locked ? 'تعديل الاسم الظاهر فقط (البادئة والمدى مقفلان)' : 'تعديل بيانات التصنيف'}
+                          onClick={() => setEditDialog({type: 'category', index, value: cat.name, prefix: cat.prefix, startRange: cat.startRange, endRange: cat.endRange, locked, open: true})}
+                        >
                           <EditIcon sx={{ fontSize: '16px' }} />
                         </IconButton>
-                        <IconButton size="small" color="error" onClick={() => handleDeleteCategory(cat.name)}>
+                        <IconButton
+                          size="small"
+                          color="error"
+                          disabled={locked || settings.categories.length <= 1}
+                          title={locked ? 'التصنيف مقفل ولا يمكن حذفه' : 'حذف التصنيف'}
+                          onClick={() => handleDeleteCategory(cat.name)}
+                        >
                           <DeleteIcon sx={{ fontSize: '16px' }} />
                         </IconButton>
                       </Box>
@@ -1480,10 +1549,14 @@ export default function Settings() {
                       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
                         <Chip label={`البادئة: ${cat.prefix}`} size="small" variant="outlined" sx={{ height: 20, fontSize: '10px', color: '#006da3', borderColor: '#b3d7ea', fontFamily: '"Cairo", sans-serif' }} />
                         <Chip label={`المدى: ${cat.startRange} - ${cat.endRange}`} size="small" variant="outlined" sx={{ height: 20, fontSize: '10px', color: '#047857', borderColor: '#a7f3d0', fontFamily: '"Cairo", sans-serif' }} />
+                        {used && (
+                          <Chip label="مستخدم – مقفل" size="small" color="warning" variant="outlined" sx={{ height: 20, fontSize: '10px', fontWeight: 'bold', fontFamily: '"Cairo", sans-serif' }} />
+                        )}
                       </Box>
                     </Box>
                   </ListItem>
-                ))}
+                  );
+                })}
               </List>
             </Paper>
           </Grid>
@@ -1519,32 +1592,90 @@ export default function Settings() {
                 </Button>
               </Box>
 
-              <List sx={{ maxHeight: 220, overflowY: 'auto', bgcolor: '#fdfdfd', borderRadius: '12px' }}>
-                {settings.storehouses.map((store, index) => (
-                  <ListItem 
-                    key={store} 
-                    divider 
-                    sx={{ py: 1.5, px: 2 }}
-                    secondaryAction={
-                      <Box sx={{ display: 'flex', gap: 0.5, ml: 2 }}>
-                        <IconButton size="small" onClick={() => handleMoveArrayItem('storehouse', index, 'up')} disabled={index === 0}>
-                          <ArrowUpwardIcon sx={{ fontSize: '16px' }} />
-                        </IconButton>
-                        <IconButton size="small" onClick={() => handleMoveArrayItem('storehouse', index, 'down')} disabled={index === settings.storehouses.length - 1}>
-                          <ArrowDownwardIcon sx={{ fontSize: '16px' }} />
-                        </IconButton>
-                        <IconButton size="small" color="primary" onClick={() => setEditDialog({type: 'storehouse', index, value: store, open: true})}>
-                          <EditIcon sx={{ fontSize: '16px' }} />
-                        </IconButton>
-                        <IconButton size="small" color="error" onClick={() => handleDeleteStorehouse(store)}>
-                          <DeleteIcon sx={{ fontSize: '16px' }} />
-                        </IconButton>
-                      </Box>
-                    }
-                  >
-                    <ListItemText primary={<Typography sx={{ fontFamily: '"Cairo", sans-serif', fontWeight: 'bold' }}>{store}</Typography>} />
-                  </ListItem>
-                ))}
+              <List sx={{ maxHeight: 260, overflowY: 'auto', bgcolor: '#fdfdfd', borderRadius: '12px' }}>
+                {(() => {
+                  const allEntities = getStorehouseEntities(settings);
+                  const activeNames = settings.storehouses;
+                  return allEntities.map((entity, index) => {
+                    const used = isWarehouseUsed(entity.id);
+                    const deleteLocked = isWarehouseDeleteLocked(entity.id);
+                    const activeIdx = activeNames.indexOf(entity.name);
+                    return (
+                      <ListItem
+                        key={entity.id}
+                        divider
+                        sx={{ py: 1.5, px: 2, opacity: entity.active ? 1 : 0.72, bgcolor: entity.active ? 'transparent' : '#f8fafc' }}
+                        secondaryAction={
+                          <Box sx={{ display: 'flex', gap: 0.5, ml: 2, alignItems: 'center' }}>
+                            {entity.active && (
+                              <>
+                                <IconButton size="small" onClick={() => handleMoveArrayItem('storehouse', activeIdx, 'up')} disabled={activeIdx <= 0}>
+                                  <ArrowUpwardIcon sx={{ fontSize: '16px' }} />
+                                </IconButton>
+                                <IconButton size="small" onClick={() => handleMoveArrayItem('storehouse', activeIdx, 'down')} disabled={activeIdx < 0 || activeIdx === activeNames.length - 1}>
+                                  <ArrowDownwardIcon sx={{ fontSize: '16px' }} />
+                                </IconButton>
+                              </>
+                            )}
+                            <IconButton
+                              size="small"
+                              color="primary"
+                              title="تعديل اسم المستودع"
+                              onClick={() => setEditDialog({type: 'storehouse', index, refId: entity.id, value: entity.name, open: true})}
+                            >
+                              <EditIcon sx={{ fontSize: '16px' }} />
+                            </IconButton>
+                            {entity.active ? (
+                              <IconButton
+                                size="small"
+                                color="warning"
+                                title="تعطيل المستودع مع الاحتفاظ ببياناته التاريخية"
+                                disabled={activeNames.length <= 1}
+                                onClick={() => handleToggleStorehouseActive(entity.id, false)}
+                              >
+                                <BlockIcon sx={{ fontSize: '16px' }} />
+                              </IconButton>
+                            ) : (
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                color="success"
+                                startIcon={<AutorenewIcon sx={{ fontSize: '15px', ml: 0.5 }} />}
+                                onClick={() => handleToggleStorehouseActive(entity.id, true)}
+                                sx={{ py: 0.25, px: 1, fontSize: '11px', fontFamily: '"Cairo", sans-serif', borderRadius: '8px' }}
+                              >
+                                إعادة تفعيل
+                              </Button>
+                            )}
+                            <IconButton
+                              size="small"
+                              color="error"
+                              disabled={deleteLocked || (entity.active && activeNames.length <= 1)}
+                              title={deleteLocked ? 'المستودع مستخدم ومقفل من الحذف النهائي (يمكن تعطيله فقط)' : 'حذف المستودع غير المستخدم نهائياً'}
+                              onClick={() => handleDeleteStorehouse(entity.id)}
+                            >
+                              <DeleteIcon sx={{ fontSize: '16px' }} />
+                            </IconButton>
+                          </Box>
+                        }
+                      >
+                        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                          <Typography sx={{ fontFamily: '"Cairo", sans-serif', fontWeight: 'bold', color: entity.active ? '#1e293b' : '#64748b' }}>
+                            {entity.name}
+                          </Typography>
+                          <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
+                            {!entity.active && (
+                              <Chip label="معطّل" size="small" color="default" variant="outlined" sx={{ height: 20, fontSize: '10px', fontFamily: '"Cairo", sans-serif' }} />
+                            )}
+                            {used && (
+                              <Chip label="مستخدم – مقفل" size="small" color="warning" variant="outlined" sx={{ height: 20, fontSize: '10px', fontWeight: 'bold', fontFamily: '"Cairo", sans-serif' }} />
+                            )}
+                          </Box>
+                        </Box>
+                      </ListItem>
+                    );
+                  });
+                })()}
               </List>
             </Paper>
           </Grid>
@@ -3214,7 +3345,11 @@ export default function Settings() {
         slotProps={{ paper: { sx: { p: 1, minWidth: {xs: 'auto', sm: '350px'}, direction: 'rtl' } } }}
       >
         <DialogTitle sx={{ fontFamily: '"Cairo", sans-serif', fontWeight: 'bold' }}>
-          {editDialog.type === 'category' ? 'تعديل اسم التصنيف' : editDialog.type === 'storehouse' ? 'تعديل اسم المستودع' : 'تعديل وحدة القياس'}
+          {editDialog.type === 'category'
+            ? (editDialog.locked ? 'تعديل اسم التصنيف' : 'تعديل بيانات التصنيف')
+            : editDialog.type === 'storehouse'
+              ? 'تعديل اسم المستودع'
+              : 'تعديل وحدة القياس'}
         </DialogTitle>
         <DialogContent>
           <TextField
@@ -3229,10 +3364,16 @@ export default function Settings() {
           />
           {editDialog.type === 'category' && (
             <>
+              {editDialog.locked && (
+                <Alert severity="warning" sx={{ mb: 2, fontFamily: '"Cairo", sans-serif', fontSize: '12px' }}>
+                  هذا التصنيف مستخدم – مقفل؛ يُسمح بتعديل الاسم الظاهر فقط دون تغيير البادئة أو المدى الرقمي.
+                </Alert>
+              )}
               <TextField
                 fullWidth
                 label="البادئة (الحروف)"
                 margin="dense"
+                disabled={!!editDialog.locked}
                 value={editDialog.prefix || ''}
                 onChange={(e) => setEditDialog({ ...editDialog, prefix: e.target.value })}
                 onFocus={(e) => e.target.select()}
@@ -3244,6 +3385,7 @@ export default function Settings() {
                     fullWidth
                     type="number"
                     label="بداية المدى الرقمي"
+                    disabled={!!editDialog.locked}
                     value={editDialog.startRange || ''}
                     onChange={(e) => setEditDialog({ ...editDialog, startRange: Number(e.target.value) })}
                     onFocus={(e) => e.target.select()}
@@ -3255,6 +3397,7 @@ export default function Settings() {
                     fullWidth
                     type="number"
                     label="نهاية المدى الرقمي"
+                    disabled={!!editDialog.locked}
                     value={editDialog.endRange || ''}
                     onChange={(e) => setEditDialog({ ...editDialog, endRange: Number(e.target.value) })}
                     onFocus={(e) => e.target.select()}

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { AppSettings, InventoryTransaction, Material } from '../src/types';
 import { buildStorehouseEntities, legacyWarehouseId, resolveWarehouseScope } from '../src/utils/warehouseDomain';
 import { migrateWarehouseModel } from '../src/utils/warehouseMigration';
-import { addOrReactivateWarehouse, renameWarehouseEntity, setWarehouseEntityActive } from '../src/utils/warehouseSettings';
+import { addOrReactivateWarehouse, removeWarehouseEntity, renameWarehouseEntity, setWarehouseEntityActive } from '../src/utils/warehouseSettings';
 
 const settings = (): AppSettings => ({
   organizationName: 'Org', departmentName: 'Dept', expiryWarningThresholdDays: 30,
@@ -86,6 +86,11 @@ describe('P5-B lifecycle and central scope', () => {
     const base = { ...settings(), storehouseEntities: buildStorehouseEntities(settings().storehouses), warehouseSchemaVersion: 2 as const };
     const first = setWarehouseEntityActive(base, base.storehouseEntities![1].id, false);
     expect(() => setWarehouseEntityActive(first, first.storehouseEntities![0].id, false)).toThrow(/آخر مستودع فعال/);
+    const reactivated = setWarehouseEntityActive(first, base.storehouseEntities![1].id, true);
+    expect(reactivated.storehouseEntities![1].active).toBe(true);
+    const removed = removeWarehouseEntity(base, base.storehouseEntities![1].id);
+    expect(removed.storehouseEntities).toHaveLength(1);
+    expect(() => removeWarehouseEntity(removed, removed.storehouseEntities![0].id)).toThrow(/آخر مستودع فعال/);
   });
 });
 
