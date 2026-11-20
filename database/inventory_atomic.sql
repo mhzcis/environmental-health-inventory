@@ -26,9 +26,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS material_code_registry_prefix_number ON invent
 ALTER TABLE inventory_private.material_code_registry ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
 REVOKE ALL ON TABLE inventory_private.material_code_registry FROM PUBLIC, anon, authenticated;
 
--- R8-R1 (R2-R8-03 / RT-R8-06): the owner-approved category policy is pinned at the server. After the migration the
--- five prefixes and their exact ranges can be neither removed, re-ranged (shrunk, widened, overlapped) nor
--- supplemented; only category display names may change. A policy change needs a separately approved SQL migration.
+-- Conditional category lock policy: a prefix and its numeric range are pinned automatically on first use
+-- (material creation, code/category change, or BackupV2 restore containing that prefix). Unused categories
+-- may be edited, deleted, or supplemented within product limits.
 CREATE TABLE IF NOT EXISTS inventory_private.category_policy(
   prefix text PRIMARY KEY CHECK (prefix ~ '^[A-Z]{2,6}$'),
   start_range numeric NOT NULL,
@@ -37,9 +37,15 @@ CREATE TABLE IF NOT EXISTS inventory_private.category_policy(
   CHECK (start_range>=1 AND start_range<=end_range)
 );
 REVOKE ALL ON TABLE inventory_private.category_policy FROM PUBLIC, anon, authenticated;
-INSERT INTO inventory_private.category_policy(prefix,start_range,end_range)
-VALUES ('PES',1001,1999),('SAN',2001,2999),('EQP',3001,3999),('ROD',4001,4999),('CHM',5001,5999)
-ON CONFLICT(prefix) DO NOTHING;
+
+-- Conditional warehouse lock table: records any warehouse id once used in materials, transactions, or
+-- opening stock attachments. Used warehouses cannot be deleted (only renamed or deactivated/reactivated).
+CREATE TABLE IF NOT EXISTS inventory_private.warehouse_usage(
+  warehouse_id text PRIMARY KEY,
+  first_used_at timestamptz NOT NULL DEFAULT now(),
+  source text NOT NULL
+);
+REVOKE ALL ON TABLE inventory_private.warehouse_usage FROM PUBLIC, anon, authenticated;
 
 CREATE OR REPLACE FUNCTION inventory_private.derived_material_keys() RETURNS text[]
 LANGUAGE sql IMMUTABLE SET search_path = '' AS $$ SELECT ARRAY['currentStock','warehouseStocks','warehouseStocksById','ledgerTotalStock']::text[] $$;
@@ -127,17 +133,15 @@ BEGIN
  IF EXISTS(SELECT 1 FROM jsonb_array_elements(p_cfg->'categories') WITH ORDINALITY a(c,i), jsonb_array_elements(p_cfg->'categories') WITH ORDINALITY b(c,j)
      WHERE a.i<b.j AND (a.c->>'startRange')::numeric<=(b.c->>'endRange')::numeric AND (b.c->>'startRange')::numeric<=(a.c->>'endRange')::numeric)
  THEN RAISE EXCEPTION 'INVENTORY_CATEGORY_RANGE_OVERLAP' USING ERRCODE='23514'; END IF;
- -- Freeze after first use: a used prefix cannot disappear, and its range cannot shrink below any reserved number.
+ -- Freeze after first use: any prefix recorded in material_code_registry or category_policy cannot be removed
+ -- and its startRange/endRange cannot be modified (only its display name may change). Unused categories remain editable/deletable.
  IF EXISTS(SELECT 1 FROM (SELECT prefix, min(number) lo, max(number) hi FROM inventory_private.material_code_registry WHERE prefix IS NOT NULL GROUP BY prefix) r
      WHERE NOT EXISTS(SELECT 1 FROM jsonb_array_elements(p_cfg->'categories') c WHERE c->>'prefix'=r.prefix
        AND (c->>'startRange')::numeric<=r.lo AND (c->>'endRange')::numeric>=r.hi))
+    OR EXISTS(SELECT 1 FROM inventory_private.category_policy p
+     WHERE NOT EXISTS(SELECT 1 FROM jsonb_array_elements(p_cfg->'categories') c WHERE c->>'prefix'=p.prefix
+       AND (c->>'startRange')::numeric=p.start_range AND (c->>'endRange')::numeric=p.end_range))
  THEN RAISE EXCEPTION 'INVENTORY_CATEGORY_PREFIX_FROZEN' USING ERRCODE='23514'; END IF;
- -- R8-R1 (R2-R8-03): the pinned policy is exact: every pinned prefix with exactly its range, and nothing else.
- IF EXISTS(SELECT 1 FROM inventory_private.category_policy) AND (
-      EXISTS(SELECT 1 FROM inventory_private.category_policy p WHERE NOT EXISTS(SELECT 1 FROM jsonb_array_elements(p_cfg->'categories') c
-        WHERE c->>'prefix'=p.prefix AND (c->>'startRange')::numeric=p.start_range AND (c->>'endRange')::numeric=p.end_range))
-   OR EXISTS(SELECT 1 FROM jsonb_array_elements(p_cfg->'categories') c WHERE NOT EXISTS(SELECT 1 FROM inventory_private.category_policy p WHERE p.prefix=c->>'prefix')))
- THEN RAISE EXCEPTION 'INVENTORY_CATEGORY_POLICY_PINNED' USING ERRCODE='23514'; END IF;
 END;
 $$;
 
@@ -182,6 +186,16 @@ BEGIN
  VALUES(k,btrim(p_data->>'code'),parts->>'prefix',(parts->>'number')::numeric,p_id,p_source)
  ON CONFLICT(code_key) DO UPDATE SET deleted_at=NULL
    WHERE inventory_private.material_code_registry.material_id=excluded.material_id AND p_source='restore';
+ -- First use pins the prefix and its exact range for ever. A restore pins after its conservative registry fill
+ -- (commit_inventory), so the fill keeps the R8 rule (startRange..max only for prefixes pinned BEFORE the restore).
+ INSERT INTO inventory_private.category_policy(prefix,start_range,end_range)
+ SELECT DISTINCT pc->>'prefix',(pc->>'startRange')::numeric,(pc->>'endRange')::numeric
+ FROM jsonb_array_elements(coalesce(p_cfg->'categories','[]'::jsonb)) pc
+ WHERE coalesce(pc->>'prefix','') ~ '^[A-Z]{2,6}$'
+   AND ((parts->>'prefix' IS NOT NULL AND pc->>'prefix'=parts->>'prefix')
+     OR (parts->>'prefix' IS NULL AND pc->>'name'=p_data->>'category'))
+   AND p_source<>'restore'
+ ON CONFLICT(prefix) DO NOTHING;
 END;
 $$;
 
@@ -194,6 +208,51 @@ SELECT lower(btrim(m.data->>'code')),btrim(m.data->>'code'),
 FROM public.materials m CROSS JOIN LATERAL inventory_private.code_parts(m.data->>'code') p
 WHERE nullif(btrim(m.data->>'code'),'') IS NOT NULL
 ON CONFLICT(code_key) DO NOTHING;
+
+-- Helper: permanently record every warehouse referenced by materials, transactions, or opening stock attachments.
+CREATE OR REPLACE FUNCTION inventory_private.record_warehouse_usage(p_source text) RETURNS void
+LANGUAGE plpgsql SET search_path = '' AS $$
+BEGIN
+ INSERT INTO inventory_private.warehouse_usage(warehouse_id,source)
+ SELECT DISTINCT wid, p_source FROM (
+   SELECT nullif(btrim(m.data->>'primaryStorehouseId'),'') AS wid FROM public.materials m
+   UNION
+   SELECT nullif(btrim(t.data->>'storehouseId'),'') AS wid FROM public.transactions t
+   UNION
+   SELECT w->>'id' AS wid
+   FROM public.settings s,
+        LATERAL jsonb_array_elements(coalesce(s.data->'storehouseEntities','[]'::jsonb)) w,
+        LATERAL jsonb_each_text(CASE WHEN jsonb_typeof(s.data->'openingStockAttachments')='object' THEN s.data->'openingStockAttachments' ELSE '{}'::jsonb END) k
+   WHERE s.id='app_config'
+     AND nullif(btrim(k.value),'') IS NOT NULL
+     AND (k.key = w->>'id' OR split_part(k.key,'--',1) = w->>'id')
+ ) u
+ WHERE wid IS NOT NULL
+ ON CONFLICT(warehouse_id) DO NOTHING;
+END;
+$$;
+
+-- Sync category_policy to reflect only actually used prefixes (unpinning unused categories on upgrade) and backfill warehouse_usage.
+DELETE FROM inventory_private.category_policy p
+WHERE NOT EXISTS (SELECT 1 FROM inventory_private.material_code_registry r WHERE r.prefix=p.prefix)
+  AND NOT EXISTS (
+    SELECT 1 FROM public.materials m
+    LEFT JOIN public.settings s ON s.id='app_config'
+    LEFT JOIN LATERAL jsonb_array_elements(coalesce(s.data->'categories','[]'::jsonb)) c ON c->>'name'=m.data->>'category'
+    WHERE inventory_private.code_parts(m.data->>'code')->>'prefix'=p.prefix OR c->>'prefix'=p.prefix
+  );
+INSERT INTO inventory_private.category_policy(prefix,start_range,end_range)
+SELECT DISTINCT c->>'prefix',(c->>'startRange')::numeric,(c->>'endRange')::numeric
+FROM public.settings s,
+     LATERAL jsonb_array_elements(coalesce(s.data->'categories','[]'::jsonb)) c
+WHERE s.id='app_config'
+  AND coalesce(c->>'prefix','') ~ '^[A-Z]{2,6}$'
+  AND (
+    EXISTS (SELECT 1 FROM inventory_private.material_code_registry r WHERE r.prefix=c->>'prefix')
+    OR EXISTS (SELECT 1 FROM public.materials m WHERE m.data->>'category'=c->>'name' OR inventory_private.code_parts(m.data->>'code')->>'prefix'=c->>'prefix')
+  )
+ON CONFLICT(prefix) DO NOTHING;
+SELECT inventory_private.record_warehouse_usage('backfill');
 
 CREATE OR REPLACE FUNCTION inventory_private.state_hash() RETURNS text
 LANGUAGE sql STABLE SET search_path = '' AS $$
@@ -217,7 +276,11 @@ BEGIN
            WHERE nullif(btrim(w->>'id'),'') IS NULL OR nullif(btrim(w->>'name'),'') IS NULL OR jsonb_typeof(w->'active') IS DISTINCT FROM 'boolean')
     OR EXISTS(SELECT 1 FROM jsonb_array_elements(cfg->'storehouseEntities') w GROUP BY w->>'id' HAVING count(*)>1)
     OR EXISTS(SELECT 1 FROM jsonb_array_elements(cfg->'storehouseEntities') w GROUP BY lower(btrim(w->>'name')) HAVING count(*)>1)
+    OR NOT EXISTS(SELECT 1 FROM jsonb_array_elements(cfg->'storehouseEntities') w WHERE w->'active'='true'::jsonb)
  THEN RAISE EXCEPTION 'INVENTORY_WAREHOUSE_INVALID' USING ERRCODE='23514'; END IF;
+ IF EXISTS(SELECT 1 FROM inventory_private.warehouse_usage u
+           WHERE NOT EXISTS(SELECT 1 FROM jsonb_array_elements(cfg->'storehouseEntities') w WHERE w->>'id'=u.warehouse_id))
+ THEN RAISE EXCEPTION 'INVENTORY_WAREHOUSE_IN_USE' USING ERRCODE='23514'; END IF;
  -- R8-CODE-01 / CFG-02: category configuration and referenced-category removal.
  PERFORM inventory_private.validate_category_config(cfg);
  IF EXISTS(SELECT 1 FROM public.materials m WHERE nullif(btrim(m.data->>'category'),'') IS NOT NULL
@@ -386,6 +449,7 @@ BEGIN
        'ledgerRows',(SELECT count(*) FROM public.transactions t WHERE t.data->>'itemId'=mid),'ledgerHash',inventory_private.material_ledger_hash(mid)));
      affected:=affected||jsonb_build_array('materials/'||mid);
    END LOOP;
+   PERFORM inventory_private.record_warehouse_usage('reconcile');
    PERFORM inventory_private.validate_inventory();
    receipt:=jsonb_build_object('id',p_mutation_id,'timestamp',stamp,'user',actor.full_name,'actorUserId',actor.id,'actorDisplayName',actor.full_name,
      'action','مصالحة الأرصدة المشتقة مع دفتر الحركات','details',left('تحديث الحقول المشتقة فقط؛ لم تتغير الحركات ولا العدادات. السبب: '||(lc->>'reason'),8000),
@@ -450,7 +514,10 @@ BEGIN
    -- environment), where it would let a deleted code be re-issued. Same-environment restore keeps the live
    -- reservations (union-only) and still conservative-fills up to the highest evidenced code, with a warning.
    IF coalesce((entry->>'missingRegistry')::boolean,false)
-      AND NOT EXISTS (SELECT 1 FROM inventory_private.material_code_registry) THEN
+      AND NOT EXISTS (SELECT 1 FROM inventory_private.material_code_registry)
+      AND (jsonb_array_length(coalesce(backup->'materials','[]'::jsonb))>0
+        OR jsonb_array_length(coalesce(backup->'transactions','[]'::jsonb))>0
+        OR coalesce(entry->'maxReferenced','{}'::jsonb)<>'{}'::jsonb) THEN
      RAISE EXCEPTION 'INVENTORY_RESTORE_REGISTRY_REQUIRED' USING ERRCODE='23514';
    END IF;
    extra:=extra||jsonb_build_object('registryEvaluation',jsonb_build_object(
@@ -606,6 +673,11 @@ BEGIN
      ON CONFLICT(id) DO UPDATE SET auth_uid=excluded.auth_uid,username=excluded.username,full_name=excluded.full_name,role=excluded.role,permissions=excluded.permissions,active=excluded.active,data=excluded.data,updated_at=now();
    ELSIF kind='delete' THEN
      IF old IS NULL THEN RAISE EXCEPTION 'INVENTORY_DELETE_MISSING' USING ERRCODE='40001'; END IF;
+     IF col='materials' AND nullif(btrim(old->>'primaryStorehouseId'),'') IS NOT NULL THEN
+       INSERT INTO inventory_private.warehouse_usage(warehouse_id,source) VALUES(btrim(old->>'primaryStorehouseId'),mode) ON CONFLICT(warehouse_id) DO NOTHING;
+     ELSIF col='transactions' AND nullif(btrim(old->>'storehouseId'),'') IS NOT NULL THEN
+       INSERT INTO inventory_private.warehouse_usage(warehouse_id,source) VALUES(btrim(old->>'storehouseId'),mode) ON CONFLICT(warehouse_id) DO NOTHING;
+     END IF;
      EXECUTE format('DELETE FROM public.%I WHERE id=$1',col) USING doc;
      IF col='materials' THEN UPDATE inventory_private.material_code_registry SET deleted_at=now() WHERE material_id=doc AND deleted_at IS NULL; END IF;
    ELSE
@@ -690,6 +762,15 @@ BEGIN
    IF mode='restore' THEN
      UPDATE inventory_private.material_code_registry r SET deleted_at=now()
      WHERE r.deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM public.materials m WHERE m.id=r.material_id AND lower(btrim(m.data->>'code'))=r.code_key);
+     INSERT INTO inventory_private.category_policy(prefix,start_range,end_range)
+     SELECT DISTINCT c->>'prefix',(c->>'startRange')::numeric,(c->>'endRange')::numeric
+     FROM jsonb_array_elements(coalesce(cfg->'categories','[]'::jsonb)) c
+     WHERE coalesce(c->>'prefix','') ~ '^[A-Z]{2,6}$'
+       AND (
+         EXISTS (SELECT 1 FROM inventory_private.material_code_registry r WHERE r.prefix=c->>'prefix')
+         OR EXISTS (SELECT 1 FROM public.materials m WHERE m.data->>'category'=c->>'name' OR inventory_private.code_parts(m.data->>'code')->>'prefix'=c->>'prefix')
+       )
+     ON CONFLICT(prefix) DO NOTHING;
    END IF;
    -- R8-DATA-01: recompute the ledger projection of every affected material inside this same locked transaction.
    IF all_materials THEN SELECT coalesce(array_agg(id ORDER BY id),'{}') INTO proj_ids FROM public.materials;
@@ -710,6 +791,7 @@ BEGIN
        END IF;
      END IF;
    END LOOP;
+   PERFORM inventory_private.record_warehouse_usage(mode);
    PERFORM inventory_private.validate_inventory();
    IF NOT EXISTS(SELECT 1 FROM public.users WHERE active AND permissions @> '["users_manage","settings_edit","system_reset"]'::jsonb)
    THEN RAISE EXCEPTION 'INVENTORY_LAST_ADMIN_REQUIRED' USING ERRCODE='23514'; END IF;
@@ -806,6 +888,13 @@ BEGIN
   SELECT coalesce(jsonb_object_agg(prefix, mx),'{}'::jsonb) INTO max_ref
   FROM (SELECT e->>'prefix' AS prefix, max((e->>'number')::numeric) AS mx FROM jsonb_array_elements(ev) e GROUP BY 1) s;
 
+  IF (p_backup ? 'codeRegistry') AND jsonb_typeof(p_backup->'codeRegistry')='array' AND jsonb_array_length(p_backup->'codeRegistry')=0
+     AND jsonb_array_length(CASE WHEN jsonb_typeof(p_backup->'materials')='array' THEN p_backup->'materials' ELSE '[]'::jsonb END)=0
+     AND jsonb_array_length(CASE WHEN jsonb_typeof(p_backup->'transactions')='array' THEN p_backup->'transactions' ELSE '[]'::jsonb END)=0
+     AND max_ref='{}'::jsonb THEN
+    RETURN jsonb_build_object('ok',true,'missingRegistry',false,'warnings','[]'::jsonb,'rejected','[]'::jsonb,'accepted','[]'::jsonb,
+      'tailReservations','[]'::jsonb,'maxReferenced',max_ref,'conservativeMax',max_ref,'newReservations','[]'::jsonb,'error',NULL);
+  END IF;
   missing := (NOT (p_backup ? 'codeRegistry')) OR jsonb_typeof(p_backup->'codeRegistry') IS DISTINCT FROM 'array'
              OR jsonb_array_length(p_backup->'codeRegistry')=0;
   IF missing THEN
@@ -843,6 +932,18 @@ BEGIN
     n := (p->>'number')::numeric;
     start_n := NULL; end_n := NULL;
     SELECT start_range, end_range INTO start_n, end_n FROM inventory_private.category_policy WHERE prefix=pref;
+    IF start_n IS NULL AND jsonb_typeof(p_backup->'settings'->'categories')='array' THEN
+      SELECT (c->>'startRange')::numeric, (c->>'endRange')::numeric INTO start_n, end_n
+      FROM jsonb_array_elements(p_backup->'settings'->'categories') c
+      WHERE c->>'prefix'=pref AND jsonb_typeof(c->'startRange')='number' AND jsonb_typeof(c->'endRange')='number'
+      LIMIT 1;
+    END IF;
+    IF start_n IS NULL THEN
+      SELECT (c->>'startRange')::numeric, (c->>'endRange')::numeric INTO start_n, end_n
+      FROM public.settings s, LATERAL jsonb_array_elements(coalesce(s.data->'categories','[]'::jsonb)) c
+      WHERE s.id='app_config' AND c->>'prefix'=pref AND jsonb_typeof(c->'startRange')='number' AND jsonb_typeof(c->'endRange')='number'
+      LIMIT 1;
+    END IF;
     IF start_n IS NOT NULL AND (n<start_n OR n>end_n) THEN
       rejected := rejected || jsonb_build_array(r||jsonb_build_object('reason','out-of-range'));
       ok := false; err := 'INVENTORY_RESTORE_REGISTRY_INVALID';
@@ -922,7 +1023,11 @@ BEGIN
      'newReservations',coalesce(entry->'newReservations','[]'::jsonb),'tailReservations',coalesce(entry->'tailReservations','[]'::jsonb),
      'maxReferenced',coalesce(entry->'maxReferenced','{}'::jsonb),'conservativeMax',coalesce(entry->'conservativeMax','{}'::jsonb),
      'willRefuse',(NOT coalesce((entry->>'ok')::boolean,false))
-       OR (coalesce((entry->>'missingRegistry')::boolean,false) AND NOT EXISTS (SELECT 1 FROM inventory_private.material_code_registry))));
+       OR (coalesce((entry->>'missingRegistry')::boolean,false)
+         AND NOT EXISTS (SELECT 1 FROM inventory_private.material_code_registry)
+         AND (jsonb_array_length(coalesce(p_backup->'materials','[]'::jsonb))>0
+           OR jsonb_array_length(coalesce(p_backup->'transactions','[]'::jsonb))>0
+           OR coalesce(entry->'maxReferenced','{}'::jsonb)<>'{}'::jsonb))));
 END;
 $$;
 CREATE OR REPLACE FUNCTION public.inventory_restore_preview(p_backup jsonb) RETURNS jsonb
@@ -988,15 +1093,72 @@ $$;
 CREATE OR REPLACE FUNCTION public.inventory_code_registry() RETURNS jsonb
 LANGUAGE sql SECURITY INVOKER SET search_path = '' AS $$ SELECT inventory_private.code_registry_export(); $$;
 
+-- Read-only summary of used category prefixes/names and used warehouse ids for Settings UI locking.
+-- Excludes free-text audit_logs by design.
+CREATE OR REPLACE FUNCTION inventory_private.reference_usage() RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $$
+DECLARE actor public.users%ROWTYPE; cfg jsonb; prefixes jsonb; cat_names jsonb; wh_ids jsonb;
+BEGIN
+ SELECT * INTO actor FROM public.users WHERE auth_uid=auth.uid()::text AND active;
+ IF actor.id IS NULL OR NOT (actor.permissions ?| ARRAY['settings_view','settings_edit'])
+ THEN RAISE EXCEPTION 'INVENTORY_REFERENCE_USAGE_DENIED' USING ERRCODE='42501'; END IF;
+ SELECT data INTO cfg FROM public.settings WHERE id='app_config';
+ WITH used_p AS (
+   SELECT prefix FROM inventory_private.category_policy
+   UNION
+   SELECT prefix FROM inventory_private.material_code_registry WHERE prefix IS NOT NULL
+   UNION
+   SELECT inventory_private.code_parts(m.data->>'code')->>'prefix' FROM public.materials m
+     WHERE inventory_private.code_parts(m.data->>'code')->>'prefix' IS NOT NULL
+   UNION
+   SELECT c->>'prefix' FROM jsonb_array_elements(coalesce(cfg->'categories','[]'::jsonb)) c
+     WHERE EXISTS (SELECT 1 FROM public.materials m WHERE m.data->>'category'=c->>'name')
+       AND nullif(btrim(c->>'prefix'),'') IS NOT NULL
+ )
+ SELECT coalesce(jsonb_agg(DISTINCT prefix ORDER BY prefix),'[]'::jsonb) INTO prefixes FROM used_p WHERE prefix IS NOT NULL;
+
+ WITH used_n AS (
+   SELECT nullif(btrim(m.data->>'category'),'') AS name FROM public.materials m
+   UNION
+   SELECT c->>'name' FROM jsonb_array_elements(coalesce(cfg->'categories','[]'::jsonb)) c
+     WHERE prefixes ? (c->>'prefix')
+ )
+ SELECT coalesce(jsonb_agg(DISTINCT name ORDER BY name),'[]'::jsonb) INTO cat_names FROM used_n WHERE name IS NOT NULL;
+
+ WITH used_w AS (
+   SELECT warehouse_id AS wid FROM inventory_private.warehouse_usage
+   UNION
+   SELECT nullif(btrim(m.data->>'primaryStorehouseId'),'') FROM public.materials m
+   UNION
+   SELECT nullif(btrim(t.data->>'storehouseId'),'') FROM public.transactions t
+   UNION
+   SELECT w->>'id'
+   FROM jsonb_array_elements(coalesce(cfg->'storehouseEntities','[]'::jsonb)) w,
+        LATERAL jsonb_each_text(CASE WHEN jsonb_typeof(cfg->'openingStockAttachments')='object' THEN cfg->'openingStockAttachments' ELSE '{}'::jsonb END) k
+   WHERE nullif(btrim(k.value),'') IS NOT NULL
+     AND (k.key = w->>'id' OR split_part(k.key,'--',1) = w->>'id')
+ )
+ SELECT coalesce(jsonb_agg(DISTINCT wid ORDER BY wid),'[]'::jsonb) INTO wh_ids FROM used_w WHERE wid IS NOT NULL;
+
+ RETURN jsonb_build_object(
+   'usedCategoryPrefixes', prefixes,
+   'usedCategoryNames', cat_names,
+   'usedWarehouseIds', wh_ids
+ );
+END;
+$$;
+CREATE OR REPLACE FUNCTION public.inventory_reference_usage() RETURNS jsonb
+LANGUAGE sql SECURITY INVOKER SET search_path = '' AS $$ SELECT inventory_private.reference_usage(); $$;
+
 REVOKE ALL ON FUNCTION inventory_private.state_hash(),inventory_private.validate_inventory(),inventory_private.commit_inventory(text,jsonb),inventory_private.restore_preview(jsonb) FROM PUBLIC,anon,authenticated;
 REVOKE ALL ON FUNCTION inventory_private.derived_material_keys(),inventory_private.lifecycle_material_keys(),inventory_private.server_owned_material_keys(),
   inventory_private.code_parts(text),inventory_private.material_projection(text),inventory_private.material_ledger_hash(text),inventory_private.stored_projection(jsonb),
   inventory_private.material_rows(jsonb),inventory_private.validate_category_config(jsonb),inventory_private.code_matches_category(text,text,jsonb),
-  inventory_private.reserve_material_code(text,jsonb,jsonb,boolean,text),inventory_private.projection_drift(),inventory_private.next_material_code(text),
-  inventory_private.projection_status(jsonb,jsonb),inventory_private.code_registry_export(),inventory_private.evaluate_backup_registry(jsonb) FROM PUBLIC,anon,authenticated;
-GRANT EXECUTE ON FUNCTION inventory_private.commit_inventory(text,jsonb),inventory_private.restore_preview(jsonb),inventory_private.projection_drift(),inventory_private.next_material_code(text),inventory_private.code_registry_export() TO authenticated;
-REVOKE ALL ON FUNCTION public.inventory_commit(text,jsonb),public.inventory_restore_preview(jsonb),public.inventory_projection_drift(),public.inventory_next_material_code(text),public.inventory_code_registry() FROM PUBLIC,anon;
-GRANT EXECUTE ON FUNCTION public.inventory_commit(text,jsonb),public.inventory_restore_preview(jsonb),public.inventory_projection_drift(),public.inventory_next_material_code(text),public.inventory_code_registry() TO authenticated;
+  inventory_private.reserve_material_code(text,jsonb,jsonb,boolean,text),inventory_private.record_warehouse_usage(text),inventory_private.projection_drift(),inventory_private.next_material_code(text),
+  inventory_private.projection_status(jsonb,jsonb),inventory_private.code_registry_export(),inventory_private.evaluate_backup_registry(jsonb),inventory_private.reference_usage() FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION inventory_private.commit_inventory(text,jsonb),inventory_private.restore_preview(jsonb),inventory_private.projection_drift(),inventory_private.next_material_code(text),inventory_private.code_registry_export(),inventory_private.reference_usage() TO authenticated;
+REVOKE ALL ON FUNCTION public.inventory_commit(text,jsonb),public.inventory_restore_preview(jsonb),public.inventory_projection_drift(),public.inventory_next_material_code(text),public.inventory_code_registry(),public.inventory_reference_usage() FROM PUBLIC,anon;
+GRANT EXECUTE ON FUNCTION public.inventory_commit(text,jsonb),public.inventory_restore_preview(jsonb),public.inventory_projection_drift(),public.inventory_next_material_code(text),public.inventory_code_registry(),public.inventory_reference_usage() TO authenticated;
 REVOKE INSERT,UPDATE,DELETE,TRUNCATE ON public.materials,public.transactions,public.generator_logs,public.settings,public.audit_logs,public.users FROM authenticated;
 REVOKE TRUNCATE ON public.users FROM authenticated;
 REVOKE ALL ON public.materials,public.transactions,public.generator_logs,public.settings,public.audit_logs,public.users FROM anon,PUBLIC;

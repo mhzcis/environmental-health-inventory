@@ -164,6 +164,14 @@ export interface CategoryConfig {
   endRange: number;
 }
 
+export interface ReferenceUsageSummary {
+  usedCategoryPrefixes: string[];
+  usedCategoryNames: string[];
+  usedWarehouseIds: string[];
+  /** False when the server does not yet expose inventory_reference_usage() (pre-migration gap): UI stays fail-closed. */
+  supported: boolean;
+}
+
 export interface PartnerEntity {
   id: string;
   name: string;

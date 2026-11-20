@@ -165,6 +165,11 @@ export interface InventoryRpcAck {
   materials?: Record<string, unknown>[];
 }
 export interface InventoryNextCode { code: string; prefix: string; number: number; category: string; provisional: true }
+export interface InventoryReferenceUsage {
+  usedCategoryPrefixes: string[];
+  usedCategoryNames: string[];
+  usedWarehouseIds: string[];
+}
 export interface InventoryRestorePreview {
   expectedState: string;
   diffs: Record<string, { current: number; backup: number; added: number; removed: number; changed: number }>;
@@ -269,6 +274,19 @@ export const supabaseDb = {
     if (error) throw error;
     if (!Array.isArray(data)) throw new Error('INVENTORY_CODE_REGISTRY_INVALID');
     return data.map((row: Record<string, unknown>) => ({ code: String(row.code), materialId: String(row.materialId), deleted: row.deleted === true }));
+  },
+  async referenceUsage(): Promise<InventoryReferenceUsage> {
+    const { data, error } = await client().rpc('inventory_reference_usage', {});
+    if (error) throw error;
+    if (!data || typeof data !== 'object') throw new Error('INVENTORY_REFERENCE_USAGE_INVALID');
+    const row = data as Record<string, unknown>;
+    const toList = (value: unknown): string[] =>
+      Array.isArray(value) ? value.map(item => String(item || '').trim()).filter(Boolean) : [];
+    return {
+      usedCategoryPrefixes: toList(row.usedCategoryPrefixes).map(p => p.toUpperCase()),
+      usedCategoryNames: toList(row.usedCategoryNames),
+      usedWarehouseIds: toList(row.usedWarehouseIds),
+    };
   },
   async nextMaterialCode(category: string): Promise<InventoryNextCode> {
     const { data, error } = await client().rpc('inventory_next_material_code', { p_category: category });

@@ -8,6 +8,7 @@ import { SERVER_OWNED_MATERIAL_KEYS, KNOWN_PERMISSION_IDS, assertDomainProofPayl
 import { READER_FORBIDDEN_PERMISSIONS, READER_PERMISSION_PRESET, readerPermissions } from '../src/security/rbacPresets';
 import { isMaterialArchived, activeMaterialsOnly } from '../src/utils/materialLifecycle';
 import { evaluateBackupRegistry, formatRestoreConfirmDialog } from '../src/services/backupService';
+import { safeUserMessage } from '../src/services/safeUserMessage';
 
 const settings = (): AppSettings => ({
   organizationName: 'Org', departmentName: 'Dept', expiryWarningThresholdDays: 30,
@@ -158,6 +159,8 @@ describe('R8-R3 RT-R8-E01 / E02 / E03 registry evidence and restore confirm dial
     expect(blocked.blocked).toBe(true);
     expect(blocked.message).toMatch(/تُرفض الاستعادة/);
     expect(blocked.message).toMatch(/INVENTORY_RESTORE_REGISTRY_INVALID/);
+    expect(safeUserMessage(new Error('INVENTORY_WAREHOUSE_IN_USE'))).toMatch(/مستودع|تعطيله/);
+    expect(safeUserMessage(new Error('INVENTORY_CATEGORY_PREFIX_FROZEN'))).toMatch(/التصنيف|الاسم الظاهر/);
     expect(blocked.message).toMatch(/تحذيرات سجل الأكواد|REGISTRY_TAIL/);
     expect(blocked.message).toMatch(/حجوزات متتابعة/);
     expect(blocked.message).not.toMatch(/هل تعتمد الاستعادة/);
